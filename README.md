@@ -1,68 +1,185 @@
 # Homenichat-Serv
 
-> Self-Hosted Unified Communication Server
+> 🏠 **Self-Hosted Unified Communication Server** - Stop paying monthly fees, own your data
 
 [![License](https://img.shields.io/badge/license-GPL%20v3-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://docker.com)
-[![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-4%2F5-red.svg)](#raspberry-pi)
+[![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-4%2F5-red.svg)](#raspberry-pi-installation)
 
 ---
 
-## Overview
+## 💰 Why Homenichat?
 
-Homenichat-Serv is the backend server for the Homenichat unified communication platform. It provides:
+### Stop Paying Multiple Subscriptions
 
-- **WhatsApp Integration** via Baileys (QR Code) or Meta Cloud API
-- **SMS Integration** via USB GSM modems or cloud providers (Twilio, OVH, Plivo)
-- **VoIP Integration** via FreePBX/Asterisk
-- **Web Admin Interface** for configuration and monitoring
-- **REST API** for mobile/web clients
+| Cloud Service | Monthly Cost | What You Pay with Homenichat |
+|---------------|--------------|------------------------------|
+| Zoko (WhatsApp Business) | ~50-200€/month | **0€** (Baileys is free) |
+| Ringover / Aircall (VoIP) | ~25-50€/user/month | **0€** (Self-hosted Asterisk) |
+| OVH SMS / Twilio | ~0.05-0.10€/SMS | **~0.02€/SMS** (Your own SIM card) |
 
-## Quick Start
+### One-Time Hardware Investment
 
-### Docker (Recommended)
+| Hardware | Cost | Lifetime |
+|----------|------|----------|
+| Raspberry Pi 4 (4GB) | ~60€ | 5+ years |
+| SIM7600 GSM Modem | ~40€ | 5+ years |
+| Powered USB Hub | ~20€ | 5+ years |
+| **Total** | **~120€** | **One-time** |
+
+> 💡 **ROI**: If you're paying 100€/month for cloud services, Homenichat pays for itself in **5 weeks**.
+
+### 🔒 Your Data, Your Control
+
+**Everything stays local:**
+- ✅ WhatsApp messages processed on YOUR server
+- ✅ Call recordings stored on YOUR storage
+- ✅ SMS logs never leave YOUR network
+- ✅ No third-party API tracking your conversations
+- ✅ GDPR compliance made simple
+
+---
+
+## ✨ Features
+
+### Unified Inbox
+- **WhatsApp** - Via Baileys (free, QR code auth) or Meta Cloud API
+- **SMS** - Via USB GSM modems or cloud fallback (Twilio, OVH)
+- **Phone Calls** - Via Asterisk/FreePBX with SIP trunks
+
+### Professional Features
+- 📱 Web admin interface for configuration
+- 🔔 Real-time notifications via WebSocket
+- 📊 Message analytics and reports
+- 👥 Multi-user support with role-based access
+- 🔌 REST API for custom integrations
+
+---
+
+## 🚀 Quick Start
+
+### Raspberry Pi Installation (Recommended)
+
+**Supported OS:** Debian 12 Bookworm (recommended for FreePBX compatibility)
+
+```bash
+# Full installation (all components)
+curl -fsSL https://raw.githubusercontent.com/elkir0/homenichat-serv/main/scripts/install.sh | sudo bash -s -- --full
+
+# Interactive installation (choose components)
+curl -fsSL https://raw.githubusercontent.com/elkir0/homenichat-serv/main/scripts/install.sh | sudo bash
+```
+
+**Installation includes:**
+- ✅ Node.js 20 LTS
+- ✅ Baileys (WhatsApp)
+- ✅ Asterisk (VoIP PBX) - compiled from source
+- ✅ Gammu + chan_quectel (GSM modem support)
+- ✅ FreePBX web interface (via ARM installer)
+
+### Docker (For VPS/Server)
 
 ```bash
 git clone https://github.com/elkir0/homenichat-serv.git
 cd homenichat-serv
 docker compose up -d
-
-# Access:
-# - Web Admin: http://localhost:8080/admin
-# - API: http://localhost:8080/api
 ```
 
-### Raspberry Pi
+---
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/elkir0/homenichat-serv/main/scripts/install.sh | sudo bash
+## 📋 Platform Compatibility
+
+| Platform | Asterisk | FreePBX | GSM Modems | Notes |
+|----------|----------|---------|------------|-------|
+| **Debian 12 Bookworm (ARM64)** | ✅ | ✅ | ✅ | **Recommended for Pi** |
+| Debian 12 Bookworm (AMD64) | ✅ | ✅ | ✅ | Full support |
+| Debian 13 Trixie | ✅ | ⚠️ External | ✅ | FreePBX not compatible |
+| Docker (any) | ✅ | ❌ | ⚠️ | Requires USB passthrough |
+
+> ⚠️ **Why Bookworm?** FreePBX official installer only supports Debian 12. For the best experience with VoIP, stick with Bookworm.
+
+---
+
+## 📱 GSM Modem Setup (SIM7600/Quectel EC25)
+
+### Supported Modems
+
+| Model | Vendor | USB ID | Status |
+|-------|--------|--------|--------|
+| SIM7600G-H | SIMCom | 1e0e:9001 | ✅ Tested |
+| SIM7600E-H | SIMCom | 1e0e:9001 | ✅ Tested |
+| EC25 | Quectel | 2c7c:0125 | ✅ Tested |
+
+### ⚡ IMPORTANT: Powered USB Hub Required
+
+> **⚠️ Critical Warning:** Raspberry Pi USB ports cannot provide enough power for GSM modems. **You MUST use a powered USB hub**, otherwise:
+> - The modem will disconnect randomly
+> - Calls will drop silently
+> - SMS sending will fail intermittently
+> - The Pi may freeze or reboot
+
+**Recommended Setup:**
+```
+[Raspberry Pi] → [Powered USB Hub (5V 3A+)] → [SIM7600 Modem]
 ```
 
-## Default Credentials
+### Modem Configuration
 
-- **Username:** `admin`
-- **Password:** `Homenichat`
+After installation, configure your modem in `/etc/asterisk/quectel.conf`:
 
-**Change immediately after first login!**
+```ini
+[quectel-sim7600]
+audio = /dev/sim7600-audio
+data = /dev/sim7600-at
+context = from-gsm
+group = 0
+rxgain = 3
+txgain = 3
+slin16 = yes
+```
 
-## Configuration
+---
 
-### Environment Variables
+## 🔑 Default Credentials
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Server port | `3001` |
-| `NODE_ENV` | Environment | `production` |
-| `DATA_DIR` | Data directory | `/app/data` |
-| `JWT_SECRET` | JWT signing key | (generated) |
+| Service | Username | Password |
+|---------|----------|----------|
+| Admin Panel | `admin` | `Homenichat` |
+| FreePBX | (set during install) | (set during install) |
+
+**⚠️ Change passwords immediately after first login!**
+
+---
+
+## 📁 Directory Structure
+
+```
+/opt/homenichat/        # Application
+├── server.js           # Main entry point
+├── admin/              # Web admin interface
+├── config/             # Configuration files
+└── scripts/            # Installation scripts
+
+/var/lib/homenichat/    # Data
+├── sessions/           # WhatsApp sessions
+├── media/              # Media files
+└── homenichat.db       # SQLite database
+
+/etc/homenichat/        # Configuration
+├── .env                # Environment variables
+└── providers.yaml      # Provider configuration
+```
+
+---
+
+## 🔧 Configuration
 
 ### providers.yaml
 
 ```yaml
 version: "2.0"
 instance:
-  name: "My Homenichat"
+  name: "My Home Communication Hub"
   timezone: "Europe/Paris"
 
 providers:
@@ -72,112 +189,124 @@ providers:
       enabled: true
 
   sms:
-    - id: twilio
-      type: twilio
+    # Option 1: Local GSM modem (recommended)
+    - id: sim7600
+      type: gammu
       enabled: true
       config:
-        account_sid: "${TWILIO_SID}"
-        auth_token: "${TWILIO_TOKEN}"
+        device: "/dev/sim7600-at"
+
+    # Option 2: Cloud fallback
+    - id: ovh_backup
+      type: ovh
+      enabled: false
+      priority: 2
+      config:
+        app_key: "${OVH_APP_KEY}"
+        app_secret: "${OVH_APP_SECRET}"
 
   voip:
-    - id: pbx
+    - id: local_pbx
       type: freepbx
       enabled: true
       config:
-        host: "192.168.1.160"
+        host: "127.0.0.1"
         ami_port: 5038
+        ami_user: "homenichat"
+        ami_secret: "${AMI_SECRET}"
 ```
-
-## Architecture
-
-```
-homenichat-serv/
-├── admin/              # React admin interface
-├── config/             # YAML configuration
-├── middleware/         # Express middlewares
-├── providers/          # Communication providers
-│   ├── whatsapp/       # Baileys, Meta Cloud
-│   ├── sms/            # Twilio, OVH, Gammu
-│   └── voip/           # FreePBX, SIP
-├── routes/             # API routes
-├── services/           # Business logic
-├── scripts/            # Installation scripts
-├── Dockerfile
-├── docker-compose.yml
-└── server.js           # Entry point
-```
-
-## API Documentation
-
-### Authentication
-
-```bash
-# Login
-POST /api/auth/login
-{
-  "username": "admin",
-  "password": "Homenichat"
-}
-
-# Response
-{
-  "token": "eyJhbGc...",
-  "user": { "id": 1, "username": "admin", "role": "admin" }
-}
-```
-
-### Chats
-
-```bash
-# Get all chats
-GET /api/chats
-Authorization: Bearer <token>
-
-# Send message
-POST /api/chats/:id/messages
-{
-  "content": "Hello!",
-  "type": "text"
-}
-```
-
-See [API.md](docs/API.md) for full documentation.
-
-## Related Projects
-
-| Project | Description |
-|---------|-------------|
-| [homenichat-pwa](https://github.com/elkir0/homenichat-pwa) | Progressive Web App |
-| [homenichat-app-android](https://github.com/elkir0/homenichat-app-android) | Android App |
-| [homenichat-app-ios](https://github.com/elkir0/homenichat-app-ios) | iOS App |
-
-## Legal Disclaimers
-
-### WhatsApp / Baileys
-
-This software optionally uses [Baileys](https://github.com/WhiskeySockets/Baileys), an unofficial WhatsApp Web API.
-
-- **NOT** affiliated with WhatsApp Inc. or Meta Platforms, Inc.
-- Using Baileys **may violate** WhatsApp's Terms of Service
-- Your WhatsApp account **may be banned**
-- **DO NOT** use for spam, bulk messaging, or stalkerware
-- Use at your own risk for personal purposes only
-
-### FreePBX / Asterisk
-
-- FreePBX and Asterisk are trademarks of Sangoma Technologies
-- This project is **NOT** affiliated with Sangoma
-- Components are downloaded from official sources during installation
-
-## License
-
-GNU General Public License v3.0 - see [LICENSE](LICENSE)
-
-## Contributing
-
-Contributions welcome! Please read our contributing guidelines before submitting PRs.
 
 ---
 
-**Homenichat** - Home + Omni + Chat
-*Self-hosted unified communication, your way.*
+## 📚 API Overview
+
+### Authentication
+```bash
+POST /api/auth/login
+GET  /api/auth/verify
+```
+
+### Chats
+```bash
+GET  /api/chats
+GET  /api/chats/:id/messages
+POST /api/chats/:id/messages
+```
+
+### Providers
+```bash
+GET  /api/providers/status
+GET  /api/providers/qr/baileys  # WhatsApp QR code
+```
+
+---
+
+## 🆘 Troubleshooting
+
+### Modem Not Detected
+```bash
+# Check USB devices
+lsusb | grep -E "1e0e|2c7c"
+
+# Check serial ports
+ls -la /dev/ttyUSB*
+```
+
+### Asterisk Issues
+```bash
+# Check Asterisk status
+sudo asterisk -rx "core show version"
+sudo asterisk -rx "quectel show devices"
+
+# View logs
+sudo tail -f /var/log/asterisk/messages
+```
+
+### Service Management
+```bash
+sudo supervisorctl status homenichat
+sudo supervisorctl restart homenichat
+sudo systemctl restart asterisk
+```
+
+---
+
+## 📦 Related Projects
+
+| Project | Description |
+|---------|-------------|
+| [homenichat-pwa](https://github.com/elkir0/homenichat-pwa) | Progressive Web App frontend |
+| [homenichat-app-android](https://github.com/elkir0/homenichat-app-android) | Android mobile app |
+
+---
+
+## ⚖️ Legal Disclaimers
+
+### WhatsApp / Baileys
+- Uses [Baileys](https://github.com/WhiskeySockets/Baileys), an **unofficial** WhatsApp API
+- **NOT** affiliated with WhatsApp Inc. or Meta
+- May violate WhatsApp Terms of Service
+- Use at your own risk, for personal purposes only
+
+### FreePBX / Asterisk
+- FreePBX and Asterisk are trademarks of Sangoma Technologies
+- This project is **NOT** affiliated with Sangoma
+- Components downloaded from official sources during installation
+
+---
+
+## 📄 License
+
+GNU General Public License v3.0 - see [LICENSE](LICENSE)
+
+---
+
+## 🙏 Contributing
+
+Contributions welcome! Please open an issue or PR.
+
+---
+
+**Homenichat** - *Your data. Your servers. Your freedom.*
+
+🏠 Home + 📱 Omni + 💬 Chat = **Homenichat**
