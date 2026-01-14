@@ -322,13 +322,39 @@ configure_freepbx() {
     fwconsole setting BROWSER_STATS 0 >> "$LOG_FILE" 2>&1 || true
     fwconsole setting AMPDISABLELOG 1 >> "$LOG_FILE" 2>&1 || true
 
+    # Fix permissions for Apache/PHP
+    info "Fixing permissions..."
+    chmod 644 /etc/freepbx.conf 2>/dev/null || true
+    chown asterisk:asterisk /etc/freepbx.conf 2>/dev/null || true
+    chown -R www-data:www-data /var/lib/php/sessions 2>/dev/null || true
+    chmod 1733 /var/lib/php/sessions 2>/dev/null || true
+    chown -R asterisk:www-data /var/www/html 2>/dev/null || true
+    chmod -R 775 /var/www/html 2>/dev/null || true
+    usermod -a -G asterisk www-data 2>/dev/null || true
+
     # Reload configuration
     fwconsole reload >> "$LOG_FILE" 2>&1 || true
 
     # Restart services
     fwconsole restart >> "$LOG_FILE" 2>&1 || true
+    systemctl restart apache2 >> "$LOG_FILE" 2>&1 || true
 
     success "FreePBX configured"
+}
+
+configure_firewall() {
+    info "Configuring firewall for FreePBX..."
+
+    if command -v ufw &>/dev/null; then
+        ufw allow 8080/tcp comment 'FreePBX' >> "$LOG_FILE" 2>&1 || true
+        ufw allow 5060/udp comment 'SIP' >> "$LOG_FILE" 2>&1 || true
+        ufw allow 5061/tcp comment 'SIP TLS' >> "$LOG_FILE" 2>&1 || true
+        ufw allow 5038/tcp comment 'Asterisk AMI' >> "$LOG_FILE" 2>&1 || true
+        ufw allow 10000:20000/udp comment 'RTP Media' >> "$LOG_FILE" 2>&1 || true
+        success "Firewall configured"
+    else
+        info "UFW not installed, skipping firewall"
+    fi
 }
 
 # ============================================================================
@@ -417,6 +443,7 @@ main() {
     install_freepbx
     install_freepbx_modules
     configure_freepbx
+    configure_firewall
 
     show_completion
 }

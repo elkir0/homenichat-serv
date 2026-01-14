@@ -957,6 +957,34 @@ start_services() {
     fi
 }
 
+configure_firewall() {
+    info "Configuring firewall..."
+
+    # Check if ufw is installed and active
+    if command -v ufw &>/dev/null; then
+        # Open required ports
+        ufw allow 22/tcp comment 'SSH' >> "$LOG_FILE" 2>&1 || true
+        ufw allow 80/tcp comment 'HTTP' >> "$LOG_FILE" 2>&1 || true
+        ufw allow 443/tcp comment 'HTTPS' >> "$LOG_FILE" 2>&1 || true
+        ufw allow 3001/tcp comment 'Homenichat API' >> "$LOG_FILE" 2>&1 || true
+
+        if [ "$INSTALL_ASTERISK" = true ]; then
+            ufw allow 5060/udp comment 'SIP' >> "$LOG_FILE" 2>&1 || true
+            ufw allow 5061/tcp comment 'SIP TLS' >> "$LOG_FILE" 2>&1 || true
+            ufw allow 5038/tcp comment 'Asterisk AMI' >> "$LOG_FILE" 2>&1 || true
+            ufw allow 10000:20000/udp comment 'RTP Media' >> "$LOG_FILE" 2>&1 || true
+        fi
+
+        if [ "$INSTALL_FREEPBX" = true ]; then
+            ufw allow 8080/tcp comment 'FreePBX' >> "$LOG_FILE" 2>&1 || true
+        fi
+
+        success "Firewall configured"
+    else
+        info "UFW not installed, skipping firewall configuration"
+    fi
+}
+
 # ============================================================================
 # Completion
 # ============================================================================
