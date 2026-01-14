@@ -1,0 +1,677 @@
+#!/bin/bash
+#
+# Homenichat - Installation Script
+# For Raspberry Pi 4/5 with Raspberry Pi OS 64-bit (Bookworm)
+#
+# Usage: curl -fsSL https://your-repo/scripts/install.sh | bash
+#    or: ./install.sh
+#
+# License: GPL v3
+#
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+BOLD='\033[1m'
+
+# Configuration
+HOMENICHAT_VERSION="1.0.0"
+INSTALL_DIR="/opt/homenichat"
+DATA_DIR="/var/lib/homenichat"
+CONFIG_DIR="/etc/homenichat"
+LOG_FILE="/var/log/homenichat-install.log"
+REPO_URL="https://github.com/your-repo/homenichat"
+
+# Installation options
+INSTALL_ASTERISK=false
+INSTALL_FREEPBX=false
+INSTALL_BAILEYS=true
+INSTALL_MODEMS=false
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+print_banner() {
+    clear
+    echo -e "${CYAN}"
+    echo "  _   _                           _      _           _   "
+    echo " | | | | ___  _ __ ___   ___ _ __ (_) ___| |__   __ _| |_ "
+    echo " | |_| |/ _ \| '_ \` _ \ / _ \ '_ \| |/ __| '_ \ / _\` | __|"
+    echo " |  _  | (_) | | | | | |  __/ | | | | (__| | | | (_| | |_ "
+    echo " |_| |_|\___/|_| |_| |_|\___|_| |_|_|\___|_| |_|\__,_|\__|"
+    echo -e "${NC}"
+    echo -e "${BOLD}Self-Hosted Unified Communication Platform${NC}"
+    echo -e "Version ${HOMENICHAT_VERSION}"
+    echo ""
+    echo "=========================================================="
+    echo ""
+}
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+    log "INFO: $1"
+}
+
+success() {
+    echo -e "${GREEN}[OK]${NC} $1"
+    log "SUCCESS: $1"
+}
+
+warning() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+    log "WARNING: $1"
+}
+
+error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+    log "ERROR: $1"
+}
+
+fatal() {
+    error "$1"
+    echo ""
+    echo -e "${RED}Installation failed. Check log: $LOG_FILE${NC}"
+    exit 1
+}
+
+confirm() {
+    local prompt="$1"
+    local default="${2:-n}"
+    local response
+
+    if [ "$default" = "y" ]; then
+        prompt="$prompt [Y/n]: "
+    else
+        prompt="$prompt [y/N]: "
+    fi
+
+    read -p "$prompt" response
+    response=${response:-$default}
+
+    case "$response" in
+        [yY][eE][sS]|[yY]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+wait_key() {
+    echo ""
+    read -p "Press Enter to continue..."
+}
+
+# ============================================================================
+# System Checks
+# ============================================================================
+
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        error "This script must be run as root"
+        echo ""
+        echo "Please run: sudo $0"
+        exit 1
+    fi
+}
+
+check_os() {
+    info "Checking operating system..."
+
+    if [ ! -f /etc/os-release ]; then
+        fatal "Cannot detect operating system"
+    fi
+
+    . /etc/os-release
+
+    if [[ "$ID" != "debian" && "$ID" != "raspbian" ]]; then
+        warning "This script is designed for Raspberry Pi OS / Debian"
+        if ! confirm "Continue anyway?"; then
+            exit 1
+        fi
+    fi
+
+    ARCH=$(uname -m)
+    if [[ "$ARCH" != "aarch64" && "$ARCH" != "x86_64" ]]; then
+        warning "Architecture $ARCH may not be fully supported"
+    fi
+
+    success "OS: $PRETTY_NAME ($ARCH)"
+}
+
+check_memory() {
+    info "Checking system memory..."
+
+    TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
+
+    if [ "$TOTAL_MEM" -lt 1800 ]; then
+        warning "System has ${TOTAL_MEM}MB RAM. Minimum recommended: 2GB"
+        if ! confirm "Continue with limited memory?"; then
+            exit 1
+        fi
+    else
+        success "Memory: ${TOTAL_MEM}MB"
+    fi
+}
+
+check_disk() {
+    info "Checking disk space..."
+
+    AVAILABLE=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
+
+    if [ "$AVAILABLE" -lt 8 ]; then
+        warning "Only ${AVAILABLE}GB available. Minimum recommended: 10GB"
+        if ! confirm "Continue with limited disk space?"; then
+            exit 1
+        fi
+    else
+        success "Disk space: ${AVAILABLE}GB available"
+    fi
+}
+
+check_internet() {
+    info "Checking internet connection..."
+
+    if ! ping -c 1 -W 5 8.8.8.8 &> /dev/null; then
+        fatal "No internet connection. Please check your network."
+    fi
+
+    success "Internet connection OK"
+}
+
+# ============================================================================
+# Legal Disclaimers
+# ============================================================================
+
+show_disclaimers() {
+    print_banner
+
+    echo -e "${YELLOW}${BOLD}IMPORTANT LEGAL DISCLAIMERS${NC}"
+    echo ""
+    echo "Before proceeding, please read and accept the following:"
+    echo ""
+    echo "=========================================================="
+    echo ""
+    echo -e "${BOLD}1. WhatsApp / Baileys${NC}"
+    echo ""
+    echo "   This software can use Baileys, an UNOFFICIAL WhatsApp API."
+    echo ""
+    echo "   - Baileys is NOT affiliated with WhatsApp Inc. or Meta"
+    echo "   - Using Baileys MAY VIOLATE WhatsApp's Terms of Service"
+    echo "   - Your WhatsApp account MAY BE BANNED"
+    echo "   - DO NOT use for spam, bulk messaging, or stalkerware"
+    echo "   - Use only for personal, legitimate purposes"
+    echo ""
+    echo -e "${BOLD}2. FreePBX / Asterisk${NC}"
+    echo ""
+    echo "   FreePBX and Asterisk are trademarks of Sangoma Technologies."
+    echo "   They will be downloaded from official sources if you choose"
+    echo "   to install them. This project is NOT affiliated with Sangoma."
+    echo ""
+    echo -e "${BOLD}3. No Warranty${NC}"
+    echo ""
+    echo "   This software is provided AS IS, without any warranty."
+    echo "   The developers are not liable for any damages or issues."
+    echo ""
+    echo "=========================================================="
+    echo ""
+
+    if ! confirm "Do you accept these terms and wish to continue?" "n"; then
+        echo ""
+        echo "Installation cancelled."
+        exit 0
+    fi
+
+    echo ""
+    success "Terms accepted"
+}
+
+# ============================================================================
+# Installation Choices
+# ============================================================================
+
+choose_components() {
+    print_banner
+
+    echo -e "${BOLD}Component Selection${NC}"
+    echo ""
+    echo "Homenichat can be installed with different optional components."
+    echo "You can always add more components later."
+    echo ""
+    echo "=========================================================="
+    echo ""
+
+    echo -e "${BOLD}1. WhatsApp Integration (Baileys)${NC}"
+    echo "   Connect to WhatsApp via QR code, like WhatsApp Web."
+    echo "   - Free, no business account needed"
+    echo "   - May violate WhatsApp ToS (risk of ban)"
+    echo ""
+    if confirm "   Install Baileys WhatsApp support?" "y"; then
+        INSTALL_BAILEYS=true
+        success "   Baileys will be installed"
+    else
+        INSTALL_BAILEYS=false
+        info "   Baileys will NOT be installed"
+    fi
+    echo ""
+
+    echo -e "${BOLD}2. VoIP Integration (Asterisk + FreePBX)${NC}"
+    echo "   Full PBX functionality with web management."
+    echo "   - Make/receive phone calls"
+    echo "   - Extensions, IVR, voicemail"
+    echo "   - Requires more resources (~500MB extra RAM)"
+    echo ""
+    if confirm "   Install Asterisk + FreePBX?" "n"; then
+        INSTALL_ASTERISK=true
+        INSTALL_FREEPBX=true
+        success "   Asterisk + FreePBX will be installed"
+    else
+        INSTALL_ASTERISK=false
+        INSTALL_FREEPBX=false
+        info "   VoIP will NOT be installed"
+    fi
+    echo ""
+
+    echo -e "${BOLD}3. GSM Modem Support (Gammu)${NC}"
+    echo "   Send/receive SMS via USB GSM modems."
+    echo "   - SIM7600, Quectel EC25, Huawei modems"
+    echo "   - Requires USB modem hardware"
+    echo ""
+    if confirm "   Install GSM modem support?" "n"; then
+        INSTALL_MODEMS=true
+        success "   Modem support will be installed"
+    else
+        INSTALL_MODEMS=false
+        info "   Modem support will NOT be installed"
+    fi
+    echo ""
+
+    echo "=========================================================="
+    echo ""
+    echo -e "${BOLD}Installation Summary:${NC}"
+    echo ""
+    echo "  - Homenichat-Serv (core)    : YES"
+    echo "  - Admin Web Interface       : YES"
+    echo "  - Baileys (WhatsApp)        : $([ "$INSTALL_BAILEYS" = true ] && echo "YES" || echo "NO")"
+    echo "  - Asterisk + FreePBX (VoIP) : $([ "$INSTALL_FREEPBX" = true ] && echo "YES" || echo "NO")"
+    echo "  - GSM Modem support         : $([ "$INSTALL_MODEMS" = true ] && echo "YES" || echo "NO")"
+    echo ""
+
+    if ! confirm "Proceed with installation?" "y"; then
+        echo ""
+        echo "Installation cancelled."
+        exit 0
+    fi
+}
+
+# ============================================================================
+# Installation Steps
+# ============================================================================
+
+install_dependencies() {
+    info "Installing system dependencies..."
+
+    apt-get update >> "$LOG_FILE" 2>&1
+
+    apt-get install -y \
+        curl wget git build-essential python3 python3-pip \
+        sqlite3 nginx supervisor ufw \
+        >> "$LOG_FILE" 2>&1
+
+    success "System dependencies installed"
+}
+
+install_nodejs() {
+    info "Installing Node.js 20 LTS..."
+
+    if command -v node &> /dev/null; then
+        NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
+        if [ "$NODE_VERSION" -ge 20 ]; then
+            success "Node.js $(node -v) already installed"
+            return
+        fi
+    fi
+
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >> "$LOG_FILE" 2>&1
+    apt-get install -y nodejs >> "$LOG_FILE" 2>&1
+
+    success "Node.js $(node -v) installed"
+}
+
+install_homenichat() {
+    info "Installing Homenichat-Serv..."
+
+    mkdir -p "$INSTALL_DIR" "$DATA_DIR" "$CONFIG_DIR"
+    mkdir -p "$DATA_DIR/sessions" "$DATA_DIR/media"
+
+    # Clone repository
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        cd "$INSTALL_DIR"
+        git pull >> "$LOG_FILE" 2>&1
+    else
+        rm -rf "$INSTALL_DIR"
+        git clone "$REPO_URL" "$INSTALL_DIR" >> "$LOG_FILE" 2>&1 || {
+            # Fallback: try to copy from local
+            if [ -d "/tmp/homenichat-source/backend" ]; then
+                cp -r /tmp/homenichat-source/backend/* "$INSTALL_DIR/"
+            else
+                fatal "Could not clone repository. Please check your internet connection."
+            fi
+        }
+    fi
+
+    cd "$INSTALL_DIR/backend" 2>/dev/null || cd "$INSTALL_DIR"
+    npm install --omit=dev >> "$LOG_FILE" 2>&1
+
+    # Build admin interface
+    if [ -d "admin" ]; then
+        cd admin
+        npm install >> "$LOG_FILE" 2>&1
+        npm run build >> "$LOG_FILE" 2>&1
+        cd ..
+    fi
+
+    chown -R root:root "$INSTALL_DIR"
+    chmod -R 755 "$INSTALL_DIR"
+
+    success "Homenichat-Serv installed"
+}
+
+install_baileys() {
+    [ "$INSTALL_BAILEYS" != true ] && return
+
+    info "Installing Baileys (WhatsApp)..."
+    cd "$INSTALL_DIR/backend" 2>/dev/null || cd "$INSTALL_DIR"
+    npm install @whiskeysockets/baileys >> "$LOG_FILE" 2>&1
+    success "Baileys installed"
+}
+
+install_gammu() {
+    [ "$INSTALL_MODEMS" != true ] && return
+
+    info "Installing Gammu (GSM modem support)..."
+    apt-get install -y gammu gammu-smsd >> "$LOG_FILE" 2>&1
+    usermod -a -G dialout root
+    success "Gammu installed"
+}
+
+install_asterisk() {
+    [ "$INSTALL_ASTERISK" != true ] && return
+
+    info "Installing Asterisk (this may take 10-20 minutes)..."
+    apt-get install -y asterisk asterisk-modules asterisk-config >> "$LOG_FILE" 2>&1
+    systemctl enable asterisk >> "$LOG_FILE" 2>&1
+    systemctl start asterisk >> "$LOG_FILE" 2>&1
+    success "Asterisk installed"
+}
+
+install_freepbx() {
+    [ "$INSTALL_FREEPBX" != true ] && return
+
+    info "Installing FreePBX (this may take 20-30 minutes)..."
+    info "FreePBX will be downloaded from official Sangoma sources."
+
+    apt-get install -y apache2 mariadb-server mariadb-client \
+        php php-mysql php-curl php-xml php-mbstring php-gd php-intl \
+        sox mpg123 lame ffmpeg >> "$LOG_FILE" 2>&1
+
+    cd /tmp
+    wget -q https://github.com/FreePBX/sng_freepbx_debian_install/raw/master/sng_freepbx_debian_install.sh -O freepbx_install.sh
+    chmod +x freepbx_install.sh
+    yes | ./freepbx_install.sh >> "$LOG_FILE" 2>&1 || warning "FreePBX installation had some issues"
+
+    success "FreePBX installed"
+}
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+configure_nginx() {
+    info "Configuring Nginx..."
+
+    cat > /etc/nginx/sites-available/homenichat << 'NGINX_CONF'
+server {
+    listen 80;
+    server_name _;
+
+    root /opt/homenichat/frontend/build;
+    index index.html;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    location / {
+        try_files $uri /index.html;
+    }
+
+    location ^~ /admin {
+        proxy_pass http://127.0.0.1:3001/admin;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3001/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /ws {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+NGINX_CONF
+
+    ln -sf /etc/nginx/sites-available/homenichat /etc/nginx/sites-enabled/
+    rm -f /etc/nginx/sites-enabled/default
+    nginx -t >> "$LOG_FILE" 2>&1
+    systemctl reload nginx
+
+    success "Nginx configured"
+}
+
+configure_supervisor() {
+    info "Configuring Supervisor..."
+
+    mkdir -p /var/log/homenichat
+
+    cat > /etc/supervisor/conf.d/homenichat.conf << SUPERVISOR_CONF
+[program:homenichat]
+command=/usr/bin/node /opt/homenichat/backend/server.js
+directory=/opt/homenichat/backend
+user=root
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+stderr_logfile=/var/log/homenichat/error.log
+stdout_logfile=/var/log/homenichat/output.log
+environment=NODE_ENV="production",PORT="3001",DATA_DIR="$DATA_DIR"
+SUPERVISOR_CONF
+
+    supervisorctl reread >> "$LOG_FILE" 2>&1
+    supervisorctl update >> "$LOG_FILE" 2>&1
+
+    success "Supervisor configured"
+}
+
+configure_firewall() {
+    info "Configuring firewall..."
+
+    ufw --force reset >> "$LOG_FILE" 2>&1
+    ufw default deny incoming >> "$LOG_FILE" 2>&1
+    ufw default allow outgoing >> "$LOG_FILE" 2>&1
+    ufw allow ssh >> "$LOG_FILE" 2>&1
+    ufw allow 80/tcp >> "$LOG_FILE" 2>&1
+    ufw allow 443/tcp >> "$LOG_FILE" 2>&1
+
+    if [ "$INSTALL_FREEPBX" = true ]; then
+        ufw allow 5060/udp >> "$LOG_FILE" 2>&1
+        ufw allow 5061/tcp >> "$LOG_FILE" 2>&1
+        ufw allow 10000:20000/udp >> "$LOG_FILE" 2>&1
+    fi
+
+    ufw --force enable >> "$LOG_FILE" 2>&1
+
+    success "Firewall configured"
+}
+
+configure_env() {
+    info "Creating environment configuration..."
+
+    mkdir -p "$CONFIG_DIR"
+
+    cat > "$CONFIG_DIR/.env" << ENV_FILE
+NODE_ENV=production
+PORT=3001
+DATA_DIR=$DATA_DIR
+INSTANCE_NAME=homenichat
+DB_PATH=$DATA_DIR/homenichat.db
+JWT_SECRET=$(openssl rand -hex 32)
+SESSION_SECRET=$(openssl rand -hex 32)
+ENV_FILE
+
+    chmod 600 "$CONFIG_DIR/.env"
+    
+    # Link to install dir
+    BACKEND_DIR="$INSTALL_DIR/backend"
+    [ -d "$BACKEND_DIR" ] || BACKEND_DIR="$INSTALL_DIR"
+    ln -sf "$CONFIG_DIR/.env" "$BACKEND_DIR/.env"
+
+    success "Environment configured"
+}
+
+start_services() {
+    info "Starting services..."
+
+    systemctl enable nginx >> "$LOG_FILE" 2>&1
+    systemctl start nginx >> "$LOG_FILE" 2>&1
+    systemctl enable supervisor >> "$LOG_FILE" 2>&1
+    systemctl start supervisor >> "$LOG_FILE" 2>&1
+
+    sleep 2
+    supervisorctl start homenichat >> "$LOG_FILE" 2>&1 || true
+    sleep 3
+
+    if supervisorctl status homenichat 2>/dev/null | grep -q RUNNING; then
+        success "Homenichat service started"
+    else
+        warning "Service may not have started. Check: supervisorctl status homenichat"
+    fi
+}
+
+# ============================================================================
+# Completion
+# ============================================================================
+
+show_completion() {
+    IP_ADDR=$(hostname -I | awk '{print $1}')
+
+    print_banner
+
+    echo -e "${GREEN}${BOLD}Installation Complete!${NC}"
+    echo ""
+    echo "=========================================================="
+    echo ""
+    echo -e "${BOLD}Access Homenichat:${NC}"
+    echo ""
+    echo "  Web Interface:  http://${IP_ADDR}/"
+    echo "  Admin Panel:    http://${IP_ADDR}/admin"
+    echo ""
+    echo -e "${BOLD}Default Admin Credentials:${NC}"
+    echo ""
+    echo "  Username: admin"
+    echo "  Password: Homenichat"
+    echo ""
+    echo -e "${YELLOW}  Please change the password after first login!${NC}"
+    echo ""
+
+    if [ "$INSTALL_FREEPBX" = true ]; then
+        echo -e "${BOLD}FreePBX:${NC}"
+        echo "  FreePBX Admin:  http://${IP_ADDR}:8080"
+        echo ""
+    fi
+
+    echo "=========================================================="
+    echo ""
+    echo -e "${BOLD}Useful Commands:${NC}"
+    echo ""
+    echo "  View logs:      sudo tail -f /var/log/homenichat/output.log"
+    echo "  Restart:        sudo supervisorctl restart homenichat"
+    echo "  Status:         sudo supervisorctl status homenichat"
+    echo "  Edit config:    sudo nano $CONFIG_DIR/.env"
+    echo ""
+    echo "=========================================================="
+    echo ""
+    echo "Installation log: $LOG_FILE"
+    echo ""
+    echo -e "${GREEN}Thank you for installing Homenichat!${NC}"
+    echo ""
+}
+
+# ============================================================================
+# Main
+# ============================================================================
+
+main() {
+    mkdir -p "$(dirname "$LOG_FILE")"
+    echo "Homenichat Installation - $(date)" > "$LOG_FILE"
+
+    check_root
+    show_disclaimers
+
+    print_banner
+    echo -e "${BOLD}System Checks${NC}"
+    echo ""
+    check_os
+    check_memory
+    check_disk
+    check_internet
+    wait_key
+
+    choose_components
+
+    print_banner
+    echo -e "${BOLD}Installing Homenichat...${NC}"
+    echo ""
+    echo "This may take 10-30 minutes depending on your choices."
+    echo ""
+
+    install_dependencies
+    install_nodejs
+    install_homenichat
+    install_baileys
+    install_gammu
+    install_asterisk
+    install_freepbx
+
+    print_banner
+    echo -e "${BOLD}Configuring Homenichat...${NC}"
+    echo ""
+
+    configure_env
+    configure_nginx
+    configure_supervisor
+    configure_firewall
+    start_services
+
+    show_completion
+}
+
+main "$@"

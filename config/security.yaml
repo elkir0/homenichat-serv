@@ -1,0 +1,333 @@
+# =============================================================================
+# Homenichat-serv - Configuration Sécurité
+# =============================================================================
+# Ce fichier contient toutes les options de sécurité du serveur.
+# Les valeurs sensibles doivent être dans les variables d'environnement.
+#
+# Variables d'environnement supportées:
+#   ${VAR_NAME}         - Obligatoire, erreur si absente
+#   ${VAR_NAME:default} - Avec valeur par défaut
+# =============================================================================
+
+# Version de la configuration
+version: "1.0"
+
+# =============================================================================
+# Rate Limiting
+# =============================================================================
+# Limite le nombre de requêtes par fenêtre de temps pour prévenir les abus.
+# Format: windowMs (millisecondes), max (nombre de requêtes)
+
+rate_limiting:
+  enabled: true
+
+  # Limite pour les tentatives de connexion
+  login:
+    windowMs: 60000        # 1 minute
+    max: 5                 # 5 tentatives max
+    blockDuration: 300000  # Blocage 5 min après dépassement
+
+  # Limite générale API
+  api:
+    windowMs: 60000        # 1 minute
+    max: 100               # 100 requêtes/min
+
+  # Limite pour l'envoi SMS
+  sms:
+    windowMs: 60000        # 1 minute
+    max: 10                # 10 SMS/min
+
+  # Limite pour les webhooks entrants
+  webhook:
+    windowMs: 60000        # 1 minute
+    max: 1000              # 1000/min (volume élevé attendu)
+
+  # Limite pour l'interface admin
+  admin:
+    windowMs: 60000        # 1 minute
+    max: 30                # 30 req/min
+
+# =============================================================================
+# JWT Configuration
+# =============================================================================
+# Configuration des tokens JWT pour l'authentification.
+
+jwt:
+  # Secret pour signer les tokens (DOIT être dans env var en production)
+  secret: "${JWT_SECRET:homenichatSecretKey2026}"
+
+  # Durée de validité des tokens
+  expiry:
+    session: 2592000000    # 30 jours (mobile-friendly)
+    api: 31536000000       # 365 jours
+    refresh: 7776000000    # 90 jours
+
+  # Algorithme de signature
+  algorithm: "HS256"
+
+  # Issuer du token
+  issuer: "homenichat-serv"
+
+# =============================================================================
+# Two-Factor Authentication (2FA)
+# =============================================================================
+# Configuration de l'authentification à deux facteurs TOTP.
+
+two_factor:
+  enabled: true
+
+  # Nom affiché dans les apps d'authentification
+  issuer: "Homenichat"
+
+  # Nombre de codes de backup générés
+  backup_codes_count: 10
+
+  # Fenêtre de tolérance (en périodes de 30 secondes)
+  # 1 = accepte le code précédent et suivant
+  window: 1
+
+  # Exiger le 2FA pour les actions sensibles
+  require_for:
+    - admin_access
+    - api_token_create
+    - user_delete
+    - config_modify
+
+# =============================================================================
+# IP Filtering
+# =============================================================================
+# Filtrage des adresses IP (whitelist/blacklist).
+
+ip_filtering:
+  enabled: false  # Activer en production si nécessaire
+
+  # IPs toujours autorisées (même si rate limited)
+  whitelist:
+    - "127.0.0.1"
+    - "::1"
+    # Ajouter les IPs de confiance:
+    # - "192.168.1.0/24"
+
+  # IPs bloquées (priorité sur whitelist)
+  blacklist: []
+    # - "1.2.3.4"
+
+  # Bloquer automatiquement après X tentatives échouées
+  auto_block:
+    enabled: true
+    threshold: 10          # Nombre de tentatives
+    windowMs: 3600000      # Fenêtre (1 heure)
+    blockDuration: 86400000  # Durée du blocage (24 heures)
+
+# =============================================================================
+# Session Management
+# =============================================================================
+# Gestion des sessions utilisateur.
+
+sessions:
+  # Durée maximale d'une session
+  max_duration: 2592000000  # 30 jours
+
+  # Durée d'inactivité avant expiration
+  inactivity_timeout: 604800000  # 7 jours
+
+  # Nombre maximum de sessions simultanées par utilisateur
+  max_per_user: 10
+
+  # Nettoyer les sessions expirées (intervalle)
+  cleanup_interval: 3600000  # Toutes les heures
+
+# =============================================================================
+# API Tokens
+# =============================================================================
+# Configuration des tokens API pour l'accès programmatique.
+
+api_tokens:
+  # Préfixe des tokens (pour identification)
+  prefix: "hc_"
+
+  # Durée de validité par défaut
+  default_expiry: 31536000000  # 365 jours
+
+  # Permissions disponibles
+  available_permissions:
+    - "sms:send"
+    - "sms:read"
+    - "whatsapp:send"
+    - "whatsapp:read"
+    - "voip:call"
+    - "voip:read"
+    - "contacts:read"
+    - "contacts:write"
+    - "chats:read"
+    - "chats:write"
+    - "admin:read"
+    - "admin:write"
+
+# =============================================================================
+# Audit Logging
+# =============================================================================
+# Configuration du journal d'audit.
+
+audit:
+  enabled: true
+
+  # Niveau de détail
+  # minimal: actions principales uniquement
+  # standard: + paramètres de requête
+  # verbose: + body des requêtes (attention aux données sensibles)
+  level: "standard"
+
+  # Actions à toujours logger (même en mode minimal)
+  always_log:
+    - "login"
+    - "logout"
+    - "api_token_create"
+    - "api_token_revoke"
+    - "2fa_enable"
+    - "2fa_disable"
+    - "user_create"
+    - "user_delete"
+    - "config_modify"
+    - "rate_limit_exceeded"
+    - "ip_blocked"
+
+  # Durée de rétention des logs (en jours)
+  retention_days: 90
+
+  # Exclure certains chemins du logging
+  exclude_paths:
+    - "/api/health"
+    - "/api/ping"
+    - "/favicon.ico"
+
+# =============================================================================
+# Password Policy
+# =============================================================================
+# Règles pour les mots de passe utilisateur.
+
+password:
+  min_length: 8
+  require_uppercase: true
+  require_lowercase: true
+  require_number: true
+  require_special: false  # Caractères spéciaux optionnels
+
+  # Historique (empêcher réutilisation)
+  history_count: 5
+
+  # Expiration (0 = jamais)
+  expiry_days: 0
+
+# =============================================================================
+# CORS Configuration
+# =============================================================================
+# Cross-Origin Resource Sharing pour l'API.
+
+cors:
+  enabled: true
+
+  # Origines autorisées
+  origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+    - "https://homenichat.local"
+    # Ajouter les domaines de production:
+    # - "https://app.example.com"
+
+  # Méthodes autorisées
+  methods:
+    - "GET"
+    - "POST"
+    - "PUT"
+    - "DELETE"
+    - "PATCH"
+    - "OPTIONS"
+
+  # Headers autorisés
+  allowed_headers:
+    - "Content-Type"
+    - "Authorization"
+    - "X-Session-Id"
+    - "X-CSRF-Token"
+    - "X-Request-ID"
+
+  # Exposer ces headers au client
+  exposed_headers:
+    - "X-Total-Count"
+    - "X-Rate-Limit-Remaining"
+
+  # Autoriser les credentials (cookies, auth headers)
+  credentials: true
+
+  # Durée du cache preflight (en secondes)
+  max_age: 86400
+
+# =============================================================================
+# Helmet Security Headers
+# =============================================================================
+# Configuration des headers HTTP de sécurité.
+
+helmet:
+  enabled: true
+
+  # Content Security Policy
+  csp:
+    default_src: ["'self'"]
+    script_src: ["'self'", "'unsafe-inline'"]
+    style_src: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]
+    font_src: ["'self'", "https://fonts.gstatic.com"]
+    img_src: ["'self'", "data:", "blob:", "https:"]
+    connect_src: ["'self'", "wss:", "https:"]
+
+  # Autres options
+  xss_filter: true
+  no_sniff: true
+  frame_guard: "deny"
+  hsts:
+    enabled: true
+    max_age: 31536000
+    include_subdomains: true
+
+# =============================================================================
+# Encryption
+# =============================================================================
+# Chiffrement des données sensibles au repos.
+
+encryption:
+  # Activer le chiffrement des données sensibles en DB
+  enabled: false
+
+  # Clé de chiffrement (DOIT être dans env var)
+  key: "${ENCRYPTION_KEY:}"
+
+  # Algorithme
+  algorithm: "aes-256-gcm"
+
+  # Champs à chiffrer
+  encrypted_fields:
+    - "api_tokens.token_hash"
+    - "user_2fa.secret"
+
+# =============================================================================
+# Webhooks Security
+# =============================================================================
+# Sécurité des webhooks entrants.
+
+webhooks:
+  # Vérifier la signature des webhooks (quand disponible)
+  verify_signature: true
+
+  # Secrets pour vérification (par provider)
+  secrets:
+    meta: "${META_WEBHOOK_SECRET:}"
+    twilio: "${TWILIO_AUTH_TOKEN:}"
+
+  # Timeout pour les webhooks sortants (ms)
+  timeout: 10000
+
+  # Retry policy
+  retry:
+    max_attempts: 3
+    delay_ms: 1000
+    backoff_multiplier: 2

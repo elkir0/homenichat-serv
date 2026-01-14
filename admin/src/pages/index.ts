@@ -1,0 +1,9 @@
+export { default as LoginPage } from './LoginPage';
+export { default as DashboardPage } from './DashboardPage';
+export { default as ProvidersPage } from './ProvidersPage';
+export { default as WhatsAppPage } from './WhatsAppPage';
+export { default as SmsPage } from './SmsPage';
+export { default as VoipPage } from './VoipPage';
+export { default as UsersPage } from './UsersPage';
+export { default as SecurityPage } from './SecurityPage';
+export { default as SettingsPage } from './SettingsPage';

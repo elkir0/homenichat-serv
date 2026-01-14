@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Data
+data/
+*.db
+*.sqlite
+
+# Sessions
+sessions/
+*.session
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Build
+dist/
+build/
+admin/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Temp
+tmp/
+temp/
+*.tmp
+
+# Media uploads
+media/
+uploads/
+
+# Credentials (NEVER commit these!)
+*.pem
+*.key
+*.crt
+credentials.json
+service-account.json
+firebase-*.json

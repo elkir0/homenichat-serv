@@ -1,0 +1,20 @@
+{
+  "defaultProvider": "evolution",
+  "providers": {
+    "evolution": {
+      "enabled": true,
+      "apiUrl": "http://YOUR_EVOLUTION_IP:8080",
+      "apiKey": "YOUR_API_KEY",
+      "instanceName": "lekipchat"
+    },
+    "meta": {
+      "enabled": false,
+      "accessToken": "YOUR_META_ACCESS_TOKEN",
+      "phoneNumberId": "YOUR_PHONE_NUMBER_ID",
+      "businessAccountId": "YOUR_BUSINESS_ACCOUNT_ID",
+      "webhookVerifyToken": "YOUR_WEBHOOK_VERIFY_TOKEN",
+      "appId": "YOUR_APP_ID",
+      "appSecret": "YOUR_APP_SECRET"
+    }
+  }
+}

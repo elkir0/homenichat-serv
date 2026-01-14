@@ -1,0 +1,230 @@
+# L'ekip-Chat - Configuration Providers v2.0
+#
+# Variables d'environnement: ${VAR_NAME} ou ${VAR_NAME:default_value}
+# Hot-reload: Les modifications sont appliquees automatiquement
+#
+# Documentation: https://github.com/your-repo/lekip-chat/docs/CONFIG.md
+
+version: "2.0"
+
+# Configuration instance
+instance:
+  name: "L'ekip-Chat"
+  timezone: "Europe/Paris"
+  language: "fr"
+
+# ============================================================
+# PROVIDERS - WhatsApp, SMS, VoIP
+# ============================================================
+
+providers:
+  # ----------------------------------------------------------
+  # WhatsApp Providers
+  # ----------------------------------------------------------
+  whatsapp:
+    # Baileys - WhatsApp Web unofficial (gratuit, self-hosted)
+    - id: baileys_main
+      type: baileys
+      enabled: true
+      config:
+        session_path: "./sessions/baileys"
+        session_name: "lekipchat"
+        sync_history: true
+        # browser: ["Chrome", "Windows", "10"]  # Decommenter si necessaire
+
+    # Meta Cloud API - WhatsApp Business officiel (payant)
+    - id: meta_cloud
+      type: meta_cloud
+      enabled: false
+      config:
+        phone_number_id: "${META_PHONE_NUMBER_ID}"
+        access_token: "${META_ACCESS_TOKEN}"
+        verify_token: "${META_VERIFY_TOKEN}"
+        business_account_id: "${META_BUSINESS_ACCOUNT_ID}"
+        webhook_path: "/webhooks/meta"
+
+  # ----------------------------------------------------------
+  # SMS Providers
+  # ----------------------------------------------------------
+  sms:
+    # SMS Bridge interne (Android Gateway)
+    - id: sms_bridge
+      type: sms_bridge
+      enabled: true
+      config:
+        api_url: "${SMS_BRIDGE_URL:https://192.168.1.155:8443}"
+        api_token: "${PWA_API_TOKEN}"
+        sync_interval_ms: 5000
+
+    # OVH SMS (France)
+    - id: ovh_sms
+      type: ovh
+      enabled: false
+      config:
+        endpoint: "ovh-eu"
+        app_key: "${OVH_APP_KEY}"
+        app_secret: "${OVH_APP_SECRET}"
+        consumer_key: "${OVH_CONSUMER_KEY}"
+        service_name: "${OVH_SMS_SERVICE}"
+        sender: "${OVH_SENDER}"
+
+    # Twilio SMS (International)
+    - id: twilio_sms
+      type: twilio
+      enabled: false
+      config:
+        account_sid: "${TWILIO_ACCOUNT_SID}"
+        auth_token: "${TWILIO_AUTH_TOKEN}"
+        phone_number: "${TWILIO_PHONE_NUMBER}"
+
+    # Plivo SMS
+    - id: plivo_sms
+      type: plivo
+      enabled: false
+      config:
+        auth_id: "${PLIVO_AUTH_ID}"
+        auth_token: "${PLIVO_AUTH_TOKEN}"
+        phone_number: "${PLIVO_PHONE_NUMBER}"
+
+    # MessageBird SMS
+    - id: messagebird_sms
+      type: messagebird
+      enabled: false
+      config:
+        api_key: "${MESSAGEBIRD_API_KEY}"
+        originator: "${MESSAGEBIRD_ORIGINATOR}"
+
+    # Vonage/Nexmo SMS
+    - id: vonage_sms
+      type: vonage
+      enabled: false
+      config:
+        api_key: "${VONAGE_API_KEY}"
+        api_secret: "${VONAGE_API_SECRET}"
+        phone_number: "${VONAGE_PHONE_NUMBER}"
+
+    # SMPP Gateway (pour operateurs)
+    - id: smpp_gateway
+      type: smpp
+      enabled: false
+      config:
+        host: "${SMPP_HOST}"
+        port: 2775
+        system_id: "${SMPP_SYSTEM_ID}"
+        password: "${SMPP_PASSWORD}"
+        system_type: "SMPP"
+        source_addr: "${SMPP_SOURCE_ADDR}"
+
+    # Gammu - Modem USB local
+    - id: gammu_local
+      type: gammu
+      enabled: false
+      config:
+        device: "/dev/ttyUSB0"
+        connection: "at"
+        pin: "${GAMMU_PIN}"
+
+  # ----------------------------------------------------------
+  # VoIP Providers
+  # ----------------------------------------------------------
+  voip:
+    # FreePBX / Asterisk
+    - id: freepbx_main
+      type: freepbx
+      enabled: false
+      config:
+        host: "${FREEPBX_HOST}"
+        ami_port: 5038
+        ami_user: "${AMI_USER}"
+        ami_secret: "${AMI_SECRET}"
+        webrtc_ws: "wss://${FREEPBX_HOST}:8089/ws"
+        extensions:
+          - "101"
+          - "102"
+          - "103"
+
+    # Generic SIP Provider
+    - id: generic_sip
+      type: generic_sip
+      enabled: false
+      config:
+        sip_server: "${SIP_SERVER}"
+        sip_port: 5060
+        transport: "wss"
+        realm: "${SIP_REALM}"
+        username: "${SIP_USERNAME}"
+        password: "${SIP_PASSWORD}"
+
+    # OVH Trunk SIP
+    - id: ovh_trunk
+      type: ovh_trunk
+      enabled: false
+      config:
+        trunk_id: "${OVH_TRUNK_ID}"
+        sip_login: "${OVH_SIP_LOGIN}"
+        sip_password: "${OVH_SIP_PASSWORD}"
+        sip_domain: "sip.ovh.net"
+
+    # Twilio Voice
+    - id: twilio_voice
+      type: twilio_voice
+      enabled: false
+      config:
+        account_sid: "${TWILIO_ACCOUNT_SID}"
+        auth_token: "${TWILIO_AUTH_TOKEN}"
+        twiml_app_sid: "${TWILIO_TWIML_APP_SID}"
+
+    # Telnyx Voice
+    - id: telnyx_voice
+      type: telnyx
+      enabled: false
+      config:
+        api_key: "${TELNYX_API_KEY}"
+        connection_id: "${TELNYX_CONNECTION_ID}"
+        sip_username: "${TELNYX_SIP_USERNAME}"
+
+# ============================================================
+# COMPLIANCE - Regles legales par pays
+# ============================================================
+
+compliance:
+  sms:
+    france:
+      enabled: true
+      # Mots-cles de desabonnement obligatoires
+      stop_keywords:
+        - "STOP"
+        - "ARRET"
+        - "DESABONNER"
+      # Restrictions horaires (CNIL/ARCEP)
+      time_restrictions:
+        start: "08:00"
+        end: "22:00"
+        timezone: "Europe/Paris"
+        blocked_days:
+          - "sunday"
+      # Mentions obligatoires
+      required_mentions:
+        - pattern: "STOP"
+          message: "Ajout automatique mention STOP"
+
+# ============================================================
+# ADVANCED - Options avancees
+# ============================================================
+
+advanced:
+  # Logs
+  logging:
+    level: "${LOG_LEVEL:info}"
+    format: "json"
+
+  # Rate limiting
+  rate_limits:
+    sms_per_minute: 30
+    whatsapp_per_minute: 60
+
+  # Retry policy
+  retry:
+    max_attempts: 3
+    delay_ms: 1000
+    exponential_backoff: true

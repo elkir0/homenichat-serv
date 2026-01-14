@@ -1,0 +1,318 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://lekip-chat.fr/schemas/providers.schema.json",
+  "title": "L'ekip-Chat Providers Configuration",
+  "description": "Schema de validation pour la configuration des providers L'ekip-Chat v2.0",
+  "type": "object",
+  "required": ["version", "providers"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Version du schema de configuration",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "instance": {
+      "type": "object",
+      "description": "Configuration de l'instance",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Nom de l'instance",
+          "maxLength": 100
+        },
+        "timezone": {
+          "type": "string",
+          "description": "Timezone IANA",
+          "default": "Europe/Paris"
+        },
+        "language": {
+          "type": "string",
+          "description": "Langue par defaut",
+          "enum": ["fr", "en", "es", "de"],
+          "default": "fr"
+        }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "description": "Configuration des providers par categorie",
+      "properties": {
+        "whatsapp": {
+          "type": "array",
+          "description": "Providers WhatsApp",
+          "items": {
+            "$ref": "#/definitions/whatsappProvider"
+          }
+        },
+        "sms": {
+          "type": "array",
+          "description": "Providers SMS",
+          "items": {
+            "$ref": "#/definitions/smsProvider"
+          }
+        },
+        "voip": {
+          "type": "array",
+          "description": "Providers VoIP",
+          "items": {
+            "$ref": "#/definitions/voipProvider"
+          }
+        }
+      }
+    },
+    "compliance": {
+      "type": "object",
+      "description": "Regles de compliance par pays",
+      "properties": {
+        "sms": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/smsCompliance"
+          }
+        }
+      }
+    },
+    "advanced": {
+      "type": "object",
+      "description": "Options avancees",
+      "properties": {
+        "logging": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "type": "string",
+              "enum": ["error", "warn", "info", "debug"]
+            },
+            "format": {
+              "type": "string",
+              "enum": ["json", "text"]
+            }
+          }
+        },
+        "rate_limits": {
+          "type": "object",
+          "properties": {
+            "sms_per_minute": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "whatsapp_per_minute": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
+        },
+        "retry": {
+          "type": "object",
+          "properties": {
+            "max_attempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "delay_ms": {
+              "type": "integer",
+              "minimum": 100
+            },
+            "exponential_backoff": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "baseProvider": {
+      "type": "object",
+      "required": ["id", "type", "enabled"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifiant unique du provider",
+          "pattern": "^[a-z0-9_]+$",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "type": {
+          "type": "string",
+          "description": "Type de provider"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Provider actif ou non",
+          "default": false
+        },
+        "config": {
+          "type": "object",
+          "description": "Configuration specifique au provider"
+        }
+      }
+    },
+    "whatsappProvider": {
+      "allOf": [
+        { "$ref": "#/definitions/baseProvider" },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": ["baileys", "meta_cloud"]
+            },
+            "config": {
+              "type": "object",
+              "properties": {
+                "session_path": { "type": "string" },
+                "session_name": { "type": "string" },
+                "sync_history": { "type": "boolean" },
+                "browser": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "minItems": 3,
+                  "maxItems": 3
+                },
+                "phone_number_id": { "type": "string" },
+                "access_token": { "type": "string" },
+                "verify_token": { "type": "string" },
+                "business_account_id": { "type": "string" },
+                "webhook_path": { "type": "string" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "smsProvider": {
+      "allOf": [
+        { "$ref": "#/definitions/baseProvider" },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": ["sms_bridge", "ovh", "twilio", "plivo", "messagebird", "vonage", "smpp", "gammu"]
+            },
+            "config": {
+              "type": "object",
+              "properties": {
+                "api_url": { "type": "string" },
+                "api_token": { "type": "string" },
+                "api_key": { "type": "string" },
+                "api_secret": { "type": "string" },
+                "account_sid": { "type": "string" },
+                "auth_token": { "type": "string" },
+                "auth_id": { "type": "string" },
+                "phone_number": { "type": "string" },
+                "sender": { "type": "string" },
+                "originator": { "type": "string" },
+                "endpoint": { "type": "string" },
+                "app_key": { "type": "string" },
+                "app_secret": { "type": "string" },
+                "consumer_key": { "type": "string" },
+                "service_name": { "type": "string" },
+                "host": { "type": "string" },
+                "port": { "type": "integer" },
+                "system_id": { "type": "string" },
+                "password": { "type": "string" },
+                "system_type": { "type": "string" },
+                "source_addr": { "type": "string" },
+                "device": { "type": "string" },
+                "connection": { "type": "string" },
+                "pin": { "type": "string" },
+                "sync_interval_ms": { "type": "integer", "minimum": 1000 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "voipProvider": {
+      "allOf": [
+        { "$ref": "#/definitions/baseProvider" },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": ["freepbx", "generic_sip", "ovh_trunk", "twilio_voice", "telnyx"]
+            },
+            "config": {
+              "type": "object",
+              "properties": {
+                "host": { "type": "string" },
+                "ami_port": { "type": "integer" },
+                "ami_user": { "type": "string" },
+                "ami_secret": { "type": "string" },
+                "webrtc_ws": { "type": "string" },
+                "extensions": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "sip_server": { "type": "string" },
+                "sip_port": { "type": "integer" },
+                "transport": {
+                  "type": "string",
+                  "enum": ["udp", "tcp", "tls", "ws", "wss"]
+                },
+                "realm": { "type": "string" },
+                "username": { "type": "string" },
+                "password": { "type": "string" },
+                "trunk_id": { "type": "string" },
+                "sip_login": { "type": "string" },
+                "sip_password": { "type": "string" },
+                "sip_domain": { "type": "string" },
+                "twiml_app_sid": { "type": "string" },
+                "connection_id": { "type": "string" },
+                "sip_username": { "type": "string" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "smsCompliance": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "stop_keywords": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Mots-cles de desabonnement"
+        },
+        "time_restrictions": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "string",
+              "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+            },
+            "end": {
+              "type": "string",
+              "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+            },
+            "timezone": { "type": "string" },
+            "blocked_days": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+              }
+            }
+          }
+        },
+        "required_mentions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pattern": { "type": "string" },
+              "message": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
