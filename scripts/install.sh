@@ -503,10 +503,10 @@ install_asterisk() {
 
     info "Installing Asterisk..."
 
-    # Check if asterisk is available in repos
-    if apt-cache show asterisk &>/dev/null; then
-        info "Installing Asterisk from repositories..."
-        apt-get install -y asterisk asterisk-modules asterisk-config >> "$LOG_FILE" 2>&1
+    # Try to install from repos first (may not be available in Bookworm/Trixie)
+    # Use apt-get install with || to handle failure gracefully
+    if apt-get install -y asterisk asterisk-modules asterisk-config >> "$LOG_FILE" 2>&1; then
+        info "Asterisk installed from repositories"
     else
         info "Asterisk not in repos, building from source (this takes 15-30 minutes)..."
         install_asterisk_from_source
