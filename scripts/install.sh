@@ -655,6 +655,52 @@ UDEV_RULES
 install_freepbx() {
     [ "$INSTALL_FREEPBX" != true ] && return
 
+    info "Checking FreePBX compatibility..."
+
+    # Check Debian version - Sangoma installer only supports Debian 12 (bookworm)
+    . /etc/os-release 2>/dev/null || true
+
+    if [[ "$VERSION_CODENAME" != "bookworm" ]]; then
+        warning "FreePBX installer only supports Debian 12 (bookworm)"
+        warning "Detected: $PRETTY_NAME ($VERSION_CODENAME)"
+        echo ""
+        echo "For Debian 13 (trixie) or other versions, you have two options:"
+        echo "  1. Use an external FreePBX server (recommended)"
+        echo "     Configure connection via /etc/homenichat/providers.yaml:"
+        echo ""
+        echo "     voip:"
+        echo "       - id: freepbx_external"
+        echo "         type: freepbx"
+        echo "         config:"
+        echo "           host: \"192.168.1.160\"  # Your FreePBX IP"
+        echo "           ami_port: 5038"
+        echo "           ami_user: \"\${AMI_USER}\""
+        echo "           ami_secret: \"\${AMI_SECRET}\""
+        echo ""
+        echo "  2. Install FreePBX manually or use a VM with Debian 12"
+        echo ""
+        warning "Skipping FreePBX installation - configure external FreePBX instead"
+
+        # Create example external FreePBX config
+        if [ -d "$CONFIG_DIR" ]; then
+            cat >> "$CONFIG_DIR/providers.yaml" << 'FREEPBX_EXAMPLE'
+
+# External FreePBX connection (uncomment and configure)
+# voip:
+#   - id: freepbx_external
+#     type: freepbx
+#     enabled: false
+#     config:
+#       host: "192.168.1.160"
+#       ami_port: 5038
+#       ami_user: "homenichat"
+#       ami_secret: "your-ami-secret"
+#       webrtc_ws: "wss://your-domain/ws"
+FREEPBX_EXAMPLE
+        fi
+        return 0
+    fi
+
     info "Installing FreePBX (this may take 20-40 minutes)..."
     info "FreePBX will be downloaded from official Sangoma sources."
     warning "This will install Apache, MariaDB, PHP and many other packages."
