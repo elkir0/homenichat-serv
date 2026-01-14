@@ -407,6 +407,11 @@ install_homenichat() {
     ln -sf "$DATA_DIR/sessions" "$INSTALL_DIR/sessions" 2>/dev/null || true
     ln -sf "$DATA_DIR" "$INSTALL_DIR/data" 2>/dev/null || true
 
+    # Make scripts executable
+    if [ -d "$INSTALL_DIR/scripts" ]; then
+        chmod +x "$INSTALL_DIR/scripts/"*.sh 2>/dev/null || true
+    fi
+
     chown -R root:root "$INSTALL_DIR"
     chmod -R 755 "$INSTALL_DIR"
 
@@ -689,26 +694,17 @@ install_freepbx() {
         if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
             echo -e "${BOLD}Options for Raspberry Pi / ARM64:${NC}"
             echo ""
-            echo "  1. ${BOLD}Use external FreePBX${NC} (recommended)"
+            echo "  1. ${BOLD}Run our FreePBX ARM installer${NC} (recommended)"
+            echo "     After this installation completes, run:"
+            echo "     ${CYAN}sudo /opt/homenichat/scripts/install-freepbx-arm.sh${NC}"
+            echo ""
+            echo "  2. ${BOLD}Use external FreePBX${NC}"
             echo "     Connect to an existing FreePBX server via AMI."
-            echo "     Configure in /etc/homenichat/providers.yaml:"
-            echo ""
-            echo "     voip:"
-            echo "       - id: freepbx_external"
-            echo "         type: freepbx"
-            echo "         config:"
-            echo "           host: \"192.168.1.160\""
-            echo "           ami_port: 5038"
-            echo "           ami_user: \"homenichat\""
-            echo "           ami_secret: \"your-secret\""
-            echo ""
-            echo "  2. ${BOLD}Use RasPBX project${NC}"
-            echo "     Dedicated FreePBX installer for Raspberry Pi."
-            echo "     See: https://github.com/playfultechnology/RasPBX"
+            echo "     Configure in /etc/homenichat/providers.yaml"
             echo ""
             echo "  3. ${BOLD}Use Asterisk directly${NC}"
-            echo "     Asterisk is already installed. You can configure"
-            echo "     SIP trunks and extensions without FreePBX web UI."
+            echo "     Asterisk is installed. Configure SIP trunks"
+            echo "     and extensions via config files."
             echo ""
         else
             echo "Options:"
