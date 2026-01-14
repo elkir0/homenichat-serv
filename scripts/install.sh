@@ -491,9 +491,17 @@ install_asterisk() {
 
 install_asterisk_from_source() {
     info "Installing build dependencies..."
+
+    # Install linux headers if available (may not exist on all systems)
+    apt-get install -y linux-headers-$(uname -r) >> "$LOG_FILE" 2>&1 || {
+        warning "linux-headers not available for kernel $(uname -r), continuing without"
+    }
+
+    # Core build dependencies
     apt-get install -y build-essential wget libssl-dev libncurses5-dev \
-        libnewt-dev libxml2-dev linux-headers-$(uname -r) libsqlite3-dev \
+        libnewt-dev libxml2-dev libsqlite3-dev \
         uuid-dev libjansson-dev libedit-dev libsrtp2-dev \
+        subversion libspandsp-dev libresample1-dev \
         >> "$LOG_FILE" 2>&1
 
     cd /usr/src
@@ -657,33 +665,63 @@ install_freepbx() {
 
     info "Checking FreePBX compatibility..."
 
-    # Check Debian version - Sangoma installer only supports Debian 12 (bookworm)
+    # Get system info
     . /etc/os-release 2>/dev/null || true
+    ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
 
-    if [[ "$VERSION_CODENAME" != "bookworm" ]]; then
-        warning "FreePBX installer only supports Debian 12 (bookworm)"
-        warning "Detected: $PRETTY_NAME ($VERSION_CODENAME)"
+    # FreePBX Sangoma installer requirements:
+    # - Debian 12 (bookworm) only
+    # - AMD64 architecture only (no ARM support)
+
+    local CAN_INSTALL_SANGOMA=false
+
+    if [[ "$VERSION_CODENAME" == "bookworm" && "$ARCH" == "amd64" ]]; then
+        CAN_INSTALL_SANGOMA=true
+    fi
+
+    if [ "$CAN_INSTALL_SANGOMA" != true ]; then
+        warning "FreePBX Sangoma installer cannot be used on this system"
         echo ""
-        echo "For Debian 13 (trixie) or other versions, you have two options:"
-        echo "  1. Use an external FreePBX server (recommended)"
-        echo "     Configure connection via /etc/homenichat/providers.yaml:"
+        echo "Requirements: Debian 12 (bookworm) + AMD64 architecture"
+        echo "Detected:     $PRETTY_NAME ($ARCH)"
         echo ""
-        echo "     voip:"
-        echo "       - id: freepbx_external"
-        echo "         type: freepbx"
-        echo "         config:"
-        echo "           host: \"192.168.1.160\"  # Your FreePBX IP"
-        echo "           ami_port: 5038"
-        echo "           ami_user: \"\${AMI_USER}\""
-        echo "           ami_secret: \"\${AMI_SECRET}\""
-        echo ""
-        echo "  2. Install FreePBX manually or use a VM with Debian 12"
-        echo ""
-        warning "Skipping FreePBX installation - configure external FreePBX instead"
+
+        if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
+            echo -e "${BOLD}Options for Raspberry Pi / ARM64:${NC}"
+            echo ""
+            echo "  1. ${BOLD}Use external FreePBX${NC} (recommended)"
+            echo "     Connect to an existing FreePBX server via AMI."
+            echo "     Configure in /etc/homenichat/providers.yaml:"
+            echo ""
+            echo "     voip:"
+            echo "       - id: freepbx_external"
+            echo "         type: freepbx"
+            echo "         config:"
+            echo "           host: \"192.168.1.160\""
+            echo "           ami_port: 5038"
+            echo "           ami_user: \"homenichat\""
+            echo "           ami_secret: \"your-secret\""
+            echo ""
+            echo "  2. ${BOLD}Use RasPBX project${NC}"
+            echo "     Dedicated FreePBX installer for Raspberry Pi."
+            echo "     See: https://github.com/playfultechnology/RasPBX"
+            echo ""
+            echo "  3. ${BOLD}Use Asterisk directly${NC}"
+            echo "     Asterisk is already installed. You can configure"
+            echo "     SIP trunks and extensions without FreePBX web UI."
+            echo ""
+        else
+            echo "Options:"
+            echo "  1. Use an external FreePBX server"
+            echo "  2. Install on a Debian 12 AMD64 system"
+            echo ""
+        fi
+
+        warning "Skipping FreePBX installation"
 
         # Create example external FreePBX config
-        if [ -d "$CONFIG_DIR" ]; then
-            cat >> "$CONFIG_DIR/providers.yaml" << 'FREEPBX_EXAMPLE'
+        mkdir -p "$CONFIG_DIR"
+        cat >> "$CONFIG_DIR/providers.yaml" << 'FREEPBX_EXAMPLE'
 
 # External FreePBX connection (uncomment and configure)
 # voip:
@@ -697,21 +735,13 @@ install_freepbx() {
 #       ami_secret: "your-ami-secret"
 #       webrtc_ws: "wss://your-domain/ws"
 FREEPBX_EXAMPLE
-        fi
         return 0
     fi
 
+    # AMD64 + Bookworm: Use Sangoma installer
     info "Installing FreePBX (this may take 20-40 minutes)..."
     info "FreePBX will be downloaded from official Sangoma sources."
     warning "This will install Apache, MariaDB, PHP and many other packages."
-
-    # Install prerequisites
-    apt-get install -y apache2 mariadb-server mariadb-client \
-        php php-mysql php-curl php-xml php-mbstring php-gd php-intl php-ldap \
-        sox mpg123 lame ffmpeg nodejs npm \
-        >> "$LOG_FILE" 2>&1 || {
-        warning "Some FreePBX prerequisites may not be available"
-    }
 
     cd /tmp
 
