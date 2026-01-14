@@ -1,10 +1,11 @@
 #!/bin/bash
 #
 # Homenichat - Installation Script
-# For Raspberry Pi 4/5 with Raspberry Pi OS 64-bit (Bookworm)
+# For Raspberry Pi 4/5 with Raspberry Pi OS 64-bit (Bookworm/Trixie)
 #
-# Usage: curl -fsSL https://your-repo/scripts/install.sh | bash
-#    or: ./install.sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/elkir0/homenichat-serv/main/scripts/install.sh | sudo bash
+#    or: sudo ./install.sh
+#    or: sudo ./install.sh --auto  (non-interactive, accept defaults)
 #
 # License: GPL v3
 #
@@ -26,13 +27,19 @@ INSTALL_DIR="/opt/homenichat"
 DATA_DIR="/var/lib/homenichat"
 CONFIG_DIR="/etc/homenichat"
 LOG_FILE="/var/log/homenichat-install.log"
-REPO_URL="https://github.com/your-repo/homenichat"
+REPO_URL="https://github.com/elkir0/homenichat-serv.git"
 
 # Installation options
 INSTALL_ASTERISK=false
 INSTALL_FREEPBX=false
 INSTALL_BAILEYS=true
 INSTALL_MODEMS=false
+
+# Auto mode (non-interactive)
+AUTO_MODE=false
+if [[ "$1" == "--auto" || "$1" == "-y" || "$1" == "--yes" ]]; then
+    AUTO_MODE=true
+fi
 
 # ============================================================================
 # Helper Functions
@@ -49,6 +56,9 @@ print_banner() {
     echo -e "${NC}"
     echo -e "${BOLD}Self-Hosted Unified Communication Platform${NC}"
     echo -e "Version ${HOMENICHAT_VERSION}"
+    if [ "$AUTO_MODE" = true ]; then
+        echo -e "${YELLOW}[AUTO MODE - Non-interactive installation]${NC}"
+    fi
     echo ""
     echo "=========================================================="
     echo ""
@@ -90,6 +100,15 @@ confirm() {
     local default="${2:-n}"
     local response
 
+    # In auto mode, use default
+    if [ "$AUTO_MODE" = true ]; then
+        if [ "$default" = "y" ]; then
+            return 0
+        else
+            return 1
+        fi
+    fi
+
     if [ "$default" = "y" ]; then
         prompt="$prompt [Y/n]: "
     else
@@ -106,6 +125,9 @@ confirm() {
 }
 
 wait_key() {
+    if [ "$AUTO_MODE" = true ]; then
+        return
+    fi
     echo ""
     read -p "Press Enter to continue..."
 }
@@ -224,7 +246,9 @@ show_disclaimers() {
     echo "=========================================================="
     echo ""
 
-    if ! confirm "Do you accept these terms and wish to continue?" "n"; then
+    if [ "$AUTO_MODE" = true ]; then
+        warning "Auto mode: Legal terms accepted automatically"
+    elif ! confirm "Do you accept these terms and wish to continue?" "n"; then
         echo ""
         echo "Installation cancelled."
         exit 0
@@ -350,34 +374,38 @@ install_homenichat() {
     info "Installing Homenichat-Serv..."
 
     mkdir -p "$INSTALL_DIR" "$DATA_DIR" "$CONFIG_DIR"
-    mkdir -p "$DATA_DIR/sessions" "$DATA_DIR/media"
+    mkdir -p "$DATA_DIR/sessions" "$DATA_DIR/media" "$DATA_DIR/sessions/baileys"
 
     # Clone repository
     if [ -d "$INSTALL_DIR/.git" ]; then
+        info "Updating existing installation..."
         cd "$INSTALL_DIR"
-        git pull >> "$LOG_FILE" 2>&1
+        git pull >> "$LOG_FILE" 2>&1 || warning "Could not update, continuing with existing version"
     else
+        info "Cloning from $REPO_URL..."
         rm -rf "$INSTALL_DIR"
         git clone "$REPO_URL" "$INSTALL_DIR" >> "$LOG_FILE" 2>&1 || {
-            # Fallback: try to copy from local
-            if [ -d "/tmp/homenichat-source/backend" ]; then
-                cp -r /tmp/homenichat-source/backend/* "$INSTALL_DIR/"
-            else
-                fatal "Could not clone repository. Please check your internet connection."
-            fi
+            fatal "Could not clone repository. Please check your internet connection."
         }
     fi
 
-    cd "$INSTALL_DIR/backend" 2>/dev/null || cd "$INSTALL_DIR"
+    # Install npm dependencies (repo root is the server, no backend subfolder)
+    cd "$INSTALL_DIR"
+    info "Installing Node.js dependencies..."
     npm install --omit=dev >> "$LOG_FILE" 2>&1
 
     # Build admin interface
-    if [ -d "admin" ]; then
-        cd admin
+    if [ -d "$INSTALL_DIR/admin" ]; then
+        info "Building admin interface..."
+        cd "$INSTALL_DIR/admin"
         npm install >> "$LOG_FILE" 2>&1
         npm run build >> "$LOG_FILE" 2>&1
-        cd ..
+        cd "$INSTALL_DIR"
     fi
+
+    # Create symlinks for data directories
+    ln -sf "$DATA_DIR/sessions" "$INSTALL_DIR/sessions" 2>/dev/null || true
+    ln -sf "$DATA_DIR" "$INSTALL_DIR/data" 2>/dev/null || true
 
     chown -R root:root "$INSTALL_DIR"
     chmod -R 755 "$INSTALL_DIR"
@@ -389,7 +417,7 @@ install_baileys() {
     [ "$INSTALL_BAILEYS" != true ] && return
 
     info "Installing Baileys (WhatsApp)..."
-    cd "$INSTALL_DIR/backend" 2>/dev/null || cd "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
     npm install @whiskeysockets/baileys >> "$LOG_FILE" 2>&1
     success "Baileys installed"
 }
@@ -443,45 +471,54 @@ server {
     listen 80;
     server_name _;
 
-    root /opt/homenichat/frontend/build;
-    index index.html;
-
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
 
-    location / {
-        try_files $uri /index.html;
+    # Redirect root to admin interface
+    location = / {
+        return 301 /admin;
     }
 
+    # Admin interface (served directly from built files)
     location ^~ /admin {
-        proxy_pass http://127.0.0.1:3001/admin;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+        alias /opt/homenichat/admin/dist;
+        index index.html;
+        try_files $uri $uri/ /admin/index.html;
     }
 
+    # API routes
     location /api/ {
         proxy_pass http://127.0.0.1:3001/api/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # WebSocket
     location /ws {
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # PWA frontend (optional - if installed in /opt/homenichat/public)
+    location /pwa {
+        alias /opt/homenichat/public;
+        index index.html;
+        try_files $uri $uri/ /pwa/index.html;
     }
 }
 NGINX_CONF
 
     ln -sf /etc/nginx/sites-available/homenichat /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
-    nginx -t >> "$LOG_FILE" 2>&1
-    systemctl reload nginx
+    nginx -t >> "$LOG_FILE" 2>&1 || warning "Nginx config test failed, check syntax"
+    systemctl reload nginx || systemctl restart nginx
 
     success "Nginx configured"
 }
@@ -493,8 +530,8 @@ configure_supervisor() {
 
     cat > /etc/supervisor/conf.d/homenichat.conf << SUPERVISOR_CONF
 [program:homenichat]
-command=/usr/bin/node /opt/homenichat/backend/server.js
-directory=/opt/homenichat/backend
+command=/usr/bin/node /opt/homenichat/server.js
+directory=/opt/homenichat
 user=root
 autostart=true
 autorestart=true
@@ -537,22 +574,24 @@ configure_env() {
 
     mkdir -p "$CONFIG_DIR"
 
+    # Generate secrets
+    JWT_SECRET_VAL=$(openssl rand -hex 32)
+    SESSION_SECRET_VAL=$(openssl rand -hex 32)
+
     cat > "$CONFIG_DIR/.env" << ENV_FILE
 NODE_ENV=production
 PORT=3001
 DATA_DIR=$DATA_DIR
 INSTANCE_NAME=homenichat
 DB_PATH=$DATA_DIR/homenichat.db
-JWT_SECRET=$(openssl rand -hex 32)
-SESSION_SECRET=$(openssl rand -hex 32)
+JWT_SECRET=$JWT_SECRET_VAL
+SESSION_SECRET=$SESSION_SECRET_VAL
 ENV_FILE
 
     chmod 600 "$CONFIG_DIR/.env"
-    
+
     # Link to install dir
-    BACKEND_DIR="$INSTALL_DIR/backend"
-    [ -d "$BACKEND_DIR" ] || BACKEND_DIR="$INSTALL_DIR"
-    ln -sf "$CONFIG_DIR/.env" "$BACKEND_DIR/.env"
+    ln -sf "$CONFIG_DIR/.env" "$INSTALL_DIR/.env"
 
     success "Environment configured"
 }
