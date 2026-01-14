@@ -55,6 +55,8 @@ const PORT = process.env.PORT || 3001;
 app.set('trust proxy', 1);
 
 // Middleware de sécurité
+// Disable HSTS and upgrade-insecure-requests for HTTP deployments
+const isHttps = process.env.HTTPS === 'true' || process.env.NODE_ENV === 'production';
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -63,9 +65,16 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https:", "blob:"],
-      connectSrc: ["'self'", "ws:", "wss:"]
+      connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
+      // Only upgrade to HTTPS if actually using HTTPS
+      upgradeInsecureRequests: isHttps ? [] : null
     }
-  }
+  },
+  // Disable HSTS for HTTP deployments (causes issues on local network)
+  hsts: isHttps,
+  // Disable crossOriginOpenerPolicy for local development
+  crossOriginOpenerPolicy: isHttps ? { policy: 'same-origin' } : false,
+  crossOriginResourcePolicy: isHttps ? { policy: 'same-origin' } : false
 }));
 
 // Initialiser le provider VoIP
