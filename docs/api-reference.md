@@ -61,9 +61,68 @@ Authentifie un utilisateur et retourne un JWT token.
 
 ---
 
+## Multi-Provider Support
+
+Le backend supporte la connexion simultanée à plusieurs providers (Baileys ET Meta Cloud).
+
+### Header X-Session-Id
+
+Pour cibler un provider spécifique, utilisez le header `X-Session-Id`:
+
+```
+X-Session-Id: baileys
+```
+
+### GET /providers/status
+
+Liste tous les providers et leur état.
+
+**Response:**
+```json
+{
+  "success": true,
+  "activeProvider": "baileys",
+  "activeProviders": ["baileys", "meta"],
+  "providers": {
+    "baileys": {
+      "enabled": true,
+      "active": true,
+      "initialized": true
+    },
+    "meta": {
+      "enabled": true,
+      "active": true,
+      "initialized": true
+    }
+  }
+}
+```
+
+### POST /providers/activate/:provider
+
+Active un provider (sans désactiver les autres).
+
+### POST /providers/deactivate/:provider
+
+Désactive un provider spécifique.
+
+### POST /chats/:chatId/test-send/:provider
+
+Envoie un message via un provider spécifique.
+
+**Exemple:**
+```
+POST /api/chats/33612345678/test-send/meta
+{ "text": "Test via Meta Cloud API" }
+```
+
+---
+
 ## WhatsApp - Connection
 
-### GET /whatsapp/status
+### GET /providers/status
+
+Alias: `GET /whatsapp/status`
 
 Retourne l'état de connexion WhatsApp.
 
@@ -282,15 +341,13 @@ caption: "Description optionnelle"
 
 ## Actions sur Messages
 
-### POST /messages/:messageId/read
+### POST /chats/:chatId/messages/:messageId/read
 
 Marque un message spécifique comme lu.
 
-**Request:**
-```json
-{
-  "chatId": "33612345678@s.whatsapp.net"
-}
+**Exemple:**
+```
+POST /api/chats/33612345678@s.whatsapp.net/messages/3EB0ABC123/read
 ```
 
 **Response:**
@@ -300,14 +357,18 @@ Marque un message spécifique comme lu.
 }
 ```
 
-### POST /messages/:messageId/reaction
+### POST /chats/:chatId/messages/:messageId/reaction
 
 Envoie une réaction emoji sur un message.
+
+**Exemple:**
+```
+POST /api/chats/33612345678@s.whatsapp.net/messages/3EB0ABC123/reaction
+```
 
 **Request:**
 ```json
 {
-  "chatId": "33612345678@s.whatsapp.net",
   "emoji": "👍"
 }
 ```
@@ -315,7 +376,6 @@ Envoie une réaction emoji sur un message.
 **Pour supprimer une réaction:**
 ```json
 {
-  "chatId": "33612345678@s.whatsapp.net",
   "emoji": ""
 }
 ```

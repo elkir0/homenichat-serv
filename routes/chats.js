@@ -336,6 +336,7 @@ router.post('/:chatId/test-send/:provider', async (req, res) => {
 
 /**
  * PUT /api/chats/:chatId/read
+ * POST /api/chats/:chatId/read
  * Marque une conversation comme lue
  */
 router.put('/:chatId/read', async (req, res) => {
@@ -355,6 +356,104 @@ router.put('/:chatId/read', async (req, res) => {
     res.json(result);
   } catch (error) {
     logger.error('Error marking chat as read:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Alias POST pour compatibilité avec l'API documentée
+router.post('/:chatId/read', async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const activeProvider = getProviderForRequest(req);
+
+    if (!activeProvider) {
+      return res.status(503).json({
+        success: false,
+        error: 'No active provider'
+      });
+    }
+
+    const result = await activeProvider.markChatAsRead(chatId);
+    res.json(result);
+  } catch (error) {
+    logger.error('Error marking chat as read:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/chats/:chatId/messages/:messageId/read
+ * Marque un message spécifique comme lu
+ *
+ * @api POST /api/chats/:chatId/messages/:messageId/read
+ * @returns {Object} { success: boolean, error?: string }
+ */
+router.post('/:chatId/messages/:messageId/read', async (req, res) => {
+  try {
+    const { chatId, messageId } = req.params;
+    const activeProvider = getProviderForRequest(req);
+
+    if (!activeProvider) {
+      return res.status(503).json({
+        success: false,
+        error: 'No active provider'
+      });
+    }
+
+    const result = await activeProvider.markMessageAsRead(chatId, messageId);
+    res.json(result);
+  } catch (error) {
+    logger.error('Error marking message as read:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/chats/:chatId/messages/:messageId/reaction
+ * Envoie une réaction emoji sur un message
+ *
+ * @api POST /api/chats/:chatId/messages/:messageId/reaction
+ * @body { emoji: string } - Emoji de réaction (chaîne vide pour supprimer)
+ * @returns {Object} { success: boolean, error?: string }
+ *
+ * @example
+ * // Ajouter une réaction
+ * POST /api/chats/33612345678@s.whatsapp.net/messages/ABC123/reaction
+ * { "emoji": "👍" }
+ *
+ * // Supprimer une réaction
+ * { "emoji": "" }
+ */
+router.post('/:chatId/messages/:messageId/reaction', async (req, res) => {
+  try {
+    const { chatId, messageId } = req.params;
+    const { emoji } = req.body;
+    const activeProvider = getProviderForRequest(req);
+
+    if (!activeProvider) {
+      return res.status(503).json({
+        success: false,
+        error: 'No active provider'
+      });
+    }
+
+    if (emoji === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'emoji is required (use empty string to remove reaction)'
+      });
+    }
+
+    const result = await activeProvider.sendReaction(chatId, messageId, emoji);
+    res.json(result);
+  } catch (error) {
+    logger.error('Error sending reaction:', error);
     res.status(500).json({
       success: false,
       error: error.message
