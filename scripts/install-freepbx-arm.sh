@@ -193,7 +193,14 @@ configure_apache() {
 </VirtualHost>
 APACHE_CONF
 
-    # Change Apache port to 8080 (Nginx uses 80)
+    # Change Apache port to 8080 only (avoid conflict with port 80)
+    # Replace Listen 80 with Listen 8080
+    sed -i 's/^Listen 80$/Listen 8080/' /etc/apache2/ports.conf
+
+    # Also update SSL port if needed (443 -> 8443)
+    sed -i 's/Listen 443$/Listen 8443/' /etc/apache2/ports.conf
+
+    # Ensure 8080 is set (in case sed didn't match)
     if ! grep -q "Listen 8080" /etc/apache2/ports.conf; then
         echo "Listen 8080" >> /etc/apache2/ports.conf
     fi
@@ -201,8 +208,14 @@ APACHE_CONF
     a2ensite freepbx.conf >> "$LOG_FILE" 2>&1 || true
     a2dissite 000-default.conf >> "$LOG_FILE" 2>&1 || true
 
+    # Stop any process using port 80 before starting Apache
     systemctl enable apache2 >> "$LOG_FILE" 2>&1
-    systemctl restart apache2 >> "$LOG_FILE" 2>&1
+    systemctl restart apache2 >> "$LOG_FILE" 2>&1 || {
+        warning "Apache failed to start, checking port conflicts..."
+        # Try stopping nginx if it's using port 80
+        systemctl stop nginx >> "$LOG_FILE" 2>&1 || true
+        systemctl restart apache2 >> "$LOG_FILE" 2>&1
+    }
 
     success "Apache configured on port 8080"
 }
