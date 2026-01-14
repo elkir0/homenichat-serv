@@ -542,8 +542,12 @@ stdout_logfile=/var/log/homenichat/output.log
 environment=NODE_ENV="production",PORT="3001",DATA_DIR="$DATA_DIR"
 SUPERVISOR_CONF
 
-    supervisorctl reread >> "$LOG_FILE" 2>&1
-    supervisorctl update >> "$LOG_FILE" 2>&1
+    # Restart supervisor to pick up new config
+    systemctl restart supervisor >> "$LOG_FILE" 2>&1 || {
+        warning "Could not restart supervisor, trying reread/update"
+        supervisorctl reread >> "$LOG_FILE" 2>&1 || true
+        supervisorctl update >> "$LOG_FILE" 2>&1 || true
+    }
 
     success "Supervisor configured"
 }
