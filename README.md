@@ -271,6 +271,57 @@ sudo systemctl restart asterisk
 
 ---
 
+## 🔐 SSL/HTTPS Configuration
+
+### HTTP Mode (Default)
+
+By default, Homenichat runs in **HTTP mode** for easy local network installation. This is suitable for:
+- Local network deployments (192.168.x.x)
+- Testing and development
+- Private home servers
+
+**Limitations without HTTPS:**
+- PWA "Add to Home Screen" may not work on some browsers
+- Push notifications require HTTPS
+- Some browser security features are limited
+- Not recommended for internet-facing deployments
+
+### Enabling HTTPS
+
+To enable HTTPS mode, set the environment variable:
+
+```bash
+# In /etc/homenichat/.env
+HTTPS=true
+```
+
+Then configure a reverse proxy (nginx/Caddy) with SSL certificates:
+
+**Using Let's Encrypt with Certbot:**
+```bash
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d your-domain.com
+```
+
+**Using Caddy (automatic HTTPS):**
+```bash
+# /etc/caddy/Caddyfile
+your-domain.com {
+    reverse_proxy localhost:3001
+}
+```
+
+### Security Headers
+
+| Mode | HSTS | upgrade-insecure-requests | Cross-Origin Policies |
+|------|------|---------------------------|----------------------|
+| HTTP (HTTPS=false) | ❌ Disabled | ❌ Disabled | ❌ Disabled |
+| HTTPS (HTTPS=true) | ✅ Enabled | ✅ Enabled | ✅ Enabled |
+
+> ⚠️ **Warning**: Without HTTPS, data between client and server is not encrypted. Only use HTTP mode on trusted local networks.
+
+---
+
 ## 📦 Related Projects
 
 | Project | Description |
