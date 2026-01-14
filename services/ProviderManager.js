@@ -537,6 +537,60 @@ class ProviderManager {
     return this.getActiveProvider().checkNumberExists(...args);
   }
 
+  /**
+   * Marque un chat comme lu
+   * @param {string} chatId - ID du chat
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  async markChatAsRead(chatId) {
+    return this.getActiveProvider().markChatAsRead(chatId);
+  }
+
+  /**
+   * Marque un message comme lu
+   * @param {string} chatId - ID du chat
+   * @param {string} messageId - ID du message
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  async markMessageAsRead(chatId, messageId) {
+    return this.getActiveProvider().markMessageAsRead(chatId, messageId);
+  }
+
+  /**
+   * Envoie une réaction emoji
+   * @param {string} chatId - ID du chat
+   * @param {string} messageId - ID du message
+   * @param {string} emoji - Emoji (vide pour supprimer)
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  async sendReaction(chatId, messageId, emoji) {
+    return this.getActiveProvider().sendReaction(chatId, messageId, emoji);
+  }
+
+  /**
+   * Teste la connexion du provider actif
+   * @returns {Promise<{success: boolean, message: string}>}
+   */
+  async testConnection() {
+    return this.getActiveProvider().testConnection();
+  }
+
+  /**
+   * Récupère le QR code (Baileys) ou null (Meta)
+   * @returns {Promise<string|null>}
+   */
+  async getQRCode() {
+    return this.getActiveProvider().getQRCode();
+  }
+
+  /**
+   * Déconnecte le provider actif
+   * @returns {Promise<{success: boolean}>}
+   */
+  async logout() {
+    return this.getActiveProvider().logout();
+  }
+
   async handleWebhook(providerName, data) {
     let provider = this.providers.get(providerName);
 

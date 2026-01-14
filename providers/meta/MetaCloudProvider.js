@@ -930,46 +930,59 @@ class MetaCloudProvider extends WhatsAppProvider {
 
   /**
    * Marque un message comme lu
+   * @param {string} chatId - ID du chat (pour compatibilité interface, non utilisé par Meta)
    * @param {string} messageId - ID du message
-   * @returns {Promise<{success: boolean}>}
+   * @returns {Promise<{success: boolean, error?: string}>}
    */
-  async markMessageAsRead(messageId) {
+  async markMessageAsRead(chatId, messageId) {
     try {
+      // Meta API n'a pas besoin du chatId, mais on le garde pour l'interface unifiée
       await this.apiClient.post(`/${this.config.phoneNumberId}/messages`, {
         messaging_product: 'whatsapp',
         status: 'read',
         message_id: messageId
       });
 
+      logger.info(`✅ Message marked as read: ${messageId}`);
       return { success: true };
     } catch (error) {
       logger.error('Failed to mark message as read:', error);
-      return { success: false };
+      return { success: false, error: error.message };
     }
   }
 
   /**
    * Réagit à un message
+   * @param {string} chatId - ID du chat (numéro destinataire)
    * @param {string} messageId - ID du message
-   * @param {string} emoji - Emoji de réaction
-   * @returns {Promise<{success: boolean}>}
+   * @param {string} emoji - Emoji de réaction (chaîne vide pour supprimer)
+   * @returns {Promise<{success: boolean, error?: string}>}
+   *
+   * @api POST /api/messages/:messageId/reaction
+   * @example
+   * // Request body
+   * { "chatId": "33612345678", "emoji": "👍" }
    */
-  async sendReaction(messageId, emoji) {
+  async sendReaction(chatId, messageId, emoji) {
     try {
+      const phoneNumber = this.extractPhoneNumber(chatId);
+
       await this.apiClient.post(`/${this.config.phoneNumberId}/messages`, {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
+        to: phoneNumber,
         type: 'reaction',
         reaction: {
           message_id: messageId,
-          emoji: emoji
+          emoji: emoji  // Chaîne vide pour supprimer la réaction
         }
       });
 
+      logger.info(`✅ Reaction sent: ${emoji || '(removed)'} on ${messageId}`);
       return { success: true };
     } catch (error) {
       logger.error('Failed to send reaction:', error);
-      return { success: false };
+      return { success: false, error: error.message };
     }
   }
 
@@ -1314,200 +1327,191 @@ class MetaCloudProvider extends WhatsAppProvider {
   // ==================== Normalisation ====================
 
   /**
-   * Normalise un message au format commun
-   * @param {Object} rawMessage - Message brut de Meta
+   * Normalise un message Meta au format unifié
+   * @param {Object} rawMessage - Message brut de Meta webhook
    * @param {Object} metadata - Métadonnées du webhook
-   * @returns {Object}
+   * @returns {Object} NormalizedMessage
+   *
+   * @typedef {Object} NormalizedMessage
+   * @property {string} id - ID unique du message
+   * @property {string} chatId - ID du chat (numéro expéditeur)
+   * @property {string} from - Numéro de l'expéditeur
+   * @property {string} to - Numéro du destinataire (notre numéro)
+   * @property {boolean} fromMe - true si envoyé par nous
+   * @property {number} timestamp - Timestamp Unix (secondes)
+   * @property {string} type - Type: 'text', 'image', 'video', 'audio', 'document', etc.
+   * @property {string} [text] - Contenu textuel
+   * @property {Object} [media] - Données média
+   * @property {string} status - Statut: 'sent', 'delivered', 'read', 'received'
+   * @property {string} _provider - 'meta'
+   * @property {Object} _raw - Message brut original
    */
   normalizeMessage(rawMessage, metadata = {}) {
     // Extraire les informations de base
-    const from = rawMessage.from;
+    const senderNumber = rawMessage.from;
     const id = rawMessage.id;
-    const timestamp = rawMessage.timestamp || Date.now() / 1000;
-    
-    // Déterminer si c'est un message envoyé par nous
-    // Dans Meta API, les messages envoyés par l'API ne remontent pas par webhook
-    // donc tous les messages webhook sont fromMe: false SAUF si explicitement marqués
+    const rawTimestamp = rawMessage.timestamp || Math.floor(Date.now() / 1000);
+
+    // fromMe: dans webhook Meta, les messages reçus sont toujours fromMe: false
+    // Les messages envoyés par nous ne passent pas par le webhook
     const fromMe = rawMessage.fromMe || false;
-    
-    // Déterminer le type de message
+
+    // Numéro destinataire (notre numéro connecté)
+    const toNumber = metadata.display_phone_number ||
+      metadata.phone_number_id ||
+      this.config.phoneNumberId;
+
+    // Déterminer le type de message et extraire le contenu
     let type = rawMessage.type || 'text';
-    let content = '';
+    let text = '';
     let media = null;
 
     switch (rawMessage.type) {
       case 'text':
-        content = rawMessage.text.body;
+        type = 'text';
+        text = rawMessage.text?.body || '';
         break;
-        
+
       case 'image':
-        content = rawMessage.image.caption || '';
+        type = 'image';
+        text = rawMessage.image?.caption || '';
         media = {
-          id: rawMessage.image.id,
-          mime_type: rawMessage.image.mime_type,
-          sha256: rawMessage.image.sha256
+          mimetype: rawMessage.image?.mime_type,
+          metaMediaId: rawMessage.image?.id,
+          sha256: rawMessage.image?.sha256,
+          hasMedia: true
         };
-        
-        // Télécharger et stocker le média automatiquement
-        if (rawMessage.image.id) {
-          const mediaStorage = require('../../services/MediaStorageService');
-          const chatStorage = require('../../services/ChatStorageServicePersistent');
-          // Toujours télécharger les médias pour une expérience complète
-          mediaStorage.downloadFromMeta(rawMessage.image.id, this, {
-            chatId: from,
-            messageId: id
-          })
-            .then(storedMedia => {
-              logger.info(`Image automatiquement stockée: ${storedMedia.id}`);
-              // Ajouter l'ID local au média
-              media.localMediaId = storedMedia.id;
-              media.localUrl = storedMedia.url;
-              media.url = storedMedia.url;
-              
-              // Mettre à jour le message dans la DB avec l'URL du média
-              // Attendre un peu pour s'assurer que le message est bien enregistré
-              setTimeout(() => {
-                chatStorage.updateMessageMediaUrl(id, storedMedia.url)
-                  .then(() => {
-                    logger.info(`Media URL updated for message ${id}`);
-                  })
-                  .catch(err => {
-                    logger.error('Erreur mise à jour media_url:', err);
-                  });
-              }, 2000);
-            })
-            .catch(err => {
-              logger.error('Erreur stockage automatique image:', err);
-              // En cas d'erreur, au moins garder la référence Meta
-              media.downloadError = true;
-              media.errorMessage = err.message;
-            });
-        }
+        // Télécharger le média en arrière-plan
+        this._downloadMediaAsync(rawMessage.image?.id, senderNumber, id, 'image');
         break;
-        
+
       case 'video':
-        content = rawMessage.video.caption || '';
+        type = 'video';
+        text = rawMessage.video?.caption || '';
         media = {
-          id: rawMessage.video.id,
-          mime_type: rawMessage.video.mime_type,
-          sha256: rawMessage.video.sha256
+          mimetype: rawMessage.video?.mime_type,
+          metaMediaId: rawMessage.video?.id,
+          sha256: rawMessage.video?.sha256,
+          hasMedia: true
         };
+        this._downloadMediaAsync(rawMessage.video?.id, senderNumber, id, 'video');
         break;
-        
+
       case 'audio':
+        type = 'audio';
         media = {
-          id: rawMessage.audio.id,
-          mime_type: rawMessage.audio.mime_type,
-          voice: rawMessage.audio.voice || false
+          mimetype: rawMessage.audio?.mime_type,
+          metaMediaId: rawMessage.audio?.id,
+          voice: rawMessage.audio?.voice || false,
+          hasMedia: true
         };
-        
-        // Télécharger automatiquement l'audio de manière asynchrone
-        if (rawMessage.audio.id) {
-          // Lancer le téléchargement en arrière-plan
-          (async () => {
-            try {
-              const mediaStorage = require('../../services/MediaStorageService');
-              const chatStorage = require('../../services/ChatStorageServicePersistent');
-              
-              const storedMedia = await mediaStorage.downloadFromMeta(rawMessage.audio.id, this, {
-                chatId: from,
-                messageId: id
-              });
-              
-              logger.info(`Audio automatiquement stocké: ${storedMedia.id}`);
-              
-              // Mettre à jour le message dans la DB avec l'URL du média
-              await chatStorage.updateMessageMediaUrl(id, storedMedia.url);
-              logger.info(`Audio URL updated for message ${id}`);
-              
-              // Re-broadcaster le message avec l'URL mise à jour
-              const updatedMessage = {
-                id: id,
-                chatId: from,
-                from: from,
-                to: to,
-                type: 'audio',
-                content: content,
-                media: {
-                  id: rawMessage.audio.id,
-                  mime_type: rawMessage.audio.mime_type,
-                  voice: rawMessage.audio.voice || false,
-                  localMediaId: storedMedia.id,
-                  localUrl: storedMedia.url,
-                  url: storedMedia.url
-                },
-                timestamp: timestamp,
-                fromMe: false,
-                pushName: pushName,
-                status: 'received'
-              };
-              
-              // Envoyer la mise à jour via PushService
-              const pushService = require('../../services/PushService');
-              pushService.pushNewMessage(updatedMessage);
-              logger.info('Audio message re-broadcast with local URL');
-            } catch (err) {
-              logger.error('Erreur téléchargement/stockage audio:', err);
-            }
-          })();
-        }
+        this._downloadMediaAsync(rawMessage.audio?.id, senderNumber, id, 'audio');
         break;
-        
+
       case 'document':
-        content = rawMessage.document.filename || '';
+        type = 'document';
+        text = rawMessage.document?.caption || '';
         media = {
-          id: rawMessage.document.id,
-          mime_type: rawMessage.document.mime_type,
-          filename: rawMessage.document.filename,
-          sha256: rawMessage.document.sha256
+          mimetype: rawMessage.document?.mime_type,
+          metaMediaId: rawMessage.document?.id,
+          fileName: rawMessage.document?.filename,
+          sha256: rawMessage.document?.sha256,
+          hasMedia: true
+        };
+        this._downloadMediaAsync(rawMessage.document?.id, senderNumber, id, 'document');
+        break;
+
+      case 'sticker':
+        type = 'sticker';
+        media = {
+          mimetype: rawMessage.sticker?.mime_type,
+          metaMediaId: rawMessage.sticker?.id,
+          hasMedia: true
         };
         break;
-        
+
       case 'location':
         type = 'location';
-        content = `${rawMessage.location.latitude},${rawMessage.location.longitude}`;
-        media = rawMessage.location;
+        text = rawMessage.location?.name || rawMessage.location?.address || '';
+        media = {
+          latitude: rawMessage.location?.latitude,
+          longitude: rawMessage.location?.longitude,
+          name: rawMessage.location?.name,
+          address: rawMessage.location?.address
+        };
         break;
-        
+
       case 'contacts':
         type = 'contact';
-        content = rawMessage.contacts[0]?.name?.formatted_name || '';
+        text = rawMessage.contacts?.[0]?.name?.formatted_name || '';
         media = rawMessage.contacts;
         break;
-        
+
       case 'interactive':
-        if (rawMessage.interactive.type === 'button_reply') {
-          content = rawMessage.interactive.button_reply.title;
-        } else if (rawMessage.interactive.type === 'list_reply') {
-          content = rawMessage.interactive.list_reply.title;
+        type = 'interactive';
+        if (rawMessage.interactive?.type === 'button_reply') {
+          text = rawMessage.interactive.button_reply?.title || '';
+        } else if (rawMessage.interactive?.type === 'list_reply') {
+          text = rawMessage.interactive.list_reply?.title || '';
         }
         break;
+
+      default:
+        type = rawMessage.type || 'unknown';
     }
 
-    // Récupérer l'URL du média si nécessaire
-    if (media && media.id && !media.url) {
-      // L'URL doit être récupérée séparément avec l'API
-      this.getMediaUrl(media.id).then(url => {
-        media.url = url;
-      }).catch(err => {
-        logger.error('Failed to get media URL:', err);
-      });
-    }
-
+    // Format unifié identique à BaileysProvider
     return {
-      id: rawMessage.id,
-      chatId: rawMessage.from,
-      from: rawMessage.from,
-      to: metadata.phone_number_id || this.config.phoneNumberId,
+      id: id,
+      chatId: senderNumber,
+      from: senderNumber,
+      to: toNumber,
+      fromMe: fromMe,
+      timestamp: parseInt(rawTimestamp),
       type: type,
-      content: content,
+      text: text || undefined,
       media: media,
-      timestamp: parseInt(rawMessage.timestamp) * 1000,
-      fromMe: fromMe, // Utiliser la valeur déterminée
       status: fromMe ? 'sent' : 'received',
-      quotedMessage: rawMessage.context,
-      reactions: rawMessage.reaction ? [rawMessage.reaction] : []
+      _provider: 'meta',
+      _raw: rawMessage,
+      // Champs bonus
+      pushName: undefined, // Sera ajouté par handleWebhook si disponible
+      replyTo: rawMessage.context?.id
     };
+  }
+
+  /**
+   * Télécharge un média Meta en arrière-plan et met à jour la DB
+   * @private
+   */
+  async _downloadMediaAsync(mediaId, chatId, messageId, mediaType) {
+    if (!mediaId) return;
+
+    try {
+      const mediaStorage = require('../../services/MediaStorageService');
+      const storedMedia = await mediaStorage.downloadFromMeta(mediaId, this, {
+        chatId,
+        messageId
+      });
+
+      logger.info(`${mediaType} automatiquement stocké: ${storedMedia.id}`);
+
+      // Mettre à jour le message dans la DB
+      setTimeout(async () => {
+        try {
+          await chatStorage.updateMessageMediaUrl(messageId, storedMedia.url);
+          logger.info(`Media URL updated for message ${messageId}`);
+
+          // Re-broadcaster via PushService
+          const pushService = require('../../services/PushService');
+          pushService.pushMediaUpdate({ messageId, url: storedMedia.url });
+        } catch (err) {
+          logger.error('Erreur mise à jour media_url:', err);
+        }
+      }, 2000);
+    } catch (err) {
+      logger.error(`Erreur stockage automatique ${mediaType}:`, err);
+    }
   }
 
 
