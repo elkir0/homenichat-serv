@@ -426,37 +426,243 @@ install_gammu() {
     [ "$INSTALL_MODEMS" != true ] && return
 
     info "Installing Gammu (GSM modem support)..."
-    apt-get install -y gammu gammu-smsd >> "$LOG_FILE" 2>&1
-    usermod -a -G dialout root
+
+    # Install gammu and dependencies
+    apt-get install -y gammu gammu-smsd libgammu-dev \
+        usb-modeswitch usb-modeswitch-data \
+        >> "$LOG_FILE" 2>&1 || {
+        warning "Some gammu packages may not be available"
+    }
+
+    # Add user to dialout group for serial port access
+    usermod -a -G dialout root 2>/dev/null || true
+    usermod -a -G dialout pi 2>/dev/null || true
+
+    # Create default gammu config
+    mkdir -p /etc/gammu
+    cat > /etc/gammu/gammurc << 'GAMMU_CONF'
+[gammu]
+device = /dev/ttyUSB2
+connection = at
+synchronizetime = yes
+logfile = /var/log/gammu.log
+logformat = textalldate
+
+[smsd]
+service = files
+inboxpath = /var/spool/gammu/inbox/
+outboxpath = /var/spool/gammu/outbox/
+sentsmspath = /var/spool/gammu/sent/
+errorsmspath = /var/spool/gammu/error/
+GAMMU_CONF
+
+    # Create spool directories
+    mkdir -p /var/spool/gammu/{inbox,outbox,sent,error}
+    chmod -R 777 /var/spool/gammu
+
     success "Gammu installed"
 }
 
 install_asterisk() {
     [ "$INSTALL_ASTERISK" != true ] && return
 
-    info "Installing Asterisk (this may take 10-20 minutes)..."
-    apt-get install -y asterisk asterisk-modules asterisk-config >> "$LOG_FILE" 2>&1
-    systemctl enable asterisk >> "$LOG_FILE" 2>&1
-    systemctl start asterisk >> "$LOG_FILE" 2>&1
-    success "Asterisk installed"
+    info "Installing Asterisk..."
+
+    # Check if asterisk is available in repos
+    if apt-cache show asterisk &>/dev/null; then
+        info "Installing Asterisk from repositories..."
+        apt-get install -y asterisk asterisk-modules asterisk-config >> "$LOG_FILE" 2>&1
+    else
+        info "Asterisk not in repos, building from source (this takes 15-30 minutes)..."
+        install_asterisk_from_source
+    fi
+
+    # Enable and start
+    systemctl enable asterisk >> "$LOG_FILE" 2>&1 || true
+    systemctl start asterisk >> "$LOG_FILE" 2>&1 || true
+
+    # Verify installation
+    if command -v asterisk &>/dev/null; then
+        success "Asterisk $(asterisk -V 2>/dev/null || echo 'installed')"
+    else
+        warning "Asterisk installation may have issues"
+    fi
+}
+
+install_asterisk_from_source() {
+    info "Installing build dependencies..."
+    apt-get install -y build-essential wget libssl-dev libncurses5-dev \
+        libnewt-dev libxml2-dev linux-headers-$(uname -r) libsqlite3-dev \
+        uuid-dev libjansson-dev libedit-dev libsrtp2-dev \
+        >> "$LOG_FILE" 2>&1
+
+    cd /usr/src
+    ASTERISK_VERSION="20-current"
+
+    info "Downloading Asterisk ${ASTERISK_VERSION}..."
+    wget -q "http://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${ASTERISK_VERSION}.tar.gz" \
+        -O asterisk.tar.gz >> "$LOG_FILE" 2>&1 || {
+        # Try certified version if current fails
+        wget -q "http://downloads.asterisk.org/pub/telephony/certified-asterisk/asterisk-certified-20.7-current.tar.gz" \
+            -O asterisk.tar.gz >> "$LOG_FILE" 2>&1
+    }
+
+    tar xzf asterisk.tar.gz
+    cd asterisk-*/
+
+    info "Configuring Asterisk..."
+    contrib/scripts/get_mp3_source.sh >> "$LOG_FILE" 2>&1 || true
+    ./configure --with-jansson-bundled >> "$LOG_FILE" 2>&1
+
+    info "Building Asterisk (this takes 10-20 minutes on Pi)..."
+    make menuselect.makeopts >> "$LOG_FILE" 2>&1
+    make -j$(nproc) >> "$LOG_FILE" 2>&1
+    make install >> "$LOG_FILE" 2>&1
+    make samples >> "$LOG_FILE" 2>&1
+    make config >> "$LOG_FILE" 2>&1
+
+    # Create asterisk user
+    useradd -r -d /var/lib/asterisk -s /sbin/nologin asterisk 2>/dev/null || true
+    chown -R asterisk:asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk 2>/dev/null || true
+
+    cd /usr/src
+    rm -rf asterisk-*/ asterisk.tar.gz
+}
+
+install_chan_quectel() {
+    [ "$INSTALL_MODEMS" != true ] && return
+    [ "$INSTALL_ASTERISK" != true ] && return
+
+    info "Installing chan_quectel for Quectel/SIM7600 modems..."
+
+    # Install dependencies
+    apt-get install -y libasound2-dev autoconf automake >> "$LOG_FILE" 2>&1
+
+    cd /usr/src
+
+    # Clone chan_quectel (RoEdAl fork - the one that works)
+    if [ -d "asterisk-chan-quectel" ]; then
+        rm -rf asterisk-chan-quectel
+    fi
+
+    info "Cloning chan_quectel (RoEdAl fork)..."
+    git clone https://github.com/RoEdAl/asterisk-chan-quectel.git >> "$LOG_FILE" 2>&1 || {
+        warning "Could not clone chan_quectel"
+        return 1
+    }
+
+    cd asterisk-chan-quectel
+
+    # Use specific commit that works (from user's VM500 setup)
+    git checkout 37b566f >> "$LOG_FILE" 2>&1 || {
+        warning "Could not checkout known working commit, using latest"
+    }
+
+    info "Building chan_quectel..."
+    autoreconf -i >> "$LOG_FILE" 2>&1
+    ./configure --with-astversion=$(asterisk -V 2>/dev/null | grep -oP '\d+' | head -1 || echo "20") >> "$LOG_FILE" 2>&1
+    make >> "$LOG_FILE" 2>&1
+    make install >> "$LOG_FILE" 2>&1
+
+    # Create quectel config
+    cat > /etc/asterisk/quectel.conf << 'QUECTEL_CONF'
+[general]
+interval = 15
+smsdb = /var/lib/asterisk/smsdb
+csmsdb = /var/lib/asterisk/csmsdb
+
+[defaults]
+context = from-gsm
+group = 0
+rxgain = 3
+txgain = 3
+autodeletesms = yes
+resetquectel = yes
+u2diag = -1
+usecallingpres = yes
+callingpres = allowed_passed_screen
+disablesms = no
+language = en
+smsaspdu = yes
+mindtmfgap = 45
+mindtmfduration = 80
+mindtmfinterval = 200
+callwaiting = auto
+msg_storage = me
+; 16kHz audio mode
+slin16 = yes
+
+; Example modem configuration (uncomment and modify)
+;[quectel-modem1]
+;audio = /dev/ttyUSB1      ; Audio port
+;data = /dev/ttyUSB2       ; AT command port
+;imei = YOUR_IMEI_HERE
+;imsi = YOUR_IMSI_HERE
+QUECTEL_CONF
+
+    # Create udev rules for consistent device naming
+    cat > /etc/udev/rules.d/99-quectel.rules << 'UDEV_RULES'
+# Quectel EC25/SIM7600 modems - create consistent symlinks
+# AT command port (interface 2)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2c7c", ATTRS{bInterfaceNumber}=="02", SYMLINK+="quectel-at"
+# Audio port (interface 4)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2c7c", ATTRS{bInterfaceNumber}=="04", SYMLINK+="quectel-audio"
+
+# SIMCom SIM7600
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{bInterfaceNumber}=="02", SYMLINK+="sim7600-at"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{bInterfaceNumber}=="04", SYMLINK+="sim7600-audio"
+UDEV_RULES
+
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger 2>/dev/null || true
+
+    cd /usr/src
+    rm -rf asterisk-chan-quectel
+
+    success "chan_quectel installed"
 }
 
 install_freepbx() {
     [ "$INSTALL_FREEPBX" != true ] && return
 
-    info "Installing FreePBX (this may take 20-30 minutes)..."
+    info "Installing FreePBX (this may take 20-40 minutes)..."
     info "FreePBX will be downloaded from official Sangoma sources."
+    warning "This will install Apache, MariaDB, PHP and many other packages."
 
+    # Install prerequisites
     apt-get install -y apache2 mariadb-server mariadb-client \
-        php php-mysql php-curl php-xml php-mbstring php-gd php-intl \
-        sox mpg123 lame ffmpeg >> "$LOG_FILE" 2>&1
+        php php-mysql php-curl php-xml php-mbstring php-gd php-intl php-ldap \
+        sox mpg123 lame ffmpeg nodejs npm \
+        >> "$LOG_FILE" 2>&1 || {
+        warning "Some FreePBX prerequisites may not be available"
+    }
 
     cd /tmp
-    wget -q https://github.com/FreePBX/sng_freepbx_debian_install/raw/master/sng_freepbx_debian_install.sh -O freepbx_install.sh
-    chmod +x freepbx_install.sh
-    yes | ./freepbx_install.sh >> "$LOG_FILE" 2>&1 || warning "FreePBX installation had some issues"
 
-    success "FreePBX installed"
+    # Download FreePBX installer
+    info "Downloading FreePBX installer from Sangoma..."
+    wget -q https://github.com/FreePBX/sng_freepbx_debian_install/raw/master/sng_freepbx_debian_install.sh \
+        -O freepbx_install.sh >> "$LOG_FILE" 2>&1 || {
+        error "Could not download FreePBX installer"
+        return 1
+    }
+
+    chmod +x freepbx_install.sh
+
+    info "Running FreePBX installer (this takes 20-30 minutes)..."
+    # Run with yes to auto-accept prompts
+    yes | ./freepbx_install.sh >> "$LOG_FILE" 2>&1 || {
+        warning "FreePBX installation had some issues - check log"
+    }
+
+    rm -f freepbx_install.sh
+
+    # Verify
+    if [ -d "/var/www/html/admin" ]; then
+        success "FreePBX installed"
+    else
+        warning "FreePBX may not be fully installed"
+    fi
 }
 
 # ============================================================================
@@ -702,6 +908,7 @@ main() {
     install_baileys
     install_gammu
     install_asterisk
+    install_chan_quectel
     install_freepbx
 
     print_banner
