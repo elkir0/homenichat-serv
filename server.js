@@ -55,26 +55,28 @@ const PORT = process.env.PORT || 3001;
 app.set('trust proxy', 1);
 
 // Middleware de sécurité
-// Disable HSTS and upgrade-insecure-requests for HTTP deployments
-const isHttps = process.env.HTTPS === 'true' || process.env.NODE_ENV === 'production';
+// Disable HSTS and upgrade-insecure-requests for HTTP/local deployments
+const isHttps = process.env.HTTPS === 'true';
+const cspDirectives = {
+  defaultSrc: ["'self'"],
+  scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://fonts.googleapis.com"],
+  styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+  fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
+  imgSrc: ["'self'", "data:", "https:", "blob:"],
+  connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"]
+};
+// Only add upgradeInsecureRequests if HTTPS is enabled
+if (isHttps) {
+  cspDirectives.upgradeInsecureRequests = [];
+}
 app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-      fontSrc: ["'self'", "https://fonts.gstatic.com"],
-      imgSrc: ["'self'", "data:", "https:", "blob:"],
-      connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
-      // Only upgrade to HTTPS if actually using HTTPS
-      upgradeInsecureRequests: isHttps ? [] : null
-    }
-  },
-  // Disable HSTS for HTTP deployments (causes issues on local network)
+  contentSecurityPolicy: { directives: cspDirectives },
+  // Disable HSTS for HTTP deployments (causes SSL errors on local network)
   hsts: isHttps,
-  // Disable crossOriginOpenerPolicy for local development
-  crossOriginOpenerPolicy: isHttps ? { policy: 'same-origin' } : false,
-  crossOriginResourcePolicy: isHttps ? { policy: 'same-origin' } : false
+  // Disable cross-origin policies for local development
+  crossOriginOpenerPolicy: false,
+  crossOriginResourcePolicy: false,
+  originAgentCluster: false
 }));
 
 // Initialiser le provider VoIP
