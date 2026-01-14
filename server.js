@@ -55,22 +55,24 @@ const PORT = process.env.PORT || 3001;
 app.set('trust proxy', 1);
 
 // Middleware de sécurité
-// Disable HSTS and upgrade-insecure-requests for HTTP/local deployments
+// Permissive pour installation HTTP locale - avertissement: sans HTTPS, certaines fonctions PWA ne marcheront pas
 const isHttps = process.env.HTTPS === 'true';
-const cspDirectives = {
-  defaultSrc: ["'self'"],
-  scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://fonts.googleapis.com"],
-  styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-  fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
-  imgSrc: ["'self'", "data:", "https:", "blob:"],
-  connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"]
-};
-// Only add upgradeInsecureRequests if HTTPS is enabled
-if (isHttps) {
-  cspDirectives.upgradeInsecureRequests = [];
-}
 app.use(helmet({
-  contentSecurityPolicy: { directives: cspDirectives },
+  contentSecurityPolicy: {
+    useDefaults: false, // Ne pas utiliser les défauts de helmet (qui incluent upgrade-insecure-requests)
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://fonts.googleapis.com", "https://cdn.jsdelivr.net"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
+      imgSrc: ["'self'", "data:", "https:", "blob:"],
+      connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
+      mediaSrc: ["'self'", "blob:"],
+      workerSrc: ["'self'", "blob:"],
+      // upgradeInsecureRequests is intentionally omitted for HTTP deployments
+      ...(isHttps ? { upgradeInsecureRequests: [] } : {})
+    }
+  },
   // Disable HSTS for HTTP deployments (causes SSL errors on local network)
   hsts: isHttps,
   // Disable cross-origin policies for local development
