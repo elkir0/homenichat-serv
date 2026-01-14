@@ -526,7 +526,9 @@ install_asterisk_from_source() {
     chown -R asterisk:asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk 2>/dev/null || true
 
     cd /usr/src
-    rm -rf asterisk-*/ asterisk.tar.gz
+    # Don't clean up asterisk source yet - chan_quectel needs headers
+    # Cleanup happens in install_chan_quectel after headers are installed
+    rm -f asterisk.tar.gz
 }
 
 install_chan_quectel() {
@@ -535,8 +537,18 @@ install_chan_quectel() {
 
     info "Installing chan_quectel for Quectel/SIM7600 modems..."
 
-    # Install dependencies
-    apt-get install -y libasound2-dev autoconf automake >> "$LOG_FILE" 2>&1
+    # Install dependencies (cmake is required - RoEdAl fork uses CMake, not autoconf)
+    apt-get install -y cmake libasound2-dev >> "$LOG_FILE" 2>&1
+
+    cd /usr/src
+
+    # Install Asterisk headers if built from source
+    ASTERISK_SRC=$(find /usr/src -maxdepth 1 -type d -name "asterisk-*" 2>/dev/null | head -1)
+    if [ -n "$ASTERISK_SRC" ] && [ -d "$ASTERISK_SRC" ]; then
+        info "Installing Asterisk development headers..."
+        cd "$ASTERISK_SRC"
+        make install-headers >> "$LOG_FILE" 2>&1 || true
+    fi
 
     cd /usr/src
 
@@ -558,11 +570,27 @@ install_chan_quectel() {
         warning "Could not checkout known working commit, using latest"
     }
 
-    info "Building chan_quectel..."
-    autoreconf -i >> "$LOG_FILE" 2>&1
-    ./configure --with-astversion=$(asterisk -V 2>/dev/null | grep -oP '\d+' | head -1 || echo "20") >> "$LOG_FILE" 2>&1
+    info "Building chan_quectel with CMake..."
+    mkdir -p build && cd build
+    cmake .. >> "$LOG_FILE" 2>&1
     make >> "$LOG_FILE" 2>&1
     make install >> "$LOG_FILE" 2>&1
+
+    # CMake installs to /usr/local/lib/*/asterisk/modules/ - copy to standard location
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "aarch64" ]; then
+        LIB_ARCH="aarch64-linux-gnu"
+    elif [ "$ARCH" = "x86_64" ]; then
+        LIB_ARCH="x86_64-linux-gnu"
+    else
+        LIB_ARCH="$ARCH-linux-gnu"
+    fi
+
+    if [ -f "/usr/local/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so" ]; then
+        cp /usr/local/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so /usr/lib/asterisk/modules/ 2>/dev/null || true
+    fi
+
+    cd /usr/src
 
     # Create quectel config
     cat > /etc/asterisk/quectel.conf << 'QUECTEL_CONF'
@@ -616,8 +644,10 @@ UDEV_RULES
     udevadm control --reload-rules 2>/dev/null || true
     udevadm trigger 2>/dev/null || true
 
+    # Cleanup source directories
     cd /usr/src
     rm -rf asterisk-chan-quectel
+    rm -rf asterisk-*/  # Clean up asterisk source now that headers are installed
 
     success "chan_quectel installed"
 }
