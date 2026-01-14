@@ -6,6 +6,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/elkir0/homenichat-serv/main/scripts/install.sh | sudo bash
 #    or: sudo ./install.sh
 #    or: sudo ./install.sh --auto  (non-interactive, accept defaults)
+#    or: sudo ./install.sh --full  (install ALL components: Baileys, Asterisk, Modems)
 #
 # License: GPL v3
 #
@@ -37,9 +38,23 @@ INSTALL_MODEMS=false
 
 # Auto mode (non-interactive)
 AUTO_MODE=false
-if [[ "$1" == "--auto" || "$1" == "-y" || "$1" == "--yes" ]]; then
-    AUTO_MODE=true
-fi
+FULL_MODE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --auto|-y|--yes)
+            AUTO_MODE=true
+            ;;
+        --full|--all)
+            AUTO_MODE=true
+            FULL_MODE=true
+            INSTALL_ASTERISK=true
+            INSTALL_FREEPBX=true
+            INSTALL_BAILEYS=true
+            INSTALL_MODEMS=true
+            ;;
+    esac
+done
 
 # ============================================================================
 # Helper Functions
@@ -264,6 +279,21 @@ show_disclaimers() {
 
 choose_components() {
     print_banner
+
+    # In full mode, skip interactive selection
+    if [ "$FULL_MODE" = true ]; then
+        echo -e "${BOLD}Full Installation Mode${NC}"
+        echo ""
+        echo "All components will be installed:"
+        echo ""
+        echo "  - Homenichat-Serv (core)    : YES"
+        echo "  - Admin Web Interface       : YES"
+        echo "  - Baileys (WhatsApp)        : YES"
+        echo "  - Asterisk (VoIP)           : YES"
+        echo "  - GSM Modem support         : YES"
+        echo ""
+        return
+    fi
 
     echo -e "${BOLD}Component Selection${NC}"
     echo ""
