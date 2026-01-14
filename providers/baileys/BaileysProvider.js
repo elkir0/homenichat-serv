@@ -30,6 +30,27 @@ class BaileysProvider extends WhatsAppProvider {
   // loadState et saveState supprimés (plus de JSON)
 
   /**
+   * Valide la configuration du provider
+   * @returns {Promise<{valid: boolean, errors?: string[]}>}
+   */
+  async validateConfig() {
+    // Baileys n'a pas de config externe à valider (QR auth)
+    return { valid: true, errors: [] };
+  }
+
+  /**
+   * Teste la connexion avec WhatsApp
+   * @returns {Promise<{success: boolean, message: string}>}
+   */
+  async testConnection() {
+    const connected = this.sock && this.connectionState === 'connected';
+    return {
+      success: connected,
+      message: connected ? 'Connected to WhatsApp' : 'Not connected - scan QR code'
+    };
+  }
+
+  /**
    * Initialise le provider
    */
   async initialize() {
@@ -397,28 +418,90 @@ class BaileysProvider extends WhatsAppProvider {
     };
   }
 
-  // Helpers existants
+  /**
+   * Normalise un message Baileys au format unifié
+   * @param {object} message - Message brut Baileys
+   * @returns {Promise<NormalizedMessage|null>}
+   *
+   * @typedef {object} NormalizedMessage
+   * @property {string} id - ID unique du message
+   * @property {string} chatId - ID du chat (JID WhatsApp)
+   * @property {string} from - Numéro de l'expéditeur (sans @s.whatsapp.net)
+   * @property {string} to - Numéro du destinataire (notre numéro connecté)
+   * @property {boolean} fromMe - true si envoyé par nous
+   * @property {number} timestamp - Timestamp Unix (secondes)
+   * @property {string} type - Type de message: 'text', 'image', 'video', 'audio', 'document', 'sticker'
+   * @property {string} [text] - Contenu textuel (si type=text ou caption)
+   * @property {object} [media] - Données média (si type=image/video/audio/document)
+   * @property {string} status - Statut: 'sent', 'delivered', 'read', 'received'
+   * @property {string} _provider - Identifiant du provider ('baileys')
+   * @property {object} _raw - Message brut original pour debug
+   */
   async normalizeMessage(message) {
     try {
-      const type = Object.keys(message.message || {})[0];
+      const msgTypes = Object.keys(message.message || {});
+      // Filtrer messageContextInfo qui est présent dans tous les messages
+      const realTypes = msgTypes.filter(t => t !== 'messageContextInfo');
+      const type = realTypes[0] || msgTypes[0];
       const content = message.message[type];
 
       let realType = type;
       if (type === 'ephemeralMessage' || type === 'viewOnceMessage') {
-        realType = Object.keys(content.message || {})[0];
+        const innerTypes = Object.keys(content.message || {});
+        realType = innerTypes.filter(t => t !== 'messageContextInfo')[0] || innerTypes[0];
+      }
+
+      // Mapper les types Baileys vers les types unifiés
+      const typeMap = {
+        'conversation': 'text',
+        'extendedTextMessage': 'text',
+        'imageMessage': 'image',
+        'videoMessage': 'video',
+        'audioMessage': 'audio',
+        'documentMessage': 'document',
+        'stickerMessage': 'sticker',
+        'contactMessage': 'contact',
+        'locationMessage': 'location'
+      };
+      const unifiedType = typeMap[realType] || realType;
+
+      // Extraire le numéro de l'expéditeur (sans @s.whatsapp.net)
+      const senderJid = message.key.participant || message.key.remoteJid;
+      const fromNumber = senderJid ? senderJid.split('@')[0].split(':')[0] : '';
+
+      // Notre numéro connecté
+      const connectedUser = this.sock?.user?.id;
+      const toNumber = connectedUser ? connectedUser.split('@')[0].split(':')[0] : '';
+
+      // Construire l'objet média si applicable
+      let media = null;
+      if (['image', 'video', 'audio', 'document', 'sticker'].includes(unifiedType)) {
+        const mediaContent = message.message[realType] || content;
+        media = {
+          mimetype: mediaContent?.mimetype,
+          fileLength: mediaContent?.fileLength,
+          fileName: mediaContent?.fileName,
+          caption: mediaContent?.caption,
+          // Note: Pour télécharger le média, utiliser sock.downloadMediaMessage(message)
+          hasMedia: true
+        };
       }
 
       return {
         id: message.key.id,
-        from: message.key.remoteJid,
-        sender: message.key.participant || message.key.remoteJid,
-        isFromMe: message.key.fromMe,
-        pushName: message.pushName,
+        chatId: message.key.remoteJid,
+        from: fromNumber,
+        to: toNumber,
+        fromMe: message.key.fromMe,
         timestamp: message.messageTimestamp || Math.floor(Date.now() / 1000),
-        type: realType,
-        content: this.getMessageText(message),
-        message: message.message,
-        status: 'received'
+        type: unifiedType,
+        text: this.getMessageText(message) || undefined,
+        media: media,
+        status: message.key.fromMe ? 'sent' : 'received',
+        _provider: 'baileys',
+        _raw: message.message,
+        // Champs bonus utiles (non dans la spec mais pratiques)
+        pushName: message.pushName
       };
     } catch (error) {
       logger.error('Error normalizing message:', error);
@@ -549,6 +632,114 @@ class BaileysProvider extends WhatsAppProvider {
       await this.sock.sendPresenceUpdate(type === 'typing' ? 'composing' : 'paused', jid);
     } catch (error) {
       logger.warn(`Failed to send presence update: ${error.message}`);
+    }
+  }
+
+  /**
+   * Marque un chat comme lu (tous les messages non lus)
+   * @param {string} chatId - ID du chat (JID WhatsApp)
+   * @returns {Promise<{success: boolean, error?: string}>}
+   *
+   * @api POST /api/chats/:chatId/read
+   * @example
+   * // Request
+   * POST /api/chats/33612345678@s.whatsapp.net/read
+   *
+   * // Response
+   * { "success": true }
+   */
+  async markChatAsRead(chatId) {
+    if (!this.sock || this.connectionState !== 'connected') {
+      return { success: false, error: 'Not connected' };
+    }
+
+    try {
+      const jid = this.formatJid(chatId);
+      // Baileys readMessages marque tous les messages non lus d'un chat
+      await this.sock.readMessages([{ remoteJid: jid, id: undefined }]);
+
+      // Mettre à jour le compteur dans la DB locale
+      chatStorage.markChatAsRead(chatId);
+
+      logger.info(`✅ Chat marked as read: ${chatId}`);
+      return { success: true };
+    } catch (error) {
+      logger.error(`Error marking chat as read: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Marque un message spécifique comme lu
+   * @param {string} chatId - ID du chat contenant le message
+   * @param {string} messageId - ID du message à marquer comme lu
+   * @returns {Promise<{success: boolean, error?: string}>}
+   *
+   * @api POST /api/messages/:messageId/read
+   * @example
+   * // Request body
+   * { "chatId": "33612345678@s.whatsapp.net" }
+   *
+   * // Response
+   * { "success": true }
+   */
+  async markMessageAsRead(chatId, messageId) {
+    if (!this.sock || this.connectionState !== 'connected') {
+      return { success: false, error: 'Not connected' };
+    }
+
+    try {
+      const jid = this.formatJid(chatId);
+      await this.sock.readMessages([{ remoteJid: jid, id: messageId }]);
+
+      logger.info(`✅ Message marked as read: ${messageId} in ${chatId}`);
+      return { success: true };
+    } catch (error) {
+      logger.error(`Error marking message as read: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Envoie une réaction emoji à un message
+   * @param {string} chatId - ID du chat contenant le message
+   * @param {string} messageId - ID du message cible
+   * @param {string} emoji - Emoji de réaction (ex: "👍", "❤️", "" pour supprimer)
+   * @returns {Promise<{success: boolean, error?: string}>}
+   *
+   * @api POST /api/messages/:messageId/reaction
+   * @example
+   * // Request body
+   * { "chatId": "33612345678@s.whatsapp.net", "emoji": "👍" }
+   *
+   * // Response
+   * { "success": true }
+   *
+   * // Pour supprimer une réaction, envoyer emoji vide:
+   * { "chatId": "33612345678@s.whatsapp.net", "emoji": "" }
+   */
+  async sendReaction(chatId, messageId, emoji) {
+    if (!this.sock || this.connectionState !== 'connected') {
+      return { success: false, error: 'Not connected' };
+    }
+
+    try {
+      const jid = this.formatJid(chatId);
+      await this.sock.sendMessage(jid, {
+        react: {
+          text: emoji,  // Emoji ou chaîne vide pour supprimer
+          key: {
+            remoteJid: jid,
+            id: messageId
+          }
+        }
+      });
+
+      logger.info(`✅ Reaction sent: ${emoji || '(removed)'} on ${messageId}`);
+      return { success: true };
+    } catch (error) {
+      logger.error(`Error sending reaction: ${error.message}`);
+      return { success: false, error: error.message };
     }
   }
 
