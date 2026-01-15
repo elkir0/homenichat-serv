@@ -393,7 +393,7 @@ router.post('/whatsapp/sessions', [
     }
 
     await sessionManager.createSession?.(sessionId, {
-      type: 'baileys',
+      providerType: 'baileys',
       name: name || `WhatsApp ${new Date().toLocaleDateString()}`,
     });
 
