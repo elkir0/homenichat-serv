@@ -588,19 +588,40 @@ class ModemService {
   }
 
   /**
-   * Envoie un SMS directement via commandes AT (bypass Asterisk)
-   * Plus fiable que chan_quectel pour EC25
+   * Envoie un SMS via Asterisk chan_quectel
+   * Syntaxe: quectel sms send <device> <number> <message>
    */
   async sendSms(modemId, to, message) {
     if (!to || !message) {
       throw new Error('Missing "to" or "message"');
     }
 
-    const dataPort = this.modemConfig.dataPort || '/dev/ttyUSB2';
-
+    // Essayer d'abord via Asterisk (config VM500 style)
     try {
-      // Script Python inline pour envoi SMS robuste
-      const pythonScript = `
+      const safeMessage = message.replace(/"/g, '\\"').replace(/'/g, "\\'");
+      const result = await this.asteriskCmd(`quectel sms send ${modemId} ${to} "${safeMessage}"`);
+
+      if (result && result.includes('queued')) {
+        this.logger.info(`[ModemService] SMS queued via Asterisk ${modemId} to ${to}`);
+        return { success: true, modem: modemId, to, method: 'asterisk', result };
+      }
+
+      // Si pas "queued", vérifier si c'est une erreur
+      if (result && (result.includes('not found') || result.includes('error'))) {
+        throw new Error(result);
+      }
+
+      this.logger.info(`[ModemService] SMS sent via Asterisk ${modemId} to ${to}`);
+      return { success: true, modem: modemId, to, method: 'asterisk', result };
+
+    } catch (asteriskError) {
+      // Fallback: envoi direct via AT commands (pour debug ou si Asterisk down)
+      this.logger.warn(`[ModemService] Asterisk SMS failed, trying direct AT: ${asteriskError.message}`);
+
+      const dataPort = this.modemConfig.dataPort || '/dev/ttyUSB2';
+
+      try {
+        const pythonScript = `
 import serial
 import time
 import sys
@@ -613,59 +634,40 @@ try:
     ser = serial.Serial(port, 115200, timeout=5)
     time.sleep(0.3)
     ser.flushInput()
-
-    # Mode texte
     ser.write(b"AT+CMGF=1\\r\\n")
     time.sleep(0.5)
     r = ser.read(100).decode(errors="ignore")
     if "OK" not in r:
         print("ERROR: CMGF failed")
         sys.exit(1)
-
-    # Préparer envoi
     cmd = 'AT+CMGS="' + phone + '"\\r\\n'
     ser.write(cmd.encode())
     time.sleep(2)
-
-    # Message + Ctrl+Z
     ser.write((message + chr(26)).encode())
     time.sleep(15)
     r = ser.read(500).decode(errors="ignore")
-
     ser.close()
-
     if "+CMGS" in r or "OK" in r:
         print("OK")
         sys.exit(0)
     else:
         print("ERROR: " + r.replace("\\n", " "))
         sys.exit(1)
-
 except Exception as e:
     print("ERROR: " + str(e))
     sys.exit(1)
 `;
+        const result = await this.runCmd(`python3 -c '${pythonScript.replace(/'/g, "'\"'\"'")}'`, 30000);
 
-      // Exécuter via Python
-      const result = await this.runCmd(`python3 -c '${pythonScript.replace(/'/g, "'\"'\"'")}'`, 30000);
-
-      if (result && result.includes('OK')) {
-        this.logger.info(`[ModemService] SMS sent directly via ${dataPort} to ${to}`);
-        return { success: true, modem: modemId, to, method: 'direct-at' };
-      } else {
-        throw new Error(result || 'Unknown error sending SMS');
-      }
-    } catch (error) {
-      // Fallback: essayer via Asterisk quand même
-      this.logger.warn(`[ModemService] Direct SMS failed, trying Asterisk: ${error.message}`);
-      try {
-        const safeMessage = message.replace(/"/g, '\\"').replace(/'/g, "\\'");
-        const result = await this.asteriskCmd(`quectel sms send ${modemId} ${to} "${safeMessage}"`);
-        this.logger.info(`[ModemService] SMS sent via Asterisk ${modemId} to ${to}`);
-        return { success: true, modem: modemId, to, method: 'asterisk', result };
-      } catch (asteriskError) {
+        if (result && result.includes('OK')) {
+          this.logger.info(`[ModemService] SMS sent directly via ${dataPort} to ${to}`);
+          return { success: true, modem: modemId, to, method: 'direct-at' };
+        } else {
+          throw new Error(result || 'Unknown error');
+        }
+      } catch (directError) {
         this.logger.error(`[ModemService] All SMS methods failed for ${to}`);
-        throw new Error(`SMS failed: Direct (${error.message}), Asterisk (${asteriskError.message})`);
+        throw new Error(`SMS failed: Asterisk (${asteriskError.message}), Direct (${directError.message})`);
       }
     }
   }
@@ -802,6 +804,39 @@ except Exception as e:
     }
 
     return detected;
+  }
+
+  /**
+   * Récupère l'IMSI du modem (nécessaire pour config chan_quectel)
+   */
+  async getModemImsi(dataPort = null) {
+    const port = dataPort || this.modemConfig.dataPort || '/dev/ttyUSB2';
+
+    try {
+      // Via Asterisk si disponible
+      const modemId = this.modemConfig.modemName || 'hni-modem';
+      const result = await this.asteriskCmd(`quectel cmd ${modemId} AT+CIMI`);
+      if (result && result.match(/\d{15}/)) {
+        const imsi = result.match(/(\d{15})/)[1];
+        this.logger.info(`[ModemService] IMSI via Asterisk: ${imsi}`);
+        return imsi;
+      }
+    } catch (e) {
+      // Fallback: accès direct
+    }
+
+    try {
+      const result = await this.runCmd(`echo -e 'AT+CIMI\\r' | timeout 3 socat - ${port},raw,echo=0,b115200,crnl 2>/dev/null`);
+      if (result && result.match(/\d{15}/)) {
+        const imsi = result.match(/(\d{15})/)[1];
+        this.logger.info(`[ModemService] IMSI via direct: ${imsi}`);
+        return imsi;
+      }
+    } catch (e) {
+      this.logger.warn(`[ModemService] Failed to get IMSI: ${e.message}`);
+    }
+
+    return null;
   }
 
   /**
@@ -1046,38 +1081,36 @@ except Exception as e:
     // Mapping stockage SMS: sqlite/modem -> 'me', sim -> 'sm'
     const msgStorage = smsConfig.storage === 'sim' ? 'sm' : 'me';
     const autoDeleteSms = smsConfig.autoDelete !== false ? 'yes' : 'no';
-    const disableSms = smsConfig.enabled === false ? 'yes' : 'no';
 
+    // Configuration basée sur VM500 (production fonctionnelle)
     const confContent = `; Homenichat - Configuration chan_quectel
 ; Généré automatiquement - ${new Date().toISOString()}
 ; Type de modem: ${profile.name}
+; Basé sur config VM500 production
 
 [general]
-; Intervalle d'interrogation du modem (ms)
+interval=15
+smsdb=/var/lib/asterisk/smsdb
+csmsttl=600
+
+[defaults]
+context=from-gsm
+group=0
 rxgain=3
 txgain=3
+autodeletesms=${autoDeleteSms}
+resetquectel=yes
+msg_storage=${msgStorage}
+msg_direct=off
+usecallingpres=yes
+callingpres=allowed_passed_screen
 
 [${modemName}]
-; Configuration du modem ${profile.name}
-audio=${audioPort}
 data=${dataPort}
-
-; Audio format (${profile.slin16 ? '16kHz' : '8kHz'})
+audio=${audioPort}
 slin16=${profile.slin16 ? 'yes' : 'no'}
-
-; Configuration SMS
-disableSMS=${disableSms}
-msg_storage=${msgStorage}
-autodeletesms=${autoDeleteSms}
-
-; Contexte pour les appels entrants
-context=from-gsm
-
-; Numéro de téléphone (si connu)
-${mergedConfig.phoneNumber ? `exten=+${mergedConfig.phoneNumber.replace(/^\+/, '')}` : '; exten=+NUMERO'}
-
-; Groupe pour le routage
-group=1
+${mergedConfig.imsi ? `imsi=${mergedConfig.imsi}` : '; imsi sera détecté automatiquement'}
+${mergedConfig.phoneNumber ? `exten=+${mergedConfig.phoneNumber.replace(/^\+/, '')}` : ''}
 `;
 
     return confContent;
@@ -1088,14 +1121,29 @@ group=1
    */
   async applyQuectelConf(config = {}) {
     try {
-      const confContent = this.generateQuectelConf(config);
+      // Créer le dossier smsdb si nécessaire
+      const smsdbPath = '/var/lib/asterisk/smsdb';
+      await this.runCmd(`mkdir -p ${smsdbPath} && chown asterisk:asterisk ${smsdbPath} 2>/dev/null || true`);
+
+      // Récupérer l'IMSI si pas fourni
+      let configWithImsi = { ...config };
+      if (!configWithImsi.imsi && !this.modemConfig.imsi) {
+        this.logger.info('[ModemService] Detecting IMSI...');
+        const imsi = await this.getModemImsi(configWithImsi.dataPort);
+        if (imsi) {
+          configWithImsi.imsi = imsi;
+          this.logger.info(`[ModemService] IMSI detected: ${imsi}`);
+        }
+      }
+
+      const confContent = this.generateQuectelConf(configWithImsi);
 
       // Écrire le fichier
       fs.writeFileSync(QUECTEL_CONF_PATH, confContent);
       this.logger.info('[ModemService] quectel.conf written');
 
-      // Sauvegarder la config
-      this.saveModemConfig(config);
+      // Sauvegarder la config avec IMSI
+      this.saveModemConfig(configWithImsi);
 
       // Recharger Asterisk
       const reloadResult = await this.asteriskCmd('module reload chan_quectel');
@@ -1113,6 +1161,7 @@ group=1
         success: true,
         message: 'Configuration appliquée',
         confPath: QUECTEL_CONF_PATH,
+        imsi: configWithImsi.imsi,
         reloadResult,
       };
     } catch (error) {

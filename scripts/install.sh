@@ -657,40 +657,39 @@ install_chan_quectel() {
 
     cd /usr/src
 
-    # Create quectel config
+    # Create SMS database directories
+    mkdir -p /var/lib/asterisk/smsdb
+    chown asterisk:asterisk /var/lib/asterisk/smsdb 2>/dev/null || true
+
+    # Create quectel config (based on VM500 production config)
     cat > /etc/asterisk/quectel.conf << 'QUECTEL_CONF'
+; Homenichat - chan_quectel configuration
+; Based on VM500 production config
+
 [general]
-interval = 15
-smsdb = /var/lib/asterisk/smsdb
-csmsdb = /var/lib/asterisk/csmsdb
+interval=15
+smsdb=/var/lib/asterisk/smsdb
+csmsttl=600
 
 [defaults]
-context = from-gsm
-group = 0
-rxgain = 3
-txgain = 3
-autodeletesms = yes
-resetquectel = yes
-u2diag = -1
-usecallingpres = yes
-callingpres = allowed_passed_screen
-disablesms = no
-language = en
-smsaspdu = yes
-mindtmfgap = 45
-mindtmfduration = 80
-mindtmfinterval = 200
-callwaiting = auto
-msg_storage = me
-; 16kHz audio mode
-slin16 = yes
+context=from-gsm
+group=0
+rxgain=3
+txgain=3
+autodeletesms=yes
+resetquectel=yes
+msg_storage=me
+msg_direct=off
+usecallingpres=yes
+callingpres=allowed_passed_screen
 
-; Example modem configuration (uncomment and modify)
-;[quectel-modem1]
-;audio = /dev/ttyUSB1      ; Audio port
-;data = /dev/ttyUSB2       ; AT command port
-;imei = YOUR_IMEI_HERE
-;imsi = YOUR_IMSI_HERE
+; Example modem configuration (will be auto-configured by Homenichat)
+; EC25 uses slin16=no (8kHz), SIM7600 uses slin16=yes (16kHz)
+;[hni-modem]
+;data=/dev/ttyUSB2
+;audio=/dev/ttyUSB1
+;slin16=no
+;imsi=YOUR_IMSI_HERE
 QUECTEL_CONF
 
     # Create udev rules for consistent device naming
