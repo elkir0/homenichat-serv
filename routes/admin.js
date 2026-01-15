@@ -567,7 +567,7 @@ router.delete('/whatsapp/sessions/:id', [
 
 /**
  * GET /api/admin/modems
- * Liste les modems détectés
+ * Liste les modems détectés (format compatible avec SmsPage)
  */
 router.get('/modems', async (req, res) => {
   try {
@@ -577,16 +577,125 @@ router.get('/modems', async (req, res) => {
 
     const modemIds = await modemService.listModems();
     const modems = [];
+    const modemConfig = modemService.getModemConfig();
 
     for (const id of modemIds) {
       const status = await modemService.collectModemStatus(id);
-      modems.push(status);
+
+      // Transformer en format compatible avec SmsPage
+      modems.push({
+        id: status.id,
+        device: status.name || status.id,
+        type: status.model || modemConfig.modemType?.toUpperCase() || 'GSM',
+        status: status.state === 'Free' ? 'connected' :
+                status.needsPin ? 'error' :
+                status.state?.toLowerCase().includes('not') ? 'disconnected' : 'connected',
+        signal: status.rssiPercent || 0,
+        operator: status.operator || 'Unknown',
+        phone: status.number || modemConfig.phoneNumber || '',
+        // Données étendues
+        technology: status.technology,
+        imei: status.imei,
+        registered: status.registered,
+        voice: status.voice,
+        sms: status.sms,
+        smsEnabled: modemConfig.sms?.enabled !== false,
+      });
     }
 
     res.json({ modems });
 
   } catch (error) {
     console.error('[Admin] List modems error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/sms/stats
+ * Statistiques SMS détaillées
+ */
+router.get('/sms/stats', async (req, res) => {
+  try {
+    const stats = {
+      total: { sent: 0, received: 0, failed: 0, pending: 0 },
+      today: { sent: 0, received: 0 },
+      week: { sent: 0, received: 0 },
+      storage: { count: 0, sizeKb: 0 },
+      lastActivity: null,
+    };
+
+    if (db) {
+      const now = Date.now();
+      const todayStart = now - (24 * 60 * 60 * 1000);
+      const weekStart = now - (7 * 24 * 60 * 60 * 1000);
+
+      try {
+        // Stats totales
+        stats.total.sent = db.prepare(
+          "SELECT COUNT(*) as count FROM messages WHERE from_me = 1"
+        ).get()?.count || 0;
+
+        stats.total.received = db.prepare(
+          "SELECT COUNT(*) as count FROM messages WHERE from_me = 0"
+        ).get()?.count || 0;
+
+        stats.total.failed = db.prepare(
+          "SELECT COUNT(*) as count FROM messages WHERE status = 'failed'"
+        ).get()?.count || 0;
+
+        stats.total.pending = db.prepare(
+          "SELECT COUNT(*) as count FROM messages WHERE status = 'pending'"
+        ).get()?.count || 0;
+
+        // Stats aujourd'hui
+        stats.today.sent = db.prepare(
+          "SELECT COUNT(*) as count FROM messages WHERE timestamp > ? AND from_me = 1"
+        ).get(todayStart)?.count || 0;
+
+        stats.today.received = db.prepare(
+          "SELECT COUNT(*) as count FROM messages WHERE timestamp > ? AND from_me = 0"
+        ).get(todayStart)?.count || 0;
+
+        // Stats semaine
+        stats.week.sent = db.prepare(
+          "SELECT COUNT(*) as count FROM messages WHERE timestamp > ? AND from_me = 1"
+        ).get(weekStart)?.count || 0;
+
+        stats.week.received = db.prepare(
+          "SELECT COUNT(*) as count FROM messages WHERE timestamp > ? AND from_me = 0"
+        ).get(weekStart)?.count || 0;
+
+        // Stockage
+        stats.storage.count = db.prepare(
+          "SELECT COUNT(*) as count FROM messages"
+        ).get()?.count || 0;
+
+        // Dernière activité
+        const lastMsg = db.prepare(
+          "SELECT MAX(timestamp) as ts FROM messages"
+        ).get();
+        stats.lastActivity = lastMsg?.ts ? new Date(lastMsg.ts).toISOString() : null;
+
+      } catch (e) {
+        console.warn('[Admin] SMS stats DB error:', e.message);
+      }
+    }
+
+    // Ajouter config modem SMS si disponible
+    if (modemService) {
+      const config = modemService.getModemConfig();
+      stats.config = {
+        enabled: config.sms?.enabled !== false,
+        storage: config.sms?.storage || 'sqlite',
+        autoDelete: config.sms?.autoDelete !== false,
+      };
+    }
+
+    res.json(stats);
+
+  } catch (error) {
+    console.error('[Admin] SMS stats error:', error);
     res.status(500).json({ error: error.message });
   }
 });

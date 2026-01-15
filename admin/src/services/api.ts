@@ -92,6 +92,13 @@ export interface Modem {
   signal?: number;
   operator?: string;
   phone?: string;
+  // Extended GSM modem fields
+  technology?: string;
+  imei?: string;
+  registered?: boolean;
+  voice?: boolean;
+  sms?: boolean;
+  smsEnabled?: boolean;
 }
 
 export interface AuditLogEntry {
@@ -258,6 +265,28 @@ export const modemsApi = {
 
   scan: async (): Promise<Modem[]> => {
     const response = await api.post('/api/admin/modems/scan');
+    return response.data;
+  },
+
+  getFullStatus: async () => {
+    const response = await api.get('/api/admin/modems/full-status');
+    return response.data;
+  },
+};
+
+// API Admin - SMS
+export interface SmsStats {
+  total: { sent: number; received: number; failed: number; pending: number };
+  today: { sent: number; received: number };
+  week: { sent: number; received: number };
+  storage: { count: number; sizeKb: number };
+  lastActivity: string | null;
+  config?: { enabled: boolean; storage: string; autoDelete: boolean };
+}
+
+export const smsApi = {
+  getStats: async (): Promise<SmsStats> => {
+    const response = await api.get('/api/admin/sms/stats');
     return response.data;
   },
 };

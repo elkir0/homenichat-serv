@@ -31,10 +31,17 @@ import {
   SimCard as SimCardIcon,
   Usb as UsbIcon,
   Cloud as CloudIcon,
+  Inbox as InboxIcon,
+  Outbox as OutboxIcon,
+  Storage as StorageIcon,
+  Schedule as ScheduleIcon,
+  CheckCircle as CheckIcon,
+  Error as ErrorIcon,
+  Settings as SettingsIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { modemsApi, providersApi } from '../services/api';
-import type { Modem, Provider } from '../services/api';
+import { modemsApi, providersApi, smsApi } from '../services/api';
+import type { Modem, Provider, SmsStats } from '../services/api';
 
 export default function SmsPage() {
   const theme = useTheme();
@@ -55,22 +62,22 @@ export default function SmsPage() {
     queryFn: providersApi.getAll,
   });
 
+  const { data: smsStats, isLoading: statsLoading } = useQuery<SmsStats>({
+    queryKey: ['smsStats'],
+    queryFn: smsApi.getStats,
+    refetchInterval: 30000,
+  });
+
   const smsProviders = providers?.filter(p =>
     ['twilio', 'ovh', 'plivo'].includes(p.type)
   );
-
-  const scanMutation = useMutation({
-    mutationFn: modemsApi.scan,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['modems'] });
-    },
-  });
 
   const sendTestMutation = useMutation({
     mutationFn: ({ modemId, to, message }: { modemId: string; to: string; message: string }) =>
       modemsApi.sendTestSms(modemId, to, message),
     onSuccess: (result) => {
       setTestResult(result);
+      queryClient.invalidateQueries({ queryKey: ['smsStats'] });
     },
     onError: (error: Error) => {
       setTestResult({ success: false, message: error.message });
@@ -110,7 +117,22 @@ export default function SmsPage() {
     );
   };
 
-  const isLoading = modemsLoading || providersLoading;
+  const formatLastActivity = (timestamp: string | null) => {
+    if (!timestamp) return 'Jamais';
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return "A l'instant";
+    if (minutes < 60) return `Il y a ${minutes} min`;
+    if (hours < 24) return `Il y a ${hours}h`;
+    return `Il y a ${days}j`;
+  };
+
+  const isLoading = modemsLoading || providersLoading || statsLoading;
 
   if (isLoading) {
     return <LinearProgress />;
@@ -125,7 +147,7 @@ export default function SmsPage() {
             SMS
           </Typography>
           <Typography variant="body1" color="text.secondary">
-            Gérez vos modems GSM et providers SMS cloud
+            Gerez vos modems GSM et providers SMS cloud
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
@@ -135,36 +157,114 @@ export default function SmsPage() {
             onClick={() => {
               queryClient.invalidateQueries({ queryKey: ['modems'] });
               queryClient.invalidateQueries({ queryKey: ['providers'] });
+              queryClient.invalidateQueries({ queryKey: ['smsStats'] });
             }}
           >
             Actualiser
           </Button>
-          <Button
-            variant="contained"
-            startIcon={<UsbIcon />}
-            onClick={() => scanMutation.mutate()}
-            disabled={scanMutation.isPending}
-          >
-            Scanner les modems
-          </Button>
         </Box>
       </Box>
+
+      {/* Stats Cards */}
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        <Grid item xs={6} sm={3}>
+          <Card sx={{ backgroundColor: alpha(theme.palette.success.main, 0.1) }}>
+            <CardContent sx={{ py: 2, '&:last-child': { pb: 2 } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                <OutboxIcon sx={{ color: 'success.main', mr: 1 }} />
+                <Typography variant="body2" color="text.secondary">Envoyes</Typography>
+              </Box>
+              <Typography variant="h4" sx={{ fontWeight: 700, color: 'success.main' }}>
+                {smsStats?.total.sent || 0}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                +{smsStats?.today.sent || 0} aujourd'hui
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={6} sm={3}>
+          <Card sx={{ backgroundColor: alpha(theme.palette.info.main, 0.1) }}>
+            <CardContent sx={{ py: 2, '&:last-child': { pb: 2 } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                <InboxIcon sx={{ color: 'info.main', mr: 1 }} />
+                <Typography variant="body2" color="text.secondary">Recus</Typography>
+              </Box>
+              <Typography variant="h4" sx={{ fontWeight: 700, color: 'info.main' }}>
+                {smsStats?.total.received || 0}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                +{smsStats?.today.received || 0} aujourd'hui
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={6} sm={3}>
+          <Card sx={{ backgroundColor: alpha(theme.palette.warning.main, 0.1) }}>
+            <CardContent sx={{ py: 2, '&:last-child': { pb: 2 } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                <StorageIcon sx={{ color: 'warning.main', mr: 1 }} />
+                <Typography variant="body2" color="text.secondary">Stockes</Typography>
+              </Box>
+              <Typography variant="h4" sx={{ fontWeight: 700, color: 'warning.main' }}>
+                {smsStats?.storage.count || 0}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {smsStats?.config?.storage === 'sqlite' ? 'SQLite' : smsStats?.config?.storage || 'N/A'}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={6} sm={3}>
+          <Card sx={{ backgroundColor: alpha(theme.palette.text.primary, 0.05) }}>
+            <CardContent sx={{ py: 2, '&:last-child': { pb: 2 } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                <ScheduleIcon sx={{ color: 'text.secondary', mr: 1 }} />
+                <Typography variant="body2" color="text.secondary">Derniere activite</Typography>
+              </Box>
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                {formatLastActivity(smsStats?.lastActivity || null)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {smsStats?.total.failed || 0} echec(s)
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
 
       <Grid container spacing={3}>
         {/* Modems Section */}
         <Grid item xs={12}>
           <Card>
             <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                <SimCardIcon sx={{ mr: 1, color: 'primary.main' }} />
-                <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                  Modems GSM
-                </Typography>
-                <Chip
-                  label={`${modems?.length || 0} détecté(s)`}
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <SimCardIcon sx={{ mr: 1, color: 'primary.main' }} />
+                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                    Trunk GSM
+                  </Typography>
+                  {smsStats?.config?.enabled && (
+                    <Chip
+                      icon={<CheckIcon />}
+                      label="SMS actif"
+                      size="small"
+                      color="success"
+                      sx={{ ml: 1 }}
+                    />
+                  )}
+                </Box>
+                <Button
+                  variant="outlined"
                   size="small"
-                  sx={{ ml: 1 }}
-                />
+                  startIcon={<SettingsIcon />}
+                  href="/modems"
+                >
+                  Configurer
+                </Button>
               </Box>
 
               {modems && modems.length > 0 ? (
@@ -172,10 +272,11 @@ export default function SmsPage() {
                   <Table>
                     <TableHead>
                       <TableRow>
-                        <TableCell>Appareil</TableCell>
+                        <TableCell>Modem</TableCell>
                         <TableCell>Type</TableCell>
-                        <TableCell>Numéro</TableCell>
-                        <TableCell>Opérateur</TableCell>
+                        <TableCell>Numero</TableCell>
+                        <TableCell>Operateur</TableCell>
+                        <TableCell>Reseau</TableCell>
                         <TableCell>Signal</TableCell>
                         <TableCell>Statut</TableCell>
                         <TableCell align="right">Actions</TableCell>
@@ -188,6 +289,11 @@ export default function SmsPage() {
                             <Typography variant="body2" fontWeight={500}>
                               {modem.device}
                             </Typography>
+                            {modem.imei && (
+                              <Typography variant="caption" color="text.secondary">
+                                IMEI: {modem.imei}
+                              </Typography>
+                            )}
                           </TableCell>
                           <TableCell>
                             <Chip
@@ -197,17 +303,30 @@ export default function SmsPage() {
                             />
                           </TableCell>
                           <TableCell>
-                            {modem.phone || '-'}
+                            <Typography variant="body2" fontWeight={500}>
+                              {modem.phone || '-'}
+                            </Typography>
                           </TableCell>
                           <TableCell>
                             {modem.operator || '-'}
+                          </TableCell>
+                          <TableCell>
+                            {modem.technology && (
+                              <Chip
+                                label={modem.technology}
+                                size="small"
+                                variant="outlined"
+                                color="info"
+                              />
+                            )}
                           </TableCell>
                           <TableCell>
                             {getSignalBars(modem.signal)}
                           </TableCell>
                           <TableCell>
                             <Chip
-                              label={modem.status}
+                              icon={modem.status === 'connected' ? <CheckIcon /> : <ErrorIcon />}
+                              label={modem.status === 'connected' ? 'Connecte' : modem.status}
                               size="small"
                               color={modem.status === 'connected' ? 'success' : 'error'}
                               variant="outlined"
@@ -244,11 +363,18 @@ export default function SmsPage() {
                 >
                   <UsbIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
                   <Typography color="text.secondary">
-                    Aucun modem GSM détecté
+                    Aucun modem GSM detecte
                   </Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    Connectez un modem USB (SIM7600, EC25) et cliquez sur "Scanner les modems"
+                    Configurez votre modem dans la section "Modems"
                   </Typography>
+                  <Button
+                    variant="contained"
+                    href="/modems"
+                    startIcon={<SettingsIcon />}
+                  >
+                    Configurer un modem
+                  </Button>
                 </Box>
               )}
             </CardContent>
@@ -265,7 +391,7 @@ export default function SmsPage() {
                   Providers Cloud SMS
                 </Typography>
                 <Chip
-                  label={`${smsProviders?.length || 0} configuré(s)`}
+                  label={`${smsProviders?.length || 0} configure(s)`}
                   size="small"
                   sx={{ ml: 1 }}
                 />
@@ -321,7 +447,7 @@ export default function SmsPage() {
                 >
                   <CloudIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
                   <Typography color="text.secondary">
-                    Aucun provider cloud SMS configuré
+                    Aucun provider cloud SMS configure
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
                     Configurez Twilio, OVH ou Plivo dans la section Providers
@@ -339,7 +465,7 @@ export default function SmsPage() {
           Envoyer un SMS test
           {selectedModem && (
             <Typography variant="body2" color="text.secondary">
-              Via: {selectedModem.device} ({selectedModem.phone || 'Numéro inconnu'})
+              Via: {selectedModem.device} ({selectedModem.phone || 'Numero inconnu'})
             </Typography>
           )}
         </DialogTitle>
@@ -347,7 +473,7 @@ export default function SmsPage() {
           <TextField
             autoFocus
             margin="dense"
-            label="Numéro de téléphone"
+            label="Numero de telephone"
             fullWidth
             value={testPhone}
             onChange={(e) => setTestPhone(e.target.value)}
@@ -370,8 +496,8 @@ export default function SmsPage() {
               sx={{ mt: 2 }}
             >
               {testResult.success
-                ? 'SMS envoyé avec succès !'
-                : testResult.message || 'Erreur lors de l\'envoi'}
+                ? 'SMS envoye avec succes !'
+                : testResult.message || "Erreur lors de l'envoi"}
             </Alert>
           )}
         </DialogContent>
