@@ -141,10 +141,15 @@ class ModemService {
   runCmd(cmd, timeout = 10000) {
     return new Promise((resolve) => {
       exec(cmd, { timeout }, (error, stdout, stderr) => {
-        if (error) {
+        // Toujours retourner stdout s'il y en a, même en cas d'erreur
+        // Car certaines commandes (comme asterisk -rx) retournent un code non-zéro
+        // mais ont quand même un résultat valide sur stdout
+        if (stdout && stdout.trim()) {
+          resolve(stdout.trim());
+        } else if (error) {
           resolve(`Error: ${error.message}`);
         } else {
-          resolve(stdout.trim());
+          resolve('');
         }
       });
     });
