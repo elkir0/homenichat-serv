@@ -796,6 +796,8 @@ class ModemService {
 
   /**
    * Entre le code PIN SIM
+   * TOUJOURS utilise l'accès direct au port car Asterisk ne peut pas
+   * communiquer avec un modem non initialisé
    */
   async enterSimPin(pin, modemId) {
     // Vérifier si verrouillé
@@ -807,20 +809,24 @@ class ModemService {
       throw new Error('Code PIN invalide (doit être 4-8 chiffres)');
     }
 
-    try {
-      let result;
+    const port = this.modemConfig.dataPort || '/dev/ttyUSB2';
 
-      if (modemId) {
-        // Via Asterisk
-        result = await this.asteriskCmd(`quectel cmd ${modemId} AT+CPIN="${pin}"`);
-      } else {
-        // Via port direct
-        const port = this.modemConfig.dataPort;
-        if (!port || !fs.existsSync(port)) {
-          throw new Error('Aucun modem détecté');
-        }
-        result = await this.runCmd(`echo 'AT+CPIN="${pin}"' | timeout 5 socat - ${port},raw,echo=0,b115200 2>/dev/null`, 7000);
+    try {
+      // Toujours utiliser l'accès direct au port pour le PIN
+      // car Asterisk ne peut pas communiquer avec un modem non initialisé
+      if (!fs.existsSync(port)) {
+        throw new Error(`Port modem non trouvé: ${port}`);
       }
+
+      this.logger.info(`[ModemService] Entering PIN via direct port access: ${port}`);
+
+      // Envoyer la commande PIN avec socat
+      const result = await this.runCmd(
+        `echo -e 'AT+CPIN="${pin}"\\r' | timeout 5 socat - ${port},raw,echo=0,b115200,crnl 2>/dev/null`,
+        7000
+      );
+
+      this.logger.info(`[ModemService] PIN command result: ${result}`);
 
       // Vérifier le résultat
       if (result.includes('OK') && !result.includes('ERROR')) {
@@ -828,10 +834,21 @@ class ModemService {
         pinAttempts = 0;
         this.saveModemConfig({ pinCode: pin });
         this.logger.info('[ModemService] SIM PIN entered successfully');
-        return { success: true, message: 'Code PIN accepté. La carte SIM est déverrouillée.' };
+
+        // Recharger chan_quectel pour que Asterisk détecte le modem
+        setTimeout(async () => {
+          try {
+            await this.asteriskCmd('module reload chan_quectel');
+            this.logger.info('[ModemService] chan_quectel reloaded after PIN entry');
+          } catch (e) {
+            this.logger.warn('[ModemService] Failed to reload chan_quectel:', e.message);
+          }
+        }, 2000);
+
+        return { success: true, message: 'Code PIN accepté! La carte SIM est déverrouillée. Le modem redémarre...' };
       }
 
-      if (result.includes('ERROR') || result.includes('incorrect')) {
+      if (result.includes('ERROR') || result.includes('incorrect') || result.includes('CME ERROR')) {
         // Incrémenter le compteur d'échecs
         pinAttempts++;
 
@@ -845,7 +862,19 @@ class ModemService {
         throw new Error(`Code PIN incorrect. Il vous reste ${remaining} tentative(s) avant blocage dans l'interface.`);
       }
 
-      return { success: true, message: 'Commande envoyée', result };
+      // Résultat ambigu - vérifier l'état du PIN
+      const checkResult = await this.runCmd(
+        `echo -e 'AT+CPIN?\\r' | timeout 3 socat - ${port},raw,echo=0,b115200,crnl 2>/dev/null`,
+        5000
+      );
+
+      if (checkResult.includes('READY')) {
+        pinAttempts = 0;
+        this.saveModemConfig({ pinCode: pin });
+        return { success: true, message: 'Code PIN accepté! SIM déverrouillée.' };
+      }
+
+      return { success: false, message: 'Résultat incertain. Vérifiez l\'état du modem.', result };
     } catch (error) {
       this.logger.error('[ModemService] Failed to enter SIM PIN:', error);
       throw error;
