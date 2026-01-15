@@ -922,4 +922,17 @@ class BaileysProvider extends WhatsAppProvider {
   }
 }
 
-module.exports = BaileysProvider;
+// Singleton - une seule instance de BaileysProvider pour éviter les conflits
+let instance = null;
+
+module.exports = function(config) {
+  if (!instance) {
+    instance = new BaileysProvider(config);
+  }
+  return instance;
+};
+
+// Exposer la classe pour les tests ou cas spéciaux
+module.exports.BaileysProvider = BaileysProvider;
+module.exports.getInstance = () => instance;
+module.exports.resetInstance = () => { instance = null; };
