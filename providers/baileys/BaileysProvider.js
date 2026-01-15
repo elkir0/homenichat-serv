@@ -25,6 +25,7 @@ class BaileysProvider extends WhatsAppProvider {
     this.maxRetries = 5;
     this.msgRetryCounterCache = new Map();
     this.isInitializing = false;
+    this.initPromise = null; // Promesse pour éviter les appels concurrents à initialize()
     this.reconnectTimer = null; // Timer de reconnexion à annuler si connexion réussit
     this.socketId = 0; // ID unique pour chaque socket créé
   }
@@ -56,14 +57,31 @@ class BaileysProvider extends WhatsAppProvider {
    * Initialise le provider
    */
   async initialize() {
-    // Éviter la double initialisation (Race condition fix)
-    if (this.isInitializing || (this.sock && this.connectionState !== 'disconnected')) {
-      logger.info('Baileys provider already initialized/initializing, skipping duplicate call.');
+    // Si une initialisation est déjà en cours, attendre qu'elle se termine
+    if (this.initPromise) {
+      logger.info('Baileys provider already initializing, waiting for completion...');
+      return this.initPromise;
+    }
+
+    // Si déjà connecté, ne rien faire
+    if (this.sock && this.connectionState === 'connected') {
+      logger.info('Baileys provider already connected, skipping initialization.');
       return;
     }
 
-    this.isInitializing = true;
+    // Créer une promesse pour bloquer les appels concurrents
+    this.initPromise = this._doInitialize();
+    try {
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
+    }
+  }
 
+  /**
+   * Implémentation réelle de l'initialisation (appelée une seule fois)
+   */
+  async _doInitialize() {
     try {
       logger.info('Initializing Baileys provider...');
       // Utiliser la version cachée ou en récupérer une nouvelle
@@ -134,8 +152,6 @@ class BaileysProvider extends WhatsAppProvider {
     } catch (error) {
       logger.error('Error starting socket:', error);
       throw error;
-    } finally {
-      this.isInitializing = false;
     }
   }
 
