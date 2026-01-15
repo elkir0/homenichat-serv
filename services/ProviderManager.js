@@ -338,6 +338,19 @@ class ProviderManager {
   }
 
   /**
+   * Obtient le QR code pour un provider Baileys
+   * @param {string} providerId - ID du provider (ex: 'baileys')
+   * @returns {string|null} QR code en base64 ou null
+   */
+  async getQrCode(providerId) {
+    const provider = this.providers.get(providerId) || this.providers.get('baileys');
+    if (provider && typeof provider.getQRCode === 'function') {
+      return await provider.getQRCode();
+    }
+    return null;
+  }
+
+  /**
    * Obtient la liste des providers disponibles
    * @returns {Object} Liste des providers avec leur statut
    */
