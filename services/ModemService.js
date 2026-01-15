@@ -733,20 +733,24 @@ class ModemService {
    */
   async checkSimPin(modemId) {
     try {
-      // D'abord essayer via Asterisk si modem configuré
+      // D'abord essayer via Asterisk si modem configuré et initialisé
       if (modemId) {
         const result = await this.asteriskCmd(`quectel cmd ${modemId} AT+CPIN?`);
-        return this.parseSimPinStatus(result);
+        // Si résultat valide, l'utiliser
+        if (result && !result.includes('Error') && (result.includes('READY') || result.includes('PIN') || result.includes('PUK'))) {
+          return this.parseSimPinStatus(result);
+        }
       }
 
-      // Sinon, utiliser le port configuré directement
+      // Sinon, utiliser le port configuré directement (pour modems non initialisés)
       const port = this.modemConfig.dataPort;
       if (!port || !fs.existsSync(port)) {
         return { status: 'no_modem', message: 'Aucun modem détecté' };
       }
 
-      // Envoyer AT+CPIN? via le port
-      const result = await this.runCmd(`echo "AT+CPIN?" | timeout 3 socat - ${port},raw,echo=0,b115200 2>/dev/null`, 5000);
+      // Envoyer AT+CPIN? via le port série directement
+      const result = await this.sendDirectAtCommand(port, 'AT+CPIN?', 5000);
+      this.logger.info(`[ModemService] Direct PIN check result: ${result}`);
       return this.parseSimPinStatus(result);
     } catch (error) {
       return { status: 'error', message: error.message };
@@ -795,6 +799,38 @@ class ModemService {
   }
 
   /**
+   * Envoie une commande AT directement au port série et lit la réponse
+   */
+  async sendDirectAtCommand(port, command, timeoutMs = 5000) {
+    return new Promise((resolve) => {
+      // Utiliser un script bash pour envoyer la commande et lire la réponse
+      // La technique: ouvrir le port, envoyer, attendre, lire
+      const script = `
+        (
+          # Configurer le port série
+          stty -F ${port} 115200 raw -echo -echoe -echok 2>/dev/null
+
+          # Envoyer la commande
+          echo -e '${command}\\r' > ${port}
+
+          # Attendre et lire la réponse (timeout 3 secondes)
+          timeout 3 cat ${port} 2>/dev/null
+        ) 2>/dev/null
+      `;
+
+      exec(script, { timeout: timeoutMs }, (error, stdout, stderr) => {
+        if (error && !stdout) {
+          resolve(`Error: ${error.message}`);
+        } else {
+          // Nettoyer la sortie (enlever les caractères de contrôle)
+          const cleaned = stdout.replace(/[\x00-\x09\x0B\x0C\x0E-\x1F]/g, '').trim();
+          resolve(cleaned);
+        }
+      });
+    });
+  }
+
+  /**
    * Entre le code PIN SIM
    * TOUJOURS utilise l'accès direct au port car Asterisk ne peut pas
    * communiquer avec un modem non initialisé
@@ -820,16 +856,42 @@ class ModemService {
 
       this.logger.info(`[ModemService] Entering PIN via direct port access: ${port}`);
 
-      // Envoyer la commande PIN avec socat
-      const result = await this.runCmd(
-        `echo -e 'AT+CPIN="${pin}"\\r' | timeout 5 socat - ${port},raw,echo=0,b115200,crnl 2>/dev/null`,
-        7000
-      );
+      // D'abord, vérifier l'état actuel du PIN
+      const preCheck = await this.sendDirectAtCommand(port, 'AT+CPIN?', 5000);
+      this.logger.info(`[ModemService] Pre-PIN check: ${preCheck}`);
 
+      // Si déjà READY, pas besoin de PIN
+      if (preCheck.includes('READY')) {
+        this.logger.info('[ModemService] SIM already unlocked');
+        pinAttempts = 0;
+        this.saveModemConfig({ pinCode: pin });
+        return { success: true, message: 'La carte SIM est déjà déverrouillée.' };
+      }
+
+      // Si pas besoin de PIN (autre erreur), signaler
+      if (!preCheck.includes('SIM PIN') && preCheck.includes('ERROR')) {
+        throw new Error(`Erreur modem: ${preCheck}`);
+      }
+
+      // Envoyer la commande PIN
+      const result = await this.sendDirectAtCommand(port, `AT+CPIN="${pin}"`, 7000);
       this.logger.info(`[ModemService] PIN command result: ${result}`);
 
-      // Vérifier le résultat
-      if (result.includes('OK') && !result.includes('ERROR')) {
+      // Attendre un peu que le modem traite
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Vérifier le nouvel état du PIN
+      const postCheck = await this.sendDirectAtCommand(port, 'AT+CPIN?', 5000);
+      this.logger.info(`[ModemService] Post-PIN check: ${postCheck}`);
+
+      // Analyser les résultats
+      const isSuccess = postCheck.includes('READY') ||
+                        result.includes('OK') && !result.includes('ERROR');
+      const isError = result.includes('CME ERROR') ||
+                      result.includes('incorrect') ||
+                      (postCheck.includes('SIM PIN') && !postCheck.includes('READY'));
+
+      if (isSuccess) {
         // Succès - réinitialiser le compteur et sauvegarder
         pinAttempts = 0;
         this.saveModemConfig({ pinCode: pin });
@@ -848,7 +910,7 @@ class ModemService {
         return { success: true, message: 'Code PIN accepté! La carte SIM est déverrouillée. Le modem redémarre...' };
       }
 
-      if (result.includes('ERROR') || result.includes('incorrect') || result.includes('CME ERROR')) {
+      if (isError) {
         // Incrémenter le compteur d'échecs
         pinAttempts++;
 
@@ -862,19 +924,18 @@ class ModemService {
         throw new Error(`Code PIN incorrect. Il vous reste ${remaining} tentative(s) avant blocage dans l'interface.`);
       }
 
-      // Résultat ambigu - vérifier l'état du PIN
-      const checkResult = await this.runCmd(
-        `echo -e 'AT+CPIN?\\r' | timeout 3 socat - ${port},raw,echo=0,b115200,crnl 2>/dev/null`,
-        5000
-      );
-
-      if (checkResult.includes('READY')) {
+      // Résultat ambigu mais probablement OK si pas d'erreur explicite
+      if (postCheck.includes('READY')) {
         pinAttempts = 0;
         this.saveModemConfig({ pinCode: pin });
         return { success: true, message: 'Code PIN accepté! SIM déverrouillée.' };
       }
 
-      return { success: false, message: 'Résultat incertain. Vérifiez l\'état du modem.', result };
+      return {
+        success: false,
+        message: 'Résultat incertain. Vérifiez l\'état du modem.',
+        details: { result, postCheck }
+      };
     } catch (error) {
       this.logger.error('[ModemService] Failed to enter SIM PIN:', error);
       throw error;
