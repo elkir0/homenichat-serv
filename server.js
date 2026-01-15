@@ -600,7 +600,7 @@ async function startServer() {
       configService: require('./services/ConfigurationService'),
       db,
       port: PORT,
-      dataDir: DATA_DIR,
+      dataDir: process.env.DATA_DIR || '/var/lib/homenichat',
     });
     logger.info('Admin routes initialized successfully');
 
