@@ -1,6 +1,6 @@
 const WhatsAppProvider = require('../base/WhatsAppProvider');
 const Baileys = require('@whiskeysockets/baileys');
-const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState, makeCacheableSignalKeyStore, Browsers } = Baileys;
+const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState, makeCacheableSignalKeyStore, Browsers, downloadMediaMessage } = Baileys;
 const { Boom } = require('@hapi/boom');
 const logger = require('../../utils/logger');
 const QRCode = require('qrcode');
@@ -878,6 +878,87 @@ class BaileysProvider extends WhatsAppProvider {
       return { success: true };
     } catch (error) {
       logger.error(`Error sending reaction: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Télécharge le média d'un message
+   * @param {string} messageId - ID du message
+   * @param {string} chatId - ID du chat (optionnel si raw_data disponible)
+   * @returns {Promise<{success: boolean, base64?: string, mimetype?: string, error?: string}>}
+   */
+  async downloadMessageMedia(messageId, chatId = null) {
+    if (!this.sock || this.connectionState !== 'connected') {
+      return { success: false, error: 'Not connected' };
+    }
+
+    try {
+      // Récupérer le message depuis la DB pour avoir raw_data
+      const message = await chatStorage.getMessageById(messageId);
+
+      if (!message) {
+        return { success: false, error: 'Message not found' };
+      }
+
+      // Parse raw_data si c'est une string
+      let rawData = message.rawData || message.raw_data;
+      if (typeof rawData === 'string') {
+        try {
+          rawData = JSON.parse(rawData);
+        } catch (e) {
+          logger.warn('Failed to parse raw_data:', e.message);
+        }
+      }
+
+      if (!rawData || !rawData.message) {
+        return { success: false, error: 'No media data available in message' };
+      }
+
+      // Télécharger le média avec Baileys
+      logger.info(`📥 Downloading media for message ${messageId}`);
+      const buffer = await downloadMediaMessage(
+        rawData,
+        'buffer',
+        {},
+        {
+          logger: pino({ level: 'silent' }),
+          reuploadRequest: this.sock.updateMediaMessage
+        }
+      );
+
+      if (!buffer) {
+        return { success: false, error: 'Failed to download media' };
+      }
+
+      // Déterminer le mimetype
+      const messageContent = rawData.message;
+      let mimetype = 'application/octet-stream';
+
+      if (messageContent.imageMessage) {
+        mimetype = messageContent.imageMessage.mimetype || 'image/jpeg';
+      } else if (messageContent.videoMessage) {
+        mimetype = messageContent.videoMessage.mimetype || 'video/mp4';
+      } else if (messageContent.audioMessage) {
+        mimetype = messageContent.audioMessage.mimetype || 'audio/ogg';
+      } else if (messageContent.documentMessage) {
+        mimetype = messageContent.documentMessage.mimetype || 'application/octet-stream';
+      } else if (messageContent.stickerMessage) {
+        mimetype = messageContent.stickerMessage.mimetype || 'image/webp';
+      }
+
+      // Convertir en base64
+      const base64 = buffer.toString('base64');
+
+      logger.info(`✅ Media downloaded successfully: ${buffer.length} bytes, ${mimetype}`);
+      return {
+        success: true,
+        base64,
+        mimetype,
+        size: buffer.length
+      };
+    } catch (error) {
+      logger.error(`Error downloading media: ${error.message}`);
       return { success: false, error: error.message };
     }
   }

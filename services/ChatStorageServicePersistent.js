@@ -324,6 +324,39 @@ class ChatStorageServicePersistent {
   }
 
   /**
+   * Récupère un message par son ID
+   * @param {string} messageId - ID du message
+   * @returns {Object|null} - Message avec raw_data ou null si non trouvé
+   */
+  async getMessageById(messageId) {
+    try {
+      const row = db.prepare(`
+        SELECT * FROM messages WHERE id = ?
+      `).get(messageId);
+
+      if (!row) {
+        return null;
+      }
+
+      return {
+        id: row.id,
+        chatId: row.chat_id,
+        senderId: row.sender_id,
+        fromMe: row.from_me === 1,
+        type: row.type,
+        content: row.content,
+        timestamp: row.timestamp,
+        status: row.status,
+        mediaUrl: row.media_url,
+        rawData: row.raw_data ? JSON.parse(row.raw_data) : null
+      };
+    } catch (error) {
+      logger.error('Error getting message by ID:', error);
+      return null;
+    }
+  }
+
+  /**
    * Traite un batch de messages en une seule transaction (plus rapide pour l'historique)
    */
   processBatchMessages(messages) {

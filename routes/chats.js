@@ -461,4 +461,50 @@ router.post('/:chatId/messages/:messageId/reaction', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/chats/:chatId/messages/:messageId/media
+ * Télécharge le média d'un message
+ *
+ * @api GET /api/chats/:chatId/messages/:messageId/media
+ * @returns {Object} { success: boolean, base64?: string, mimetype?: string, error?: string }
+ */
+router.get('/:chatId/messages/:messageId/media', async (req, res) => {
+  try {
+    const { chatId, messageId } = req.params;
+    const activeProvider = getProviderForRequest(req);
+
+    if (!activeProvider) {
+      return res.status(503).json({
+        success: false,
+        error: 'No active provider'
+      });
+    }
+
+    // Vérifier si le provider supporte le téléchargement de média
+    if (!activeProvider.downloadMessageMedia) {
+      // Fallback: essayer de récupérer depuis le stockage local
+      const message = await chatStorage.getMessageById(messageId);
+      if (message && message.mediaUrl) {
+        return res.json({
+          success: true,
+          localUrl: message.mediaUrl
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        error: 'Provider does not support media download'
+      });
+    }
+
+    const result = await activeProvider.downloadMessageMedia(messageId, chatId);
+    res.json(result);
+  } catch (error) {
+    logger.error('Error downloading message media:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;
