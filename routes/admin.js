@@ -99,8 +99,25 @@ router.get('/dashboard', async (req, res) => {
     }
 
     // Récupérer les sessions WhatsApp
+    // Inclure d'abord le provider Baileys par défaut
+    if (providerManager) {
+      const baileysProvider = providerManager.providers?.get('baileys');
+      if (baileysProvider) {
+        const connState = await baileysProvider.getConnectionState?.() || {};
+        const phoneNumber = baileysProvider.sock?.user?.id?.split('@')[0]?.split(':')[0] || null;
+        stats.whatsappSessions.push({
+          id: 'baileys',
+          name: 'WhatsApp (Baileys)',
+          status: connState.isConnected ? 'connected' : (connState.qrCode ? 'qr_pending' : 'disconnected'),
+          phoneNumber: phoneNumber,
+          isDefault: true,
+        });
+      }
+    }
+    // Ajouter les sessions additionnelles du SessionManager
     if (sessionManager) {
-      stats.whatsappSessions = await sessionManager.listSessions?.() || [];
+      const managedSessions = await sessionManager.listSessions?.() || [];
+      stats.whatsappSessions = stats.whatsappSessions.concat(managedSessions.filter(s => s.id !== 'baileys'));
     }
 
     // Stats messages depuis la DB
