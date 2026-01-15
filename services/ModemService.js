@@ -25,9 +25,9 @@ const MODEM_PROFILES = {
     msg_storage: 'me',
     disableSMS: false,
     audioCommands: [
+      'AT+QAUDMOD=2',     // Mode PCM (pas USB audio)
       'AT+CPCMFRM=0',     // 8kHz PCM format
-      'AT+CMICGAIN=0',
-      'AT+COUTGAIN=5',
+      'AT+CLVL=3',        // Volume speaker
     ],
     portOffset: {
       data: 2,  // ttyUSB2 pour EC25

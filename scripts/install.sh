@@ -770,22 +770,13 @@ fi
 log "Checking SIM PIN status..."
 PIN_STATUS=$(echo -e "AT+CPIN?\r" | timeout 5 socat - "$DATA_PORT",raw,echo=0,b115200,crnl 2>/dev/null)
 
-if echo "$PIN_STATUS" | grep -q "READY"; then
-    log "SIM already unlocked"
-    exit 0
-fi
-
 if echo "$PIN_STATUS" | grep -q "SIM PIN"; then
     log "Entering PIN code..."
     RESULT=$(echo -e "AT+CPIN=\"$PIN_CODE\"\r" | timeout 5 socat - "$DATA_PORT",raw,echo=0,b115200,crnl 2>/dev/null)
 
     if echo "$RESULT" | grep -q "OK"; then
         log "PIN accepted successfully"
-        # Give modem time to register on network
         sleep 3
-        # Reload chan_quectel in Asterisk
-        asterisk -rx "module reload chan_quectel" >> "$LOG_FILE" 2>&1 || true
-        log "Modem initialization complete"
     else
         log "ERROR: PIN entry failed: $RESULT"
         exit 1
@@ -793,10 +784,22 @@ if echo "$PIN_STATUS" | grep -q "SIM PIN"; then
 elif echo "$PIN_STATUS" | grep -q "PUK"; then
     log "ERROR: SIM is PUK locked!"
     exit 1
+elif echo "$PIN_STATUS" | grep -q "READY"; then
+    log "SIM already unlocked"
 else
     log "Unknown PIN status: $PIN_STATUS"
 fi
 
+# Configure audio mode (EC25: PCM mode instead of USB audio)
+MODEM_TYPE=$(grep -oP '"modemType"\s*:\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null)
+if [ "$MODEM_TYPE" = "ec25" ]; then
+    log "Configuring EC25 audio mode to PCM..."
+    echo -e "AT+QAUDMOD=2\r" | timeout 3 socat - "$DATA_PORT",raw,echo=0,b115200,crnl 2>/dev/null
+    echo -e "AT+CPCMFRM=0\r" | timeout 3 socat - "$DATA_PORT",raw,echo=0,b115200,crnl 2>/dev/null
+    log "Audio configured for PCM mode"
+fi
+
+log "Modem initialization complete"
 exit 0
 MODEM_INIT_SCRIPT
 
