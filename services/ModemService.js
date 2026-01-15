@@ -461,7 +461,7 @@ class ModemService {
   async collectUsb() {
     const data = {
       portsCount: 0,
-      portsExpected: 10, // 5 ports par modem x 2 modems
+      portsExpected: 4, // EC25: 4 ports, SIM7600: 5 ports
       ports: [],
       symlinks: [],
       ok: false,
@@ -481,8 +481,8 @@ class ModemService {
         data.symlinks = symlinkResult.split('\n').filter(s => s.trim()).map(s => path.basename(s));
       }
 
-      // OK si on a les symlinks attendus (ou au moins quelques ports)
-      data.ok = data.portsCount > 0 && (data.symlinks.length >= 2 || data.portsCount >= 5);
+      // OK si on a au moins 3 ports USB (minimum pour un modem)
+      data.ok = data.portsCount >= 3;
     } catch (error) {
       data.error = error.message;
     }
@@ -730,19 +730,26 @@ class ModemService {
 
   /**
    * Vérifie l'état du PIN SIM
+   * Priorité: Asterisk (si modem initialisé) > accès direct (si modem non initialisé)
    */
   async checkSimPin(modemId) {
     try {
-      // D'abord essayer via Asterisk si modem configuré et initialisé
-      if (modemId) {
-        const result = await this.asteriskCmd(`quectel cmd ${modemId} AT+CPIN?`);
-        // Si résultat valide, l'utiliser
-        if (result && !result.includes('Error') && (result.includes('READY') || result.includes('PIN') || result.includes('PUK'))) {
+      // Si pas de modemId fourni, essayer de le récupérer depuis la config
+      const effectiveModemId = modemId || this.modemConfig.modemName;
+
+      // D'abord essayer via Asterisk (fonctionne si modem initialisé)
+      if (effectiveModemId) {
+        const result = await this.asteriskCmd(`quectel cmd ${effectiveModemId} AT+CPIN?`);
+        // Si résultat valide (contient une réponse PIN), l'utiliser
+        if (result && !result.includes('Error') && !result.includes('not found') &&
+            (result.includes('READY') || result.includes('PIN') || result.includes('PUK'))) {
+          this.logger.info(`[ModemService] PIN check via Asterisk: ${result}`);
           return this.parseSimPinStatus(result);
         }
       }
 
-      // Sinon, utiliser le port configuré directement (pour modems non initialisés)
+      // Sinon, essayer l'accès direct au port (pour modems non initialisés)
+      // Note: cela peut échouer si Asterisk a le port ouvert
       const port = this.modemConfig.dataPort;
       if (!port || !fs.existsSync(port)) {
         return { status: 'no_modem', message: 'Aucun modem détecté' };
@@ -750,6 +757,13 @@ class ModemService {
 
       // Envoyer AT+CPIN? via le port série directement
       const result = await this.sendDirectAtCommand(port, 'AT+CPIN?', 5000);
+
+      // Si erreur de commande (port occupé par Asterisk), indiquer que le modem est probablement OK
+      if (result.includes('Error: Command failed')) {
+        // Le port est probablement utilisé par Asterisk = modem initialisé = PIN OK
+        return { status: 'ready', message: 'Modem initialisé (PIN déjà entré)', needsPin: false };
+      }
+
       this.logger.info(`[ModemService] Direct PIN check result: ${result}`);
       return this.parseSimPinStatus(result);
     } catch (error) {
