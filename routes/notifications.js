@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const webPushService = require('../services/WebPushService');
 const voipPushService = require('../services/VoIPPushService');
+const fcmPushService = require('../services/FCMPushService');
 const { verifyToken } = require('../middleware/auth');
 
 /**
@@ -187,6 +188,101 @@ router.post('/voip-test', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('[VoIP] Test push error:', error);
         res.status(500).json({ error: 'Failed to send test VoIP push' });
+    }
+});
+
+// =====================================================
+// FCM Push (Android Firebase Cloud Messaging)
+// =====================================================
+
+/**
+ * POST /api/notifications/fcm-token
+ * Enregistre un token FCM pour l'utilisateur (Android app)
+ */
+router.post('/fcm-token', verifyToken, async (req, res) => {
+    console.log('[FCM] Token registration request from user:', req.user?.id, req.user?.username);
+    try {
+        const { token, platform, deviceId } = req.body;
+
+        if (!token) {
+            return res.status(400).json({ error: 'Token required' });
+        }
+
+        fcmPushService.registerDevice(
+            req.user.id,
+            token,
+            deviceId || `device-${Date.now()}`,
+            platform || 'android'
+        );
+
+        res.json({
+            success: true,
+            message: 'FCM token registered'
+        });
+
+    } catch (error) {
+        console.error('[FCM] Token registration error:', error);
+        res.status(500).json({ error: 'Failed to register FCM token' });
+    }
+});
+
+/**
+ * DELETE /api/notifications/fcm-token
+ * Supprime un token FCM (deconnexion Android app)
+ */
+router.delete('/fcm-token', verifyToken, async (req, res) => {
+    try {
+        const { deviceId } = req.body;
+
+        if (!deviceId) {
+            return res.status(400).json({ error: 'Device ID required' });
+        }
+
+        fcmPushService.unregisterDevice(req.user.id, deviceId);
+        res.json({ success: true, message: 'FCM token unregistered' });
+
+    } catch (error) {
+        console.error('[FCM] Token unregistration error:', error);
+        res.status(500).json({ error: 'Failed to unregister FCM token' });
+    }
+});
+
+/**
+ * GET /api/notifications/fcm-status
+ * Retourne l'etat du service FCM Push
+ */
+router.get('/fcm-status', verifyToken, (req, res) => {
+    try {
+        const status = fcmPushService.getStatus();
+        res.json(status);
+    } catch (error) {
+        console.error('[FCM] Status error:', error);
+        res.status(500).json({ error: 'Failed to get FCM status' });
+    }
+});
+
+/**
+ * POST /api/notifications/fcm-test
+ * Test d'envoi FCM push
+ */
+router.post('/fcm-test', verifyToken, async (req, res) => {
+    try {
+        const result = await fcmPushService.sendToUser(req.user.id, {
+            title: 'Test Homenichat',
+            body: 'Les notifications FCM fonctionnent !'
+        }, {
+            type: 'test',
+            timestamp: Date.now().toString()
+        });
+
+        res.json({
+            success: true,
+            devicesSent: result
+        });
+
+    } catch (error) {
+        console.error('[FCM] Test push error:', error);
+        res.status(500).json({ error: 'Failed to send test FCM push' });
     }
 });
 

@@ -1,6 +1,10 @@
 /**
  * ModemService - Gestion des modems GSM via chan_quectel/Asterisk
  * Inspiré du sms-monitor de VM500
+ *
+ * Supporte:
+ * - EC25 (Quectel) - Audio 8kHz
+ * - SIM7600 (Simcom) - Audio 16kHz
  */
 
 const { exec, execSync } = require('child_process');
@@ -13,6 +17,46 @@ const DEFAULT_MODEMS = {
   // Sera auto-détecté via asterisk
 };
 
+// Configurations par type de modem
+const MODEM_PROFILES = {
+  ec25: {
+    name: 'Quectel EC25',
+    slin16: false,  // 8kHz audio
+    msg_storage: 'me',
+    disableSMS: false,
+    audioCommands: [
+      'AT+CPCMFRM=0',     // 8kHz PCM format
+      'AT+CMICGAIN=0',
+      'AT+COUTGAIN=5',
+    ],
+    portOffset: {
+      data: 2,  // ttyUSB2 pour EC25
+      audio: 1, // ttyUSB1 pour EC25
+    },
+  },
+  sim7600: {
+    name: 'Simcom SIM7600',
+    slin16: true,   // 16kHz audio
+    msg_storage: 'me',
+    disableSMS: false,
+    audioCommands: [
+      'AT+CPCMFRM=1',     // 16kHz PCM format
+      'AT+CMICGAIN=0',
+      'AT+COUTGAIN=5',
+      'AT+CTXVOL=0x2000',
+    ],
+    portOffset: {
+      data: 3,  // ttyUSB3 pour SIM7600
+      audio: 2, // ttyUSB2 pour SIM7600
+    },
+  },
+};
+
+// Chemin de configuration
+const CONFIG_DIR = '/var/lib/homenichat';
+const MODEM_CONFIG_FILE = path.join(CONFIG_DIR, 'modem-config.json');
+const QUECTEL_CONF_PATH = '/etc/asterisk/quectel.conf';
+
 class ModemService {
   constructor(config = {}) {
     this.modems = config.modems || DEFAULT_MODEMS;
@@ -20,6 +64,61 @@ class ModemService {
     this.watchdogLogPath = config.watchdogLogPath || '/var/log/smsgate-watchdog.log';
     this.metricsDb = null; // Pour l'historique
     this.logger = config.logger || console;
+
+    // Charger la configuration modem persistante
+    this.modemConfig = this.loadModemConfig();
+  }
+
+  /**
+   * Charge la configuration modem depuis le fichier
+   */
+  loadModemConfig() {
+    try {
+      if (fs.existsSync(MODEM_CONFIG_FILE)) {
+        const data = fs.readFileSync(MODEM_CONFIG_FILE, 'utf8');
+        return JSON.parse(data);
+      }
+    } catch (error) {
+      this.logger.error('[ModemService] Error loading modem config:', error);
+    }
+
+    // Configuration par défaut
+    return {
+      modemType: 'ec25',
+      modemName: 'homenichat-modem',
+      phoneNumber: '',
+      pinCode: '',
+      dataPort: '/dev/ttyUSB2',
+      audioPort: '/dev/ttyUSB1',
+      autoDetect: true,
+    };
+  }
+
+  /**
+   * Sauvegarde la configuration modem
+   */
+  saveModemConfig(config) {
+    try {
+      // Créer le répertoire si nécessaire
+      if (!fs.existsSync(CONFIG_DIR)) {
+        fs.mkdirSync(CONFIG_DIR, { recursive: true });
+      }
+
+      this.modemConfig = { ...this.modemConfig, ...config };
+      fs.writeFileSync(MODEM_CONFIG_FILE, JSON.stringify(this.modemConfig, null, 2));
+      this.logger.info('[ModemService] Modem config saved');
+      return true;
+    } catch (error) {
+      this.logger.error('[ModemService] Error saving modem config:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Récupère la configuration actuelle
+   */
+  getModemConfig() {
+    return { ...this.modemConfig };
   }
 
   /**
@@ -491,6 +590,345 @@ class ModemService {
     this.logger.info('[ModemService] All services restarted');
     return { success: true, results };
   }
+
+  // =============================================================================
+  // CONFIGURATION MODEM (EC25/SIM7600, PIN, Ports)
+  // =============================================================================
+
+  /**
+   * Récupère les profils de modem disponibles
+   */
+  getModemProfiles() {
+    return Object.entries(MODEM_PROFILES).map(([id, profile]) => ({
+      id,
+      name: profile.name,
+      slin16: profile.slin16,
+      description: profile.slin16 ? 'Audio 16kHz (haute qualité)' : 'Audio 8kHz (standard)',
+    }));
+  }
+
+  /**
+   * Détecte automatiquement les ports USB des modems
+   */
+  async detectUsbPorts() {
+    const detected = {
+      ports: [],
+      suggestedDataPort: null,
+      suggestedAudioPort: null,
+      modemType: null,
+    };
+
+    try {
+      // Lister tous les ports ttyUSB
+      const result = await this.runCmd('ls /dev/ttyUSB* 2>/dev/null');
+      if (result && !result.startsWith('Error') && !result.includes('No such file')) {
+        detected.ports = result.split('\n').filter(p => p.trim()).map(p => p.trim());
+      }
+
+      // Chercher des indices sur le type de modem via USB vendor/product
+      const usbDevices = await this.runCmd('lsusb 2>/dev/null');
+
+      if (usbDevices.toLowerCase().includes('quectel')) {
+        detected.modemType = 'ec25';
+        // EC25: data=ttyUSB2, audio=ttyUSB1
+        if (detected.ports.includes('/dev/ttyUSB2')) {
+          detected.suggestedDataPort = '/dev/ttyUSB2';
+        }
+        if (detected.ports.includes('/dev/ttyUSB1')) {
+          detected.suggestedAudioPort = '/dev/ttyUSB1';
+        }
+      } else if (usbDevices.toLowerCase().includes('simcom') ||
+                 usbDevices.toLowerCase().includes('sim7600')) {
+        detected.modemType = 'sim7600';
+        // SIM7600: data=ttyUSB3, audio=ttyUSB2
+        if (detected.ports.includes('/dev/ttyUSB3')) {
+          detected.suggestedDataPort = '/dev/ttyUSB3';
+        }
+        if (detected.ports.includes('/dev/ttyUSB2')) {
+          detected.suggestedAudioPort = '/dev/ttyUSB2';
+        }
+      }
+
+      // Si pas détecté mais ports présents, suggérer selon le nombre de ports
+      if (!detected.modemType && detected.ports.length >= 3) {
+        // Généralement 5 ports = SIM7600, 3-4 ports = EC25
+        if (detected.ports.length >= 5) {
+          detected.modemType = 'sim7600';
+          detected.suggestedDataPort = '/dev/ttyUSB3';
+          detected.suggestedAudioPort = '/dev/ttyUSB2';
+        } else {
+          detected.modemType = 'ec25';
+          detected.suggestedDataPort = '/dev/ttyUSB2';
+          detected.suggestedAudioPort = '/dev/ttyUSB1';
+        }
+      }
+
+      // Vérifier quel port répond aux commandes AT
+      for (const port of detected.ports) {
+        try {
+          // Test rapide avec timeout court
+          const testResult = await this.runCmd(`echo "AT" | timeout 2 cat > ${port} && timeout 2 cat < ${port} 2>/dev/null`, 5000);
+          if (testResult.includes('OK')) {
+            detected.suggestedDataPort = port;
+            break;
+          }
+        } catch (e) {
+          // Ignorer les erreurs de test
+        }
+      }
+    } catch (error) {
+      detected.error = error.message;
+    }
+
+    return detected;
+  }
+
+  /**
+   * Vérifie l'état du PIN SIM
+   */
+  async checkSimPin(modemId) {
+    try {
+      // D'abord essayer via Asterisk si modem configuré
+      if (modemId) {
+        const result = await this.asteriskCmd(`quectel cmd ${modemId} AT+CPIN?`);
+        return this.parseSimPinStatus(result);
+      }
+
+      // Sinon, utiliser le port configuré directement
+      const port = this.modemConfig.dataPort;
+      if (!port || !fs.existsSync(port)) {
+        return { status: 'no_modem', message: 'Aucun modem détecté' };
+      }
+
+      // Envoyer AT+CPIN? via le port
+      const result = await this.runCmd(`echo "AT+CPIN?" | timeout 3 socat - ${port},raw,echo=0,b115200 2>/dev/null`, 5000);
+      return this.parseSimPinStatus(result);
+    } catch (error) {
+      return { status: 'error', message: error.message };
+    }
+  }
+
+  /**
+   * Parse le résultat de AT+CPIN?
+   */
+  parseSimPinStatus(result) {
+    if (result.includes('READY')) {
+      return { status: 'ready', message: 'SIM déverrouillée', needsPin: false };
+    }
+    if (result.includes('SIM PIN')) {
+      return { status: 'pin_required', message: 'Code PIN requis', needsPin: true };
+    }
+    if (result.includes('SIM PUK')) {
+      return { status: 'puk_required', message: 'Code PUK requis (SIM bloquée)', needsPin: false };
+    }
+    if (result.includes('ERROR') || result.includes('NO SIM')) {
+      return { status: 'no_sim', message: 'Aucune carte SIM détectée', needsPin: false };
+    }
+    return { status: 'unknown', message: result, needsPin: false };
+  }
+
+  /**
+   * Entre le code PIN SIM
+   */
+  async enterSimPin(pin, modemId) {
+    if (!pin || !/^\d{4,8}$/.test(pin)) {
+      throw new Error('Code PIN invalide (doit être 4-8 chiffres)');
+    }
+
+    try {
+      let result;
+
+      if (modemId) {
+        // Via Asterisk
+        result = await this.asteriskCmd(`quectel cmd ${modemId} AT+CPIN="${pin}"`);
+      } else {
+        // Via port direct
+        const port = this.modemConfig.dataPort;
+        if (!port || !fs.existsSync(port)) {
+          throw new Error('Aucun modem détecté');
+        }
+        result = await this.runCmd(`echo 'AT+CPIN="${pin}"' | timeout 5 socat - ${port},raw,echo=0,b115200 2>/dev/null`, 7000);
+      }
+
+      // Vérifier le résultat
+      if (result.includes('OK')) {
+        // Sauvegarder le PIN pour les prochains démarrages
+        this.saveModemConfig({ pinCode: pin });
+        this.logger.info('[ModemService] SIM PIN entered successfully');
+        return { success: true, message: 'Code PIN accepté' };
+      }
+
+      if (result.includes('ERROR')) {
+        // Vérifier le nombre de tentatives restantes
+        const attemptsMatch = result.match(/(\d+) retries/i);
+        const remaining = attemptsMatch ? attemptsMatch[1] : 'inconnu';
+        throw new Error(`Code PIN incorrect. Tentatives restantes: ${remaining}`);
+      }
+
+      return { success: true, message: 'Commande envoyée', result };
+    } catch (error) {
+      this.logger.error('[ModemService] Failed to enter SIM PIN:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Génère le fichier quectel.conf pour Asterisk
+   */
+  generateQuectelConf(config = {}) {
+    const mergedConfig = { ...this.modemConfig, ...config };
+    const profile = MODEM_PROFILES[mergedConfig.modemType] || MODEM_PROFILES.ec25;
+
+    const modemName = mergedConfig.modemName || 'homenichat-modem';
+    const dataPort = mergedConfig.dataPort || '/dev/ttyUSB2';
+    const audioPort = mergedConfig.audioPort || '/dev/ttyUSB1';
+
+    const confContent = `; Homenichat - Configuration chan_quectel
+; Généré automatiquement - ${new Date().toISOString()}
+; Type de modem: ${profile.name}
+
+[general]
+; Intervalle d'interrogation du modem (ms)
+rxgain=3
+txgain=3
+
+[${modemName}]
+; Configuration du modem ${profile.name}
+audio=${audioPort}
+data=${dataPort}
+
+; Audio format (${profile.slin16 ? '16kHz' : '8kHz'})
+slin16=${profile.slin16 ? 'yes' : 'no'}
+
+; Stockage SMS sur modem
+msg_storage=${profile.msg_storage}
+
+; Délai avant réponse
+autodeletesms=yes
+
+; Contexte pour les appels entrants
+context=from-gsm
+
+; Numéro de téléphone (si connu)
+${mergedConfig.phoneNumber ? `exten=+${mergedConfig.phoneNumber.replace(/^\+/, '')}` : '; exten=+NUMERO'}
+
+; Groupe pour le routage
+group=1
+`;
+
+    return confContent;
+  }
+
+  /**
+   * Applique la configuration quectel.conf
+   */
+  async applyQuectelConf(config = {}) {
+    try {
+      const confContent = this.generateQuectelConf(config);
+
+      // Écrire le fichier
+      fs.writeFileSync(QUECTEL_CONF_PATH, confContent);
+      this.logger.info('[ModemService] quectel.conf written');
+
+      // Sauvegarder la config
+      this.saveModemConfig(config);
+
+      // Recharger Asterisk
+      const reloadResult = await this.asteriskCmd('module reload chan_quectel');
+
+      // Si PIN configuré, l'envoyer
+      if (this.modemConfig.pinCode) {
+        await new Promise(resolve => setTimeout(resolve, 3000)); // Attendre que le modem soit prêt
+        const pinStatus = await this.checkSimPin();
+        if (pinStatus.needsPin) {
+          await this.enterSimPin(this.modemConfig.pinCode);
+        }
+      }
+
+      return {
+        success: true,
+        message: 'Configuration appliquée',
+        confPath: QUECTEL_CONF_PATH,
+        reloadResult,
+      };
+    } catch (error) {
+      this.logger.error('[ModemService] Failed to apply quectel.conf:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Lit le fichier quectel.conf actuel
+   */
+  readQuectelConf() {
+    try {
+      if (fs.existsSync(QUECTEL_CONF_PATH)) {
+        return fs.readFileSync(QUECTEL_CONF_PATH, 'utf8');
+      }
+      return null;
+    } catch (error) {
+      this.logger.error('[ModemService] Error reading quectel.conf:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Configure l'audio selon le type de modem
+   */
+  async configureAudioForType(modemId, modemType = null) {
+    const type = modemType || this.modemConfig.modemType || 'ec25';
+    const profile = MODEM_PROFILES[type];
+
+    if (!profile) {
+      throw new Error(`Type de modem inconnu: ${type}`);
+    }
+
+    const results = {};
+    for (const cmd of profile.audioCommands) {
+      try {
+        results[cmd] = await this.asteriskCmd(`quectel cmd ${modemId} ${cmd}`);
+      } catch (e) {
+        results[cmd] = `Error: ${e.message}`;
+      }
+    }
+
+    this.logger.info(`[ModemService] Audio configured for ${profile.name}`);
+    return { success: true, modem: modemId, modemType: type, profile: profile.name, results };
+  }
+
+  /**
+   * Initialise le modem (PIN + audio)
+   */
+  async initializeModem(modemId = null) {
+    const results = {
+      pinStatus: null,
+      pinEntered: false,
+      audioConfigured: false,
+    };
+
+    try {
+      // 1. Vérifier/entrer le PIN
+      const pinStatus = await this.checkSimPin(modemId);
+      results.pinStatus = pinStatus;
+
+      if (pinStatus.needsPin && this.modemConfig.pinCode) {
+        const pinResult = await this.enterSimPin(this.modemConfig.pinCode, modemId);
+        results.pinEntered = pinResult.success;
+      }
+
+      // 2. Configurer l'audio
+      if (modemId) {
+        const audioResult = await this.configureAudioForType(modemId);
+        results.audioConfigured = audioResult.success;
+      }
+
+      return { success: true, ...results };
+    } catch (error) {
+      this.logger.error('[ModemService] Failed to initialize modem:', error);
+      return { success: false, error: error.message, ...results };
+    }
+  }
 }
 
 module.exports = ModemService;
+module.exports.MODEM_PROFILES = MODEM_PROFILES;

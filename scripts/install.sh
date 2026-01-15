@@ -457,6 +457,28 @@ install_baileys() {
     success "Baileys installed"
 }
 
+disable_modemmanager() {
+    [ "$INSTALL_MODEMS" != true ] && return
+
+    info "Disabling ModemManager (conflicts with chan_quectel)..."
+
+    # ModemManager interferes with direct modem access
+    # It grabs the serial ports and prevents chan_quectel from working
+    systemctl stop ModemManager 2>/dev/null || true
+    systemctl disable ModemManager 2>/dev/null || true
+    systemctl mask ModemManager 2>/dev/null || true
+
+    # Also blacklist qmi_wwan which can interfere
+    cat > /etc/modprobe.d/blacklist-modem.conf << 'BLACKLIST'
+# Blacklist modules that interfere with chan_quectel
+# ModemManager and qmi_wwan grab the modem ports
+blacklist qmi_wwan
+blacklist cdc_wdm
+BLACKLIST
+
+    success "ModemManager disabled"
+}
+
 install_gammu() {
     [ "$INSTALL_MODEMS" != true ] && return
 
@@ -1066,6 +1088,7 @@ main() {
     install_nodejs
     install_homenichat
     install_baileys
+    disable_modemmanager
     install_gammu
     install_asterisk
     install_chan_quectel

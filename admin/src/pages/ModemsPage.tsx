@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box,
   Card,
@@ -22,6 +22,14 @@ import {
   Divider,
   Switch,
   FormControlLabel,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  InputAdornment,
+  IconButton,
+  Tooltip,
+  Collapse,
 } from '@mui/material';
 import {
   Send as SendIcon,
@@ -38,6 +46,14 @@ import {
   CheckCircle as CheckIcon,
   Error as ErrorIcon,
   PlayArrow as PlayIcon,
+  Settings as SettingsIcon,
+  Lock as LockIcon,
+  LockOpen as LockOpenIcon,
+  Search as SearchIcon,
+  Save as SaveIcon,
+  ExpandMore as ExpandMoreIcon,
+  ExpandLess as ExpandLessIcon,
+  Code as CodeIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
@@ -112,6 +128,39 @@ interface FullModemData {
   usb: UsbStatus;
 }
 
+// Configuration interfaces
+interface ModemProfile {
+  id: string;
+  name: string;
+  slin16: boolean;
+  description: string;
+}
+
+interface ModemConfig {
+  modemType: string;
+  modemName: string;
+  phoneNumber: string;
+  pinCode: string;
+  pinConfigured: boolean;
+  dataPort: string;
+  audioPort: string;
+  autoDetect: boolean;
+}
+
+interface DetectedPorts {
+  ports: string[];
+  suggestedDataPort: string | null;
+  suggestedAudioPort: string | null;
+  modemType: string | null;
+  error?: string;
+}
+
+interface SimStatus {
+  status: string;
+  message: string;
+  needsPin: boolean;
+}
+
 // API functions
 const modemsApi = {
   getFullStatus: async (): Promise<FullModemData> => {
@@ -119,6 +168,96 @@ const modemsApi = {
       headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
     });
     if (!response.ok) throw new Error('Failed to fetch modem status');
+    return response.json();
+  },
+
+  // Configuration APIs
+  getConfig: async (): Promise<{ config: ModemConfig; profiles: ModemProfile[] }> => {
+    const response = await fetch('/api/admin/modems/config', {
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
+    });
+    if (!response.ok) throw new Error('Failed to fetch modem config');
+    return response.json();
+  },
+
+  updateConfig: async (config: Partial<ModemConfig>): Promise<{ success: boolean; config: ModemConfig }> => {
+    const response = await fetch('/api/admin/modems/config', {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(config),
+    });
+    if (!response.ok) throw new Error('Failed to update modem config');
+    return response.json();
+  },
+
+  detectPorts: async (): Promise<DetectedPorts> => {
+    const response = await fetch('/api/admin/modems/detect', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
+    });
+    if (!response.ok) throw new Error('Failed to detect USB ports');
+    return response.json();
+  },
+
+  getSimStatus: async (modemId?: string): Promise<SimStatus> => {
+    const url = modemId ? `/api/admin/modems/sim-status?modemId=${modemId}` : '/api/admin/modems/sim-status';
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
+    });
+    if (!response.ok) throw new Error('Failed to get SIM status');
+    return response.json();
+  },
+
+  enterPin: async (pin: string, modemId?: string): Promise<{ success: boolean; message: string }> => {
+    const response = await fetch('/api/admin/modems/enter-pin', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ pin, modemId }),
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Failed to enter PIN');
+    }
+    return response.json();
+  },
+
+  getQuectelConf: async (): Promise<{ current: string | null; preview: string }> => {
+    const response = await fetch('/api/admin/modems/quectel-conf', {
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
+    });
+    if (!response.ok) throw new Error('Failed to get quectel.conf');
+    return response.json();
+  },
+
+  applyConfig: async (config: Partial<ModemConfig>): Promise<{ success: boolean; message: string }> => {
+    const response = await fetch('/api/admin/modems/apply-config', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(config),
+    });
+    if (!response.ok) throw new Error('Failed to apply config');
+    return response.json();
+  },
+
+  initializeModem: async (modemId?: string): Promise<{ success: boolean; pinStatus: SimStatus; pinEntered: boolean; audioConfigured: boolean }> => {
+    const response = await fetch('/api/admin/modems/initialize', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ modemId }),
+    });
+    if (!response.ok) throw new Error('Failed to initialize modem');
     return response.json();
   },
 
@@ -243,6 +382,20 @@ export default function ModemsPage() {
   const [smsMessage, setSmsMessage] = useState('Test SMS depuis Homenichat Admin');
   const [actionResult, setActionResult] = useState<{ success: boolean; message: string } | null>(null);
 
+  // Configuration panel state
+  const [configExpanded, setConfigExpanded] = useState(true);
+  const [confDialogOpen, setConfDialogOpen] = useState(false);
+  const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [configForm, setConfigForm] = useState<Partial<ModemConfig>>({
+    modemType: 'ec25',
+    modemName: 'homenichat-modem',
+    phoneNumber: '',
+    dataPort: '/dev/ttyUSB2',
+    audioPort: '/dev/ttyUSB1',
+    autoDetect: true,
+  });
+
   // Queries
   const { data: fullStatus, isLoading, error, refetch } = useQuery({
     queryKey: ['modemFullStatus'],
@@ -256,6 +409,39 @@ export default function ModemsPage() {
     queryFn: () => modemsApi.getWatchdogLogs(30),
     refetchInterval: autoRefresh ? 30000 : false,
   });
+
+  // Configuration queries
+  const { data: modemConfigData } = useQuery({
+    queryKey: ['modemConfig'],
+    queryFn: modemsApi.getConfig,
+    staleTime: 30000,
+  });
+
+  const { data: simStatusData, refetch: refetchSimStatus } = useQuery({
+    queryKey: ['simStatus'],
+    queryFn: () => modemsApi.getSimStatus(),
+    refetchInterval: autoRefresh ? 30000 : false,
+  });
+
+  const { data: quectelConfData } = useQuery({
+    queryKey: ['quectelConf'],
+    queryFn: modemsApi.getQuectelConf,
+    enabled: confDialogOpen,
+  });
+
+  // Update configForm when config is loaded
+  useEffect(() => {
+    if (modemConfigData?.config) {
+      setConfigForm({
+        modemType: modemConfigData.config.modemType || 'ec25',
+        modemName: modemConfigData.config.modemName || 'homenichat-modem',
+        phoneNumber: modemConfigData.config.phoneNumber || '',
+        dataPort: modemConfigData.config.dataPort || '/dev/ttyUSB2',
+        audioPort: modemConfigData.config.audioPort || '/dev/ttyUSB1',
+        autoDetect: modemConfigData.config.autoDetect !== false,
+      });
+    }
+  }, [modemConfigData]);
 
   // Mutations
   const restartModemMutation = useMutation({
@@ -310,6 +496,70 @@ export default function ModemsPage() {
     onSuccess: (result) => {
       setActionResult({ success: result.success, message: result.result });
       queryClient.invalidateQueries({ queryKey: ['modemFullStatus'] });
+    },
+    onError: (err: Error) => {
+      setActionResult({ success: false, message: err.message });
+    },
+  });
+
+  // Configuration mutations
+  const detectPortsMutation = useMutation({
+    mutationFn: modemsApi.detectPorts,
+    onSuccess: (result) => {
+      if (result.suggestedDataPort) {
+        setConfigForm(prev => ({
+          ...prev,
+          dataPort: result.suggestedDataPort || prev.dataPort,
+          audioPort: result.suggestedAudioPort || prev.audioPort,
+          modemType: result.modemType || prev.modemType,
+        }));
+      }
+      setActionResult({
+        success: true,
+        message: `Détecté: ${result.ports.length} ports USB. Type suggéré: ${result.modemType || 'inconnu'}`,
+      });
+    },
+    onError: (err: Error) => {
+      setActionResult({ success: false, message: err.message });
+    },
+  });
+
+  const enterPinMutation = useMutation({
+    mutationFn: ({ pin, modemId }: { pin: string; modemId?: string }) =>
+      modemsApi.enterPin(pin, modemId),
+    onSuccess: (result) => {
+      setActionResult({ success: result.success, message: result.message });
+      setPinDialogOpen(false);
+      setPinInput('');
+      refetchSimStatus();
+      queryClient.invalidateQueries({ queryKey: ['modemConfig'] });
+    },
+    onError: (err: Error) => {
+      setActionResult({ success: false, message: err.message });
+    },
+  });
+
+  const applyConfigMutation = useMutation({
+    mutationFn: modemsApi.applyConfig,
+    onSuccess: (result) => {
+      setActionResult({ success: result.success, message: result.message });
+      queryClient.invalidateQueries({ queryKey: ['modemConfig'] });
+      queryClient.invalidateQueries({ queryKey: ['modemFullStatus'] });
+      queryClient.invalidateQueries({ queryKey: ['quectelConf'] });
+    },
+    onError: (err: Error) => {
+      setActionResult({ success: false, message: err.message });
+    },
+  });
+
+  const initializeModemMutation = useMutation({
+    mutationFn: (modemId?: string) => modemsApi.initializeModem(modemId),
+    onSuccess: (result) => {
+      setActionResult({
+        success: result.success,
+        message: `PIN: ${result.pinStatus.message}${result.audioConfigured ? ', Audio configuré' : ''}`,
+      });
+      refetchSimStatus();
     },
     onError: (err: Error) => {
       setActionResult({ success: false, message: err.message });
@@ -404,6 +654,220 @@ export default function ModemsPage() {
       </Box>
 
       {isLoading && <LinearProgress sx={{ mb: 2 }} />}
+
+      {/* Configuration Panel */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent sx={{ pb: configExpanded ? 2 : '16px !important' }}>
+          <Box
+            sx={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              cursor: 'pointer',
+            }}
+            onClick={() => setConfigExpanded(!configExpanded)}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <SettingsIcon sx={{ color: 'primary.main' }} />
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                Configuration Modem
+              </Typography>
+              {modemConfigData?.config?.modemType && (
+                <Chip
+                  label={modemConfigData.config.modemType.toUpperCase()}
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                />
+              )}
+              {simStatusData?.needsPin && (
+                <Chip label="PIN requis" size="small" color="warning" icon={<LockIcon />} />
+              )}
+              {simStatusData?.status === 'ready' && (
+                <Chip label="SIM OK" size="small" color="success" icon={<LockOpenIcon />} />
+              )}
+            </Box>
+            <IconButton size="small">
+              {configExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+            </IconButton>
+          </Box>
+
+          <Collapse in={configExpanded}>
+            <Divider sx={{ my: 2 }} />
+
+            <Grid container spacing={3}>
+              {/* Type de modem */}
+              <Grid item xs={12} md={4}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Type de Modem</InputLabel>
+                  <Select
+                    value={configForm.modemType || 'ec25'}
+                    label="Type de Modem"
+                    onChange={(e) => setConfigForm({ ...configForm, modemType: e.target.value })}
+                  >
+                    {modemConfigData?.profiles?.map((profile) => (
+                      <MenuItem key={profile.id} value={profile.id}>
+                        <Box>
+                          <Typography variant="body2" fontWeight={500}>
+                            {profile.name}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {profile.description}
+                          </Typography>
+                        </Box>
+                      </MenuItem>
+                    )) || (
+                      <>
+                        <MenuItem value="ec25">
+                          <Box>
+                            <Typography variant="body2" fontWeight={500}>Quectel EC25</Typography>
+                            <Typography variant="caption" color="text.secondary">Audio 8kHz (standard)</Typography>
+                          </Box>
+                        </MenuItem>
+                        <MenuItem value="sim7600">
+                          <Box>
+                            <Typography variant="body2" fontWeight={500}>Simcom SIM7600</Typography>
+                            <Typography variant="caption" color="text.secondary">Audio 16kHz (haute qualité)</Typography>
+                          </Box>
+                        </MenuItem>
+                      </>
+                    )}
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              {/* Nom du modem */}
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Nom du Modem"
+                  value={configForm.modemName || ''}
+                  onChange={(e) => setConfigForm({ ...configForm, modemName: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
+                  helperText="Identifiant unique (lettres, chiffres, tirets)"
+                />
+              </Grid>
+
+              {/* Numéro de téléphone */}
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Numero de telephone"
+                  value={configForm.phoneNumber || ''}
+                  onChange={(e) => setConfigForm({ ...configForm, phoneNumber: e.target.value.replace(/[^0-9+]/g, '') })}
+                  placeholder="+590690XXXXXX"
+                  helperText="Format international"
+                />
+              </Grid>
+
+              {/* Ports USB */}
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Port Data (AT)"
+                  value={configForm.dataPort || ''}
+                  onChange={(e) => setConfigForm({ ...configForm, dataPort: e.target.value })}
+                  placeholder="/dev/ttyUSB2"
+                  InputProps={{
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <Tooltip title="Detecter automatiquement">
+                          <IconButton
+                            size="small"
+                            onClick={() => detectPortsMutation.mutate()}
+                            disabled={detectPortsMutation.isPending}
+                          >
+                            <SearchIcon />
+                          </IconButton>
+                        </Tooltip>
+                      </InputAdornment>
+                    ),
+                  }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Port Audio"
+                  value={configForm.audioPort || ''}
+                  onChange={(e) => setConfigForm({ ...configForm, audioPort: e.target.value })}
+                  placeholder="/dev/ttyUSB1"
+                />
+              </Grid>
+
+              {/* SIM PIN Status & Actions */}
+              <Grid item xs={12} md={4}>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', height: '100%' }}>
+                  <Button
+                    variant={simStatusData?.needsPin ? 'contained' : 'outlined'}
+                    color={simStatusData?.needsPin ? 'warning' : 'primary'}
+                    startIcon={simStatusData?.needsPin ? <LockIcon /> : <LockOpenIcon />}
+                    onClick={() => setPinDialogOpen(true)}
+                    size="small"
+                  >
+                    {simStatusData?.needsPin ? 'Entrer PIN' : 'Gerer PIN'}
+                  </Button>
+                  <Chip
+                    label={simStatusData?.message || 'Verification...'}
+                    size="small"
+                    color={
+                      simStatusData?.status === 'ready' ? 'success' :
+                      simStatusData?.status === 'pin_required' ? 'warning' :
+                      simStatusData?.status === 'error' ? 'error' : 'default'
+                    }
+                    variant="outlined"
+                  />
+                </Box>
+              </Grid>
+
+              {/* Actions */}
+              <Grid item xs={12}>
+                <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                  <Button
+                    variant="outlined"
+                    startIcon={<SearchIcon />}
+                    onClick={() => detectPortsMutation.mutate()}
+                    disabled={detectPortsMutation.isPending}
+                  >
+                    Auto-detecter
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    startIcon={<CodeIcon />}
+                    onClick={() => setConfDialogOpen(true)}
+                  >
+                    Voir quectel.conf
+                  </Button>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    startIcon={<SaveIcon />}
+                    onClick={() => applyConfigMutation.mutate(configForm)}
+                    disabled={applyConfigMutation.isPending}
+                  >
+                    Appliquer la configuration
+                  </Button>
+                </Box>
+              </Grid>
+            </Grid>
+
+            {/* Alert for config result */}
+            {actionResult && (
+              <Alert
+                severity={actionResult.success ? 'success' : 'error'}
+                sx={{ mt: 2 }}
+                onClose={() => setActionResult(null)}
+              >
+                {actionResult.message}
+              </Alert>
+            )}
+          </Collapse>
+        </CardContent>
+      </Card>
 
       {/* Tabs for each modem */}
       {modemsList.length > 0 && (
@@ -925,6 +1389,123 @@ export default function ModemsPage() {
             disabled={!smsTo || !smsMessage || sendSmsMutation.isPending}
           >
             Envoyer
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* PIN Dialog */}
+      <Dialog open={pinDialogOpen} onClose={() => setPinDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <LockIcon color="warning" />
+            Code PIN SIM
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Statut actuel: {simStatusData?.message || 'Verification...'}
+          </Alert>
+
+          <TextField
+            autoFocus
+            margin="dense"
+            label="Code PIN"
+            fullWidth
+            type="password"
+            value={pinInput}
+            onChange={(e) => setPinInput(e.target.value.replace(/\D/g, '').slice(0, 8))}
+            placeholder="****"
+            helperText="4 a 8 chiffres"
+            inputProps={{ maxLength: 8, inputMode: 'numeric' }}
+          />
+
+          {modemConfigData?.config?.pinConfigured && (
+            <Alert severity="success" sx={{ mt: 2 }}>
+              Un code PIN est deja configure. Entrez un nouveau code pour le remplacer.
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setPinDialogOpen(false); setPinInput(''); }}>
+            Annuler
+          </Button>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={() => enterPinMutation.mutate({ pin: pinInput })}
+            disabled={!pinInput || pinInput.length < 4 || enterPinMutation.isPending}
+          >
+            {enterPinMutation.isPending ? 'Envoi...' : 'Valider PIN'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* quectel.conf Dialog */}
+      <Dialog open={confDialogOpen} onClose={() => setConfDialogOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <CodeIcon color="primary" />
+            Configuration Asterisk (quectel.conf)
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Tabs
+            value={0}
+            sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
+          >
+            <Tab label="Apercu (nouvelle config)" />
+          </Tabs>
+
+          <Box
+            sx={{
+              bgcolor: 'grey.900',
+              color: 'grey.100',
+              p: 2,
+              borderRadius: 1,
+              fontFamily: 'monospace',
+              fontSize: '0.8rem',
+              whiteSpace: 'pre-wrap',
+              overflow: 'auto',
+              maxHeight: 400,
+            }}
+          >
+            {quectelConfData?.preview || 'Chargement...'}
+          </Box>
+
+          {quectelConfData?.current && (
+            <>
+              <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
+                Configuration actuelle sur le serveur:
+              </Typography>
+              <Box
+                sx={{
+                  bgcolor: alpha(theme.palette.info.main, 0.1),
+                  p: 2,
+                  borderRadius: 1,
+                  fontFamily: 'monospace',
+                  fontSize: '0.75rem',
+                  whiteSpace: 'pre-wrap',
+                  overflow: 'auto',
+                  maxHeight: 200,
+                }}
+              >
+                {quectelConfData.current}
+              </Box>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfDialogOpen(false)}>Fermer</Button>
+          <Button
+            variant="contained"
+            startIcon={<SaveIcon />}
+            onClick={() => {
+              applyConfigMutation.mutate(configForm);
+              setConfDialogOpen(false);
+            }}
+            disabled={applyConfigMutation.isPending}
+          >
+            Appliquer cette configuration
           </Button>
         </DialogActions>
       </Dialog>

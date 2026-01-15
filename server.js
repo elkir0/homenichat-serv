@@ -624,6 +624,15 @@ async function startServer() {
     await versionCheckService.initialize();
     logger.info('VersionCheckService initialized successfully');
 
+    // Initialiser FCM Push Service (optionnel - nécessite firebase-service-account.json)
+    const fcmPushService = require('./services/FCMPushService');
+    const fcmInitialized = await fcmPushService.initialize();
+    if (fcmInitialized) {
+      logger.info('FCMPushService initialized successfully');
+    } else {
+      logger.info('FCMPushService disabled (no service account key)');
+    }
+
     // Configurer les événements du provider
     providerManager.on('providerChanged', (data) => {
       logger.info(`Provider changed from ${data.previous} to ${data.current}`);

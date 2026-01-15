@@ -1,5 +1,14 @@
 const logger = require('../utils/logger');
 
+// Lazy load FCMPushService to avoid circular dependencies
+let fcmPushService = null;
+const getFCMService = () => {
+  if (!fcmPushService) {
+    fcmPushService = require('./FCMPushService');
+  }
+  return fcmPushService;
+};
+
 /**
  * Service centralisé pour envoyer des événements push aux clients
  * Remplace tous les polling et refresh périodiques
@@ -156,12 +165,66 @@ class PushService {
 
     logger.info(`📤 pushNewMessage: id=${messageData.id} chatId=${messageData.chatId} fromMe=${messageData.isFromMe}`);
 
-    // Broadcast à tous les clients
+    // Broadcast à tous les clients WebSocket
     const sentCount = this.broadcast(this.eventTypes.NEW_MESSAGE, enrichedData);
     logger.info(`📤 NEW_MESSAGE broadcast à ${sentCount} clients`);
 
     // Aussi mettre à jour la liste des chats
     this.pushChatsUpdate();
+
+    // Send FCM push notification for incoming messages (not from us)
+    if (!messageData.isFromMe && !messageData.fromMe) {
+      this.sendFCMNotification(messageData);
+    }
+  }
+
+  /**
+   * Send FCM push notification for a new message
+   */
+  async sendFCMNotification(messageData) {
+    try {
+      const fcm = getFCMService();
+
+      // Get sender name
+      const senderName = messageData.pushName ||
+                         messageData.senderName ||
+                         messageData.name ||
+                         this.formatPhoneNumber(messageData.chatId);
+
+      // Get message preview
+      const messagePreview = messageData.content ||
+                             messageData.body ||
+                             messageData.text ||
+                             'Nouveau message';
+
+      const sentCount = await fcm.sendMessageNotification(
+        messageData.chatId,
+        senderName,
+        messagePreview,
+        {
+          messageId: messageData.id,
+          provider: messageData.provider || 'unknown'
+        }
+      );
+
+      if (sentCount > 0) {
+        logger.info(`📱 FCM notification sent to ${sentCount} devices`);
+      }
+    } catch (error) {
+      logger.error('FCM notification error:', error.message);
+    }
+  }
+
+  /**
+   * Format phone number for display
+   */
+  formatPhoneNumber(jid) {
+    if (!jid) return 'Inconnu';
+    const number = jid.split('@')[0];
+    if (number.length >= 10) {
+      return '+' + number;
+    }
+    return number;
   }
 
   /**

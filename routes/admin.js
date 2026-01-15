@@ -862,6 +862,259 @@ router.post('/modems/restart-services', async (req, res) => {
 });
 
 // =============================================================================
+// MODEMS CONFIGURATION - EC25/SIM7600, PIN, Ports
+// =============================================================================
+
+/**
+ * GET /api/admin/modems/config
+ * Récupère la configuration modem actuelle
+ */
+router.get('/modems/config', async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const config = modemService.getModemConfig();
+    const profiles = modemService.getModemProfiles();
+
+    // Ne pas exposer le PIN complet
+    if (config.pinCode) {
+      config.pinConfigured = true;
+      config.pinCode = '****';
+    } else {
+      config.pinConfigured = false;
+    }
+
+    res.json({ config, profiles });
+
+  } catch (error) {
+    console.error('[Admin] Get modem config error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * PUT /api/admin/modems/config
+ * Met à jour la configuration modem
+ */
+router.put('/modems/config', [
+  body('modemType').optional().isIn(['ec25', 'sim7600']),
+  body('modemName').optional().matches(/^[a-z0-9-]+$/i).withMessage('Invalid modem name'),
+  body('phoneNumber').optional().matches(/^\+?[0-9]{0,15}$/),
+  body('dataPort').optional().matches(/^\/dev\/ttyUSB\d+$/),
+  body('audioPort').optional().matches(/^\/dev\/ttyUSB\d+$/),
+  body('autoDetect').optional().isBoolean(),
+], validate, async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const updates = req.body;
+
+    // Sauvegarder la config
+    modemService.saveModemConfig(updates);
+
+    await securityService?.logAction(req.user.id, 'modem_config_updated', {
+      category: 'admin',
+      modemType: updates.modemType,
+      username: req.user.username,
+    }, req);
+
+    res.json({ success: true, config: modemService.getModemConfig() });
+
+  } catch (error) {
+    console.error('[Admin] Update modem config error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/modems/profiles
+ * Liste les profils de modem disponibles
+ */
+router.get('/modems/profiles', async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const profiles = modemService.getModemProfiles();
+    res.json({ profiles });
+
+  } catch (error) {
+    console.error('[Admin] Get modem profiles error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modems/detect
+ * Détecte automatiquement les ports USB et type de modem
+ */
+router.post('/modems/detect', async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const detected = await modemService.detectUsbPorts();
+
+    await securityService?.logAction(req.user.id, 'modem_detection', {
+      category: 'admin',
+      portsFound: detected.ports?.length || 0,
+      modemType: detected.modemType,
+      username: req.user.username,
+    }, req);
+
+    res.json(detected);
+
+  } catch (error) {
+    console.error('[Admin] Modem detection error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/modems/sim-status
+ * Vérifie l'état du PIN SIM
+ */
+router.get('/modems/sim-status', async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const modemId = req.query.modemId || null;
+    const status = await modemService.checkSimPin(modemId);
+
+    res.json(status);
+
+  } catch (error) {
+    console.error('[Admin] SIM status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modems/enter-pin
+ * Entre le code PIN SIM
+ */
+router.post('/modems/enter-pin', [
+  body('pin').matches(/^\d{4,8}$/).withMessage('PIN must be 4-8 digits'),
+  body('modemId').optional().isString(),
+], validate, async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const { pin, modemId } = req.body;
+    const result = await modemService.enterSimPin(pin, modemId);
+
+    await securityService?.logAction(req.user.id, 'sim_pin_entered', {
+      category: 'admin',
+      success: result.success,
+      username: req.user.username,
+    }, req);
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[Admin] Enter PIN error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/modems/quectel-conf
+ * Récupère le contenu actuel de quectel.conf
+ */
+router.get('/modems/quectel-conf', async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const content = modemService.readQuectelConf();
+    const preview = modemService.generateQuectelConf();
+
+    res.json({
+      current: content,
+      preview: preview,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Get quectel.conf error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modems/apply-config
+ * Applique la configuration (génère quectel.conf et recharge Asterisk)
+ */
+router.post('/modems/apply-config', [
+  body('modemType').optional().isIn(['ec25', 'sim7600']),
+  body('modemName').optional().matches(/^[a-z0-9-]+$/i),
+  body('phoneNumber').optional().matches(/^\+?[0-9]{0,15}$/),
+  body('dataPort').optional().matches(/^\/dev\/ttyUSB\d+$/),
+  body('audioPort').optional().matches(/^\/dev\/ttyUSB\d+$/),
+], validate, async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const config = req.body;
+    const result = await modemService.applyQuectelConf(config);
+
+    await securityService?.logAction(req.user.id, 'modem_config_applied', {
+      category: 'admin',
+      modemType: config.modemType || modemService.getModemConfig().modemType,
+      username: req.user.username,
+    }, req);
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[Admin] Apply config error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modems/initialize
+ * Initialise le modem (PIN + audio config)
+ */
+router.post('/modems/initialize', [
+  body('modemId').optional().isString(),
+], validate, async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const { modemId } = req.body;
+    const result = await modemService.initializeModem(modemId);
+
+    await securityService?.logAction(req.user.id, 'modem_initialized', {
+      category: 'admin',
+      modemId,
+      success: result.success,
+      username: req.user.username,
+    }, req);
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[Admin] Initialize modem error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
 // VOIP / FREEPBX
 // =============================================================================
 
