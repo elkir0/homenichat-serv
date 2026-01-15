@@ -433,9 +433,9 @@ router.get('/whatsapp/qr/:id', [
     const qrCode = await providerManager.getQrCode?.(id);
 
     if (qrCode) {
-      res.json({ qrCode });
+      res.json({ qr: qrCode, status: 'qr_pending' });
     } else {
-      res.json({ qrCode: null, message: 'No QR code available. Session may already be connected.' });
+      res.json({ qr: null, status: 'waiting', message: 'No QR code available. Session may already be connected.' });
     }
 
   } catch (error) {
