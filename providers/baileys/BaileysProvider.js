@@ -142,7 +142,10 @@ class BaileysProvider extends WhatsAppProvider {
 
     this.sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
-      logger.info(`CONNECTION UPDATE: ${JSON.stringify(update)}`);
+      logger.info(`CONNECTION UPDATE: connection=${connection}, hasQR=${!!qr}, keys=${Object.keys(update).join(',')}`);
+      if (lastDisconnect) {
+        logger.info(`LAST DISCONNECT: ${JSON.stringify(lastDisconnect?.error?.output || lastDisconnect)}`);
+      }
 
       if (qr) {
         this.qrCode = await QRCode.toDataURL(qr);
