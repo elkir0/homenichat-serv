@@ -151,14 +151,22 @@ class ModemService {
     const modems = [];
 
     // Parser la sortie de "quectel show devices"
+    // Format: ID           Group State      RSSI Mode Provide Model...
     const lines = output.split('\n');
     for (const line of lines) {
-      if (line.includes('quectel-') || line.includes('Device')) {
-        continue; // Skip headers
+      const trimmed = line.trim();
+      // Skip empty lines and header line (contains "ID" at start or "Group")
+      if (!trimmed || trimmed.startsWith('ID') || trimmed.includes('Group State')) {
+        continue;
       }
-      const match = line.match(/^(\S+)\s+/);
-      if (match && match[1].startsWith('quectel')) {
-        modems.push(match[1]);
+      // Extract modem ID (first column)
+      const match = trimmed.match(/^(\S+)\s+/);
+      if (match && match[1]) {
+        // Valid modem ID (not a number, not empty)
+        const modemId = match[1];
+        if (modemId && !/^\d+$/.test(modemId)) {
+          modems.push(modemId);
+        }
       }
     }
 
