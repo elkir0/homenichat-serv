@@ -800,31 +800,30 @@ class ModemService {
 
   /**
    * Envoie une commande AT directement au port série et lit la réponse
+   * Utilise socat avec timeout de lecture pour capturer la réponse du modem
    */
   async sendDirectAtCommand(port, command, timeoutMs = 5000) {
     return new Promise((resolve) => {
-      // Utiliser un script bash pour envoyer la commande et lire la réponse
-      // La technique: ouvrir le port, envoyer, attendre, lire
+      // Utiliser socat avec le mode bidirectionnel et timeout de lecture (-t2)
+      // Le subshell envoie la commande, attend, puis lit la réponse
       const script = `
         (
-          # Configurer le port série
-          stty -F ${port} 115200 raw -echo -echoe -echok 2>/dev/null
-
-          # Envoyer la commande
-          echo -e '${command}\\r' > ${port}
-
-          # Attendre et lire la réponse (timeout 3 secondes)
-          timeout 3 cat ${port} 2>/dev/null
-        ) 2>/dev/null
+          echo -e '${command}\\r'
+          sleep 1
+        ) | timeout ${Math.floor(timeoutMs / 1000)} socat -t2 - ${port},raw,echo=0,b115200,crnl 2>/dev/null
       `;
 
-      exec(script, { timeout: timeoutMs }, (error, stdout, stderr) => {
-        if (error && !stdout) {
+      exec(script.trim(), { timeout: timeoutMs + 2000 }, (error, stdout, stderr) => {
+        // Nettoyer la sortie (enlever les caractères de contrôle)
+        const cleaned = (stdout || '').replace(/[\x00-\x09\x0B\x0C\x0E-\x1F]/g, '').trim();
+
+        // Si on a de la sortie, c'est bon même si exit code non-zero (timeout)
+        if (cleaned) {
+          resolve(cleaned);
+        } else if (error) {
           resolve(`Error: ${error.message}`);
         } else {
-          // Nettoyer la sortie (enlever les caractères de contrôle)
-          const cleaned = stdout.replace(/[\x00-\x09\x0B\x0C\x0E-\x1F]/g, '').trim();
-          resolve(cleaned);
+          resolve('');
         }
       });
     });
