@@ -90,7 +90,7 @@ class ModemService {
     // Configuration par défaut
     return {
       modemType: 'ec25',
-      modemName: 'homenichat-modem',
+      modemName: 'hni-modem',
       phoneNumber: '',
       pinCode: '',
       dataPort: '/dev/ttyUSB2',
@@ -948,7 +948,7 @@ class ModemService {
     const mergedConfig = { ...this.modemConfig, ...config };
     const profile = MODEM_PROFILES[mergedConfig.modemType] || MODEM_PROFILES.ec25;
 
-    const modemName = mergedConfig.modemName || 'homenichat-modem';
+    const modemName = mergedConfig.modemName || 'hni-modem';
     const dataPort = mergedConfig.dataPort || '/dev/ttyUSB2';
     const audioPort = mergedConfig.audioPort || '/dev/ttyUSB1';
 

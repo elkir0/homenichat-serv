@@ -408,7 +408,7 @@ export default function ModemsPage() {
   const [pinError, setPinError] = useState<string | null>(null);
   const [configForm, setConfigForm] = useState<Partial<ModemConfig>>({
     modemType: 'ec25',
-    modemName: 'homenichat-modem',
+    modemName: 'hni-modem',
     phoneNumber: '',
     dataPort: '/dev/ttyUSB2',
     audioPort: '/dev/ttyUSB1',
@@ -453,7 +453,7 @@ export default function ModemsPage() {
     if (modemConfigData?.config) {
       setConfigForm({
         modemType: modemConfigData.config.modemType || 'ec25',
-        modemName: modemConfigData.config.modemName || 'homenichat-modem',
+        modemName: modemConfigData.config.modemName || 'hni-modem',
         phoneNumber: modemConfigData.config.phoneNumber || '',
         dataPort: modemConfigData.config.dataPort || '/dev/ttyUSB2',
         audioPort: modemConfigData.config.audioPort || '/dev/ttyUSB1',
@@ -765,8 +765,10 @@ export default function ModemsPage() {
                   size="small"
                   label="Nom du Modem"
                   value={configForm.modemName || ''}
-                  onChange={(e) => setConfigForm({ ...configForm, modemName: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
-                  helperText="Identifiant unique (lettres, chiffres, tirets)"
+                  onChange={(e) => setConfigForm({ ...configForm, modemName: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 12) })}
+                  inputProps={{ maxLength: 12 }}
+                  helperText={`${(configForm.modemName || '').length}/12 caracteres (lettres, chiffres, tirets)`}
+                  error={(configForm.modemName || '').length > 12}
                 />
               </Grid>
 
