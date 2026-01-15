@@ -140,6 +140,15 @@ interface ModemProfile {
   description: string;
 }
 
+interface SmsConfig {
+  enabled: boolean;
+  storage: 'sqlite' | 'modem' | 'sim';
+  autoDelete: boolean;
+  deliveryReports: boolean;
+  serviceCenter: string;
+  encoding: 'auto' | 'gsm7' | 'ucs2';
+}
+
 interface ModemConfig {
   modemType: string;
   modemName: string;
@@ -149,6 +158,7 @@ interface ModemConfig {
   dataPort: string;
   audioPort: string;
   autoDetect: boolean;
+  sms: SmsConfig;
 }
 
 interface DetectedPorts {
@@ -413,6 +423,14 @@ export default function ModemsPage() {
     dataPort: '/dev/ttyUSB2',
     audioPort: '/dev/ttyUSB1',
     autoDetect: true,
+    sms: {
+      enabled: true,
+      storage: 'sqlite',
+      autoDelete: true,
+      deliveryReports: false,
+      serviceCenter: '',
+      encoding: 'auto',
+    },
   });
 
   // Queries
@@ -451,13 +469,22 @@ export default function ModemsPage() {
   // Update configForm when config is loaded
   useEffect(() => {
     if (modemConfigData?.config) {
+      const cfg = modemConfigData.config;
       setConfigForm({
-        modemType: modemConfigData.config.modemType || 'ec25',
-        modemName: modemConfigData.config.modemName || 'hni-modem',
-        phoneNumber: modemConfigData.config.phoneNumber || '',
-        dataPort: modemConfigData.config.dataPort || '/dev/ttyUSB2',
-        audioPort: modemConfigData.config.audioPort || '/dev/ttyUSB1',
-        autoDetect: modemConfigData.config.autoDetect !== false,
+        modemType: cfg.modemType || 'ec25',
+        modemName: cfg.modemName || 'hni-modem',
+        phoneNumber: cfg.phoneNumber || '',
+        dataPort: cfg.dataPort || '/dev/ttyUSB2',
+        audioPort: cfg.audioPort || '/dev/ttyUSB1',
+        autoDetect: cfg.autoDetect !== false,
+        sms: {
+          enabled: cfg.sms?.enabled !== false,
+          storage: cfg.sms?.storage || 'sqlite',
+          autoDelete: cfg.sms?.autoDelete !== false,
+          deliveryReports: cfg.sms?.deliveryReports || false,
+          serviceCenter: cfg.sms?.serviceCenter || '',
+          encoding: cfg.sms?.encoding || 'auto',
+        },
       });
     }
   }, [modemConfigData]);
@@ -889,6 +916,159 @@ export default function ModemsPage() {
                 {actionResult.message}
               </Alert>
             )}
+          </Collapse>
+        </CardContent>
+      </Card>
+
+      {/* SMS Configuration Card */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <SendIcon color="primary" />
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                Configuration SMS
+              </Typography>
+            </Box>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={configForm.sms?.enabled !== false}
+                  onChange={(e) => setConfigForm({
+                    ...configForm,
+                    sms: { ...configForm.sms!, enabled: e.target.checked }
+                  })}
+                  color="primary"
+                />
+              }
+              label={configForm.sms?.enabled !== false ? 'Actif' : 'Desactive'}
+            />
+          </Box>
+
+          <Collapse in={configForm.sms?.enabled !== false}>
+            <Grid container spacing={2}>
+              {/* Stockage SMS */}
+              <Grid item xs={12} md={4}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Stockage des SMS</InputLabel>
+                  <Select
+                    value={configForm.sms?.storage || 'sqlite'}
+                    label="Stockage des SMS"
+                    onChange={(e) => setConfigForm({
+                      ...configForm,
+                      sms: { ...configForm.sms!, storage: e.target.value as 'sqlite' | 'modem' | 'sim' }
+                    })}
+                  >
+                    <MenuItem value="sqlite">
+                      <Box>
+                        <Typography variant="body2" fontWeight={500}>SQLite (recommande)</Typography>
+                        <Typography variant="caption" color="text.secondary">Base de donnees locale</Typography>
+                      </Box>
+                    </MenuItem>
+                    <MenuItem value="modem">
+                      <Box>
+                        <Typography variant="body2" fontWeight={500}>Memoire modem</Typography>
+                        <Typography variant="caption" color="text.secondary">Stockage temporaire</Typography>
+                      </Box>
+                    </MenuItem>
+                    <MenuItem value="sim">
+                      <Box>
+                        <Typography variant="body2" fontWeight={500}>Carte SIM</Typography>
+                        <Typography variant="caption" color="text.secondary">Capacite limitee (~20 SMS)</Typography>
+                      </Box>
+                    </MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              {/* Auto-suppression */}
+              <Grid item xs={12} md={4}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={configForm.sms?.autoDelete !== false}
+                      onChange={(e) => setConfigForm({
+                        ...configForm,
+                        sms: { ...configForm.sms!, autoDelete: e.target.checked }
+                      })}
+                    />
+                  }
+                  label="Supprimer apres lecture"
+                />
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Libere la memoire du modem
+                </Typography>
+              </Grid>
+
+              {/* Accusés de réception */}
+              <Grid item xs={12} md={4}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={configForm.sms?.deliveryReports || false}
+                      onChange={(e) => setConfigForm({
+                        ...configForm,
+                        sms: { ...configForm.sms!, deliveryReports: e.target.checked }
+                      })}
+                    />
+                  }
+                  label="Accuses de reception"
+                />
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Confirme la livraison
+                </Typography>
+              </Grid>
+
+              {/* Centre de service (optionnel) */}
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Centre de service SMS (optionnel)"
+                  value={configForm.sms?.serviceCenter || ''}
+                  onChange={(e) => setConfigForm({
+                    ...configForm,
+                    sms: { ...configForm.sms!, serviceCenter: e.target.value.replace(/[^0-9+]/g, '') }
+                  })}
+                  placeholder="Auto-detecte"
+                  helperText="Laissez vide pour detection automatique"
+                />
+              </Grid>
+
+              {/* Encodage */}
+              <Grid item xs={12} md={6}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Encodage</InputLabel>
+                  <Select
+                    value={configForm.sms?.encoding || 'auto'}
+                    label="Encodage"
+                    onChange={(e) => setConfigForm({
+                      ...configForm,
+                      sms: { ...configForm.sms!, encoding: e.target.value as 'auto' | 'gsm7' | 'ucs2' }
+                    })}
+                  >
+                    <MenuItem value="auto">Auto (recommande)</MenuItem>
+                    <MenuItem value="gsm7">GSM-7 (caracteres basiques)</MenuItem>
+                    <MenuItem value="ucs2">UCS-2 (emojis, accents)</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              {/* Bouton Appliquer */}
+              <Grid item xs={12}>
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1 }}>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    startIcon={<SaveIcon />}
+                    onClick={() => applyConfigMutation.mutate(configForm)}
+                    disabled={applyConfigMutation.isPending}
+                  >
+                    Appliquer
+                  </Button>
+                </Box>
+              </Grid>
+            </Grid>
           </Collapse>
         </CardContent>
       </Card>

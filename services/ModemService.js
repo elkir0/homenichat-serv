@@ -96,6 +96,15 @@ class ModemService {
       dataPort: '/dev/ttyUSB2',
       audioPort: '/dev/ttyUSB1',
       autoDetect: true,
+      // Configuration SMS
+      sms: {
+        enabled: true,
+        storage: 'sqlite',      // 'sqlite' | 'modem' | 'sim'
+        autoDelete: true,       // Supprimer du modem après lecture
+        deliveryReports: false, // Accusés de réception
+        serviceCenter: '',      // Auto-détecté si vide
+        encoding: 'auto',       // 'auto' | 'gsm7' | 'ucs2'
+      },
     };
   }
 
@@ -961,10 +970,16 @@ class ModemService {
   generateQuectelConf(config = {}) {
     const mergedConfig = { ...this.modemConfig, ...config };
     const profile = MODEM_PROFILES[mergedConfig.modemType] || MODEM_PROFILES.ec25;
+    const smsConfig = mergedConfig.sms || {};
 
     const modemName = mergedConfig.modemName || 'hni-modem';
     const dataPort = mergedConfig.dataPort || '/dev/ttyUSB2';
     const audioPort = mergedConfig.audioPort || '/dev/ttyUSB1';
+
+    // Mapping stockage SMS: sqlite/modem -> 'me', sim -> 'sm'
+    const msgStorage = smsConfig.storage === 'sim' ? 'sm' : 'me';
+    const autoDeleteSms = smsConfig.autoDelete !== false ? 'yes' : 'no';
+    const disableSms = smsConfig.enabled === false ? 'yes' : 'no';
 
     const confContent = `; Homenichat - Configuration chan_quectel
 ; Généré automatiquement - ${new Date().toISOString()}
@@ -983,11 +998,10 @@ data=${dataPort}
 ; Audio format (${profile.slin16 ? '16kHz' : '8kHz'})
 slin16=${profile.slin16 ? 'yes' : 'no'}
 
-; Stockage SMS sur modem
-msg_storage=${profile.msg_storage}
-
-; Délai avant réponse
-autodeletesms=yes
+; Configuration SMS
+disableSMS=${disableSms}
+msg_storage=${msgStorage}
+autodeletesms=${autoDeleteSms}
 
 ; Contexte pour les appels entrants
 context=from-gsm

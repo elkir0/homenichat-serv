@@ -905,6 +905,13 @@ router.put('/modems/config', [
   body('dataPort').optional().matches(/^\/dev\/ttyUSB\d+$/),
   body('audioPort').optional().matches(/^\/dev\/ttyUSB\d+$/),
   body('autoDetect').optional().isBoolean(),
+  // SMS Configuration
+  body('sms.enabled').optional().isBoolean(),
+  body('sms.storage').optional().isIn(['sqlite', 'modem', 'sim']),
+  body('sms.autoDelete').optional().isBoolean(),
+  body('sms.deliveryReports').optional().isBoolean(),
+  body('sms.serviceCenter').optional().matches(/^\+?[0-9]{0,15}$/),
+  body('sms.encoding').optional().isIn(['auto', 'gsm7', 'ucs2']),
 ], validate, async (req, res) => {
   try {
     if (!modemService) {
