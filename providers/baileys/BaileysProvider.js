@@ -25,6 +25,7 @@ class BaileysProvider extends WhatsAppProvider {
     this.maxRetries = 5;
     this.msgRetryCounterCache = new Map();
     this.isInitializing = false;
+    this.reconnectTimer = null; // Timer de reconnexion à annuler si connexion réussit
   }
 
   // loadState et saveState supprimés (plus de JSON)
@@ -169,24 +170,29 @@ class BaileysProvider extends WhatsAppProvider {
           // Session explicitement déconnectée par l'utilisateur - effacer
           logger.warn('Session explicitly logged out. Clearing session for fresh QR...');
           await this.clearSession();
-          setTimeout(() => this.initialize(), 3000);
+          this.scheduleReconnect(3000);
         } else if (statusCode === 401) {
           // Erreur 401 (device_removed, conflict) - NE PAS effacer, réessayer avec la même session
           logger.warn(`401 error (${lastDisconnect?.error?.data?.attrs?.type || 'unknown'}). Retrying with same session in 10s...`);
           this.retryCount++;
           if (this.retryCount <= 3) {
-            setTimeout(() => this.initialize(), 10000); // Attendre 10s avant de réessayer
+            this.scheduleReconnect(10000);
           } else {
             logger.error('Too many 401 errors. Manual intervention required.');
             this.emit('connection.update', { status: 'failed', error: 'Too many auth failures' });
           }
+        } else if (statusCode === 440) {
+          // Erreur 440 (conflict) - Une autre instance est connectée
+          // NE PAS reconnecter automatiquement pour éviter la boucle
+          logger.warn('440 conflict error - another instance is connected. NOT reconnecting automatically.');
+          this.emit('connection.update', { status: 'conflict', error: 'Another device is using this session' });
         } else if (shouldReconnect) {
           // Augmenter le délai pour éviter le spam de connexion
           this.retryCount++;
           if (this.retryCount <= this.maxRetries) {
             const delay = Math.min(5000 * this.retryCount, 30000); // Backoff exponentiel, max 30s
             logger.info(`Reconnecting in ${delay}ms... (attempt ${this.retryCount}/${this.maxRetries})`);
-            setTimeout(() => this.initialize(), delay);
+            this.scheduleReconnect(delay);
           } else {
             logger.error(`Max retries (${this.maxRetries}) reached. Stopping reconnection attempts.`);
             this.emit('connection.update', { status: 'failed', error: 'Max retries reached' });
@@ -197,6 +203,13 @@ class BaileysProvider extends WhatsAppProvider {
       } else if (connection === 'open') {
         this.connectionState = 'connected';
         this.retryCount = 0; // Reset retry counter on successful connection
+
+        // CRITICAL: Annuler tout timer de reconnexion en attente
+        if (this.reconnectTimer) {
+          logger.info('Cancelling pending reconnection timer (connection succeeded)');
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
 
         // Récupérer le numéro WhatsApp connecté (sans le device ID)
         const connectedUser = this.sock?.user;
@@ -223,6 +236,28 @@ class BaileysProvider extends WhatsAppProvider {
 
     this.sock.ev.on('creds.update', this.saveCreds);
 
+    // Setup History Sync et autres handlers
+    this.setupHistorySyncHandlers();
+  }
+
+  /**
+   * Programme une reconnexion avec un timer qui peut être annulé
+   * @param {number} delay - Délai en ms avant reconnexion
+   */
+  scheduleReconnect(delay) {
+    // Annuler tout timer précédent
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+
+    logger.info(`Scheduling reconnection in ${delay}ms...`);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.initialize();
+    }, delay);
+  }
+
+  setupHistorySyncHandlers() {
     // History Sync - utilise batch processing pour la performance
     this.sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, isLatest }) => {
       logger.info(`📜 HISTORY SYNC: ${chats.length} chats, ${contacts.length} contacts, ${messages.length} messages, isLatest=${isLatest}`);
@@ -824,6 +859,12 @@ class BaileysProvider extends WhatsAppProvider {
       if (clearData) {
         logger.info('Also clearing WhatsApp data from database...');
         chatStorage.clearWhatsAppData();
+      }
+
+      // Annuler tout timer de reconnexion
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
       }
 
       // Reset state
