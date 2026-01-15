@@ -398,11 +398,43 @@ router.get('/whatsapp/sessions', async (req, res) => {
 /**
  * POST /api/admin/whatsapp/sessions
  * Créer une nouvelle session WhatsApp (Baileys)
+ * NOTE: Pour éviter les conflits, on utilise le provider baileys par défaut
  */
 router.post('/whatsapp/sessions', [
   body('name').optional().isString(),
 ], validate, async (req, res) => {
   try {
+    // Vérifier si le provider Baileys par défaut existe déjà
+    if (providerManager) {
+      const baileysProvider = providerManager.providers?.get('baileys');
+      if (baileysProvider) {
+        const health = await baileysProvider.getHealth?.() || {};
+
+        // Si déjà connecté, retourner l'info existante
+        if (health.isConnected) {
+          return res.status(200).json({
+            success: true,
+            sessionId: 'baileys',
+            message: 'Session already connected',
+            alreadyExists: true,
+          });
+        }
+
+        // Si pas connecté, réinitialiser pour obtenir un nouveau QR
+        if (!baileysProvider.qrCode) {
+          await baileysProvider.initialize();
+        }
+
+        return res.status(200).json({
+          success: true,
+          sessionId: 'baileys',
+          message: 'Use /api/admin/whatsapp/qr/baileys to get QR code.',
+          alreadyExists: true,
+        });
+      }
+    }
+
+    // Fallback: créer via SessionManager si pas de provider par défaut
     const { name } = req.body;
     const sessionId = `baileys_${Date.now()}`;
 
