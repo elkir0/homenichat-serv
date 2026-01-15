@@ -484,9 +484,9 @@ install_gammu() {
 
     info "Installing Gammu (GSM modem support)..."
 
-    # Install gammu and dependencies
+    # Install gammu, socat (for direct modem AT commands), and dependencies
     apt-get install -y gammu gammu-smsd libgammu-dev \
-        usb-modeswitch usb-modeswitch-data \
+        usb-modeswitch usb-modeswitch-data socat \
         >> "$LOG_FILE" 2>&1 || {
         warning "Some gammu packages may not be available"
     }
@@ -713,6 +713,115 @@ UDEV_RULES
     cd /usr/src
     rm -rf asterisk-chan-quectel
     rm -rf asterisk-*/  # Clean up asterisk source now that headers are installed
+
+    # Create modem initialization script (runs at boot to enter PIN)
+    cat > /usr/local/bin/homenichat-modem-init << 'MODEM_INIT_SCRIPT'
+#!/bin/bash
+# Homenichat Modem Initialization Script
+# Enters SIM PIN code at boot if configured
+
+CONFIG_FILE="/var/lib/homenichat/modem-config.json"
+LOG_FILE="/var/log/homenichat/modem-init.log"
+MAX_RETRIES=30
+RETRY_DELAY=2
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
+}
+
+mkdir -p /var/log/homenichat
+
+log "=== Modem initialization started ==="
+
+# Read config
+if [ ! -f "$CONFIG_FILE" ]; then
+    log "Config file not found, exiting"
+    exit 0
+fi
+
+PIN_CODE=$(grep -oP '"pinCode"\s*:\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null)
+DATA_PORT=$(grep -oP '"dataPort"\s*:\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null)
+
+if [ -z "$PIN_CODE" ]; then
+    log "No PIN configured, exiting"
+    exit 0
+fi
+
+if [ -z "$DATA_PORT" ]; then
+    DATA_PORT="/dev/ttyUSB2"
+fi
+
+log "Using port: $DATA_PORT"
+
+# Wait for modem port to appear
+RETRY=0
+while [ ! -e "$DATA_PORT" ] && [ $RETRY -lt $MAX_RETRIES ]; do
+    log "Waiting for modem port... ($RETRY/$MAX_RETRIES)"
+    sleep $RETRY_DELAY
+    RETRY=$((RETRY + 1))
+done
+
+if [ ! -e "$DATA_PORT" ]; then
+    log "ERROR: Modem port $DATA_PORT not found after $MAX_RETRIES retries"
+    exit 1
+fi
+
+# Check if PIN is needed
+log "Checking SIM PIN status..."
+PIN_STATUS=$(echo -e "AT+CPIN?\r" | timeout 5 socat - "$DATA_PORT",raw,echo=0,b115200,crnl 2>/dev/null)
+
+if echo "$PIN_STATUS" | grep -q "READY"; then
+    log "SIM already unlocked"
+    exit 0
+fi
+
+if echo "$PIN_STATUS" | grep -q "SIM PIN"; then
+    log "Entering PIN code..."
+    RESULT=$(echo -e "AT+CPIN=\"$PIN_CODE\"\r" | timeout 5 socat - "$DATA_PORT",raw,echo=0,b115200,crnl 2>/dev/null)
+
+    if echo "$RESULT" | grep -q "OK"; then
+        log "PIN accepted successfully"
+        # Give modem time to register on network
+        sleep 3
+        # Reload chan_quectel in Asterisk
+        asterisk -rx "module reload chan_quectel" >> "$LOG_FILE" 2>&1 || true
+        log "Modem initialization complete"
+    else
+        log "ERROR: PIN entry failed: $RESULT"
+        exit 1
+    fi
+elif echo "$PIN_STATUS" | grep -q "PUK"; then
+    log "ERROR: SIM is PUK locked!"
+    exit 1
+else
+    log "Unknown PIN status: $PIN_STATUS"
+fi
+
+exit 0
+MODEM_INIT_SCRIPT
+
+    chmod +x /usr/local/bin/homenichat-modem-init
+
+    # Create systemd service for modem init
+    cat > /etc/systemd/system/homenichat-modem-init.service << 'MODEM_SERVICE'
+[Unit]
+Description=Homenichat Modem Initialization (PIN entry)
+After=network.target
+Before=asterisk.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/homenichat-modem-init
+RemainAfterExit=yes
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
+MODEM_SERVICE
+
+    systemctl daemon-reload
+    systemctl enable homenichat-modem-init.service >> "$LOG_FILE" 2>&1 || true
 
     success "chan_quectel installed"
 }
