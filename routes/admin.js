@@ -365,8 +365,26 @@ router.get('/whatsapp/sessions', async (req, res) => {
   try {
     let sessions = [];
 
+    // Inclure le provider Baileys par défaut s'il existe
+    if (providerManager) {
+      const baileysProvider = providerManager.providers?.get('baileys');
+      if (baileysProvider) {
+        const health = await baileysProvider.getHealth?.() || {};
+        sessions.push({
+          id: 'baileys',
+          name: 'WhatsApp (Baileys)',
+          status: health.isConnected ? 'connected' : (baileysProvider.qrCode ? 'qr_pending' : 'disconnected'),
+          phoneNumber: health.phoneNumber || null,
+          isDefault: true,
+          createdAt: null,
+        });
+      }
+    }
+
+    // Ajouter les sessions du SessionManager si disponible
     if (sessionManager) {
-      sessions = await sessionManager.listSessions?.() || [];
+      const managedSessions = await sessionManager.listSessions?.() || [];
+      sessions = sessions.concat(managedSessions.filter(s => s.id !== 'baileys'));
     }
 
     res.json({ sessions });
