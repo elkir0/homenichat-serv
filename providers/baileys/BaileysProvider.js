@@ -25,7 +25,7 @@ class BaileysProvider extends WhatsAppProvider {
     this.maxRetries = 5;
     this.msgRetryCounterCache = new Map();
     this.isInitializing = false;
-    this.initPromise = null; // Promesse pour éviter les appels concurrents à initialize()
+    this._initLock = false; // Verrou synchrone pour éviter les appels concurrents
     this.reconnectTimer = null; // Timer de reconnexion à annuler si connexion réussit
     this.socketId = 0; // ID unique pour chaque socket créé
   }
@@ -57,24 +57,24 @@ class BaileysProvider extends WhatsAppProvider {
    * Initialise le provider
    */
   async initialize() {
-    // Si une initialisation est déjà en cours, attendre qu'elle se termine
-    if (this.initPromise) {
-      logger.info('Baileys provider already initializing, waiting for completion...');
-      return this.initPromise;
-    }
-
-    // Si déjà connecté, ne rien faire
-    if (this.sock && this.connectionState === 'connected') {
-      logger.info('Baileys provider already connected, skipping initialization.');
+    // Verrou synchrone AVANT tout await
+    if (this._initLock) {
+      logger.info('Baileys provider locked, skipping duplicate initialize call.');
       return;
     }
+    this._initLock = true;
 
-    // Créer une promesse pour bloquer les appels concurrents
-    this.initPromise = this._doInitialize();
     try {
-      await this.initPromise;
+      // Si déjà connecté ou en cours de connexion, ne rien faire
+      if (this.sock && (this.connectionState === 'connected' || this.connectionState === 'connecting')) {
+        logger.info(`Baileys provider already ${this.connectionState}, skipping initialization.`);
+        return;
+      }
+
+      await this._doInitialize();
     } finally {
-      this.initPromise = null;
+      // Libérer le verrou après un court délai pour éviter les appels trop rapides
+      setTimeout(() => { this._initLock = false; }, 1000);
     }
   }
 
