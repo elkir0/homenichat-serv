@@ -26,6 +26,7 @@ class BaileysProvider extends WhatsAppProvider {
     this.msgRetryCounterCache = new Map();
     this.isInitializing = false;
     this.reconnectTimer = null; // Timer de reconnexion à annuler si connexion réussit
+    this.socketId = 0; // ID unique pour chaque socket créé
   }
 
   // loadState et saveState supprimés (plus de JSON)
@@ -88,6 +89,11 @@ class BaileysProvider extends WhatsAppProvider {
         this.sock.end(undefined);
       }
 
+      // Incrémenter l'ID du socket pour tracker les événements
+      this.socketId++;
+      const currentSocketId = this.socketId;
+      logger.info(`Creating socket #${currentSocketId}`);
+
       this.sock = socketFn({
         version,
         logger: pino({ level: 'silent' }), // Réduire le bruit
@@ -119,8 +125,11 @@ class BaileysProvider extends WhatsAppProvider {
         },
       });
 
+      // Stocker l'ID sur le socket pour le tracking
+      this.sock._socketId = currentSocketId;
+
       // Gestionnaires d'événements
-      this.setupEventHandlers();
+      this.setupEventHandlers(currentSocketId);
 
     } catch (error) {
       logger.error('Error starting socket:', error);
@@ -130,9 +139,14 @@ class BaileysProvider extends WhatsAppProvider {
     }
   }
 
-  setupEventHandlers() {
+  setupEventHandlers(socketId) {
     // Écoute directe pour 'messages.upsert'
     this.sock.ev.on('messages.upsert', async (upsert) => {
+      // Ignorer les événements des anciens sockets
+      if (socketId !== this.socketId) {
+        logger.info(`[Socket #${socketId}] Ignoring stale messages.upsert (current: #${this.socketId})`);
+        return;
+      }
       logger.info(`🔥 MESSAGES UPSERT: ${JSON.stringify(upsert, null, 2)}`);
       try {
         await this.handleMessagesUpsert(upsert);
@@ -143,7 +157,14 @@ class BaileysProvider extends WhatsAppProvider {
 
     this.sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
-      logger.info(`CONNECTION UPDATE: connection=${connection}, hasQR=${!!qr}, keys=${Object.keys(update).join(',')}`);
+      logger.info(`[Socket #${socketId}] CONNECTION UPDATE: connection=${connection}, hasQR=${!!qr}, keys=${Object.keys(update).join(',')}`);
+
+      // Ignorer les événements des anciens sockets (sauf pour 'close' qui doit toujours être logué)
+      if (socketId !== this.socketId) {
+        logger.info(`[Socket #${socketId}] Ignoring stale event (current: #${this.socketId})`);
+        return;
+      }
+
       if (lastDisconnect) {
         logger.info(`LAST DISCONNECT: ${JSON.stringify(lastDisconnect?.error?.output || lastDisconnect)}`);
       }
@@ -237,7 +258,7 @@ class BaileysProvider extends WhatsAppProvider {
     this.sock.ev.on('creds.update', this.saveCreds);
 
     // Setup History Sync et autres handlers
-    this.setupHistorySyncHandlers();
+    this.setupHistorySyncHandlers(socketId);
   }
 
   /**
@@ -257,9 +278,14 @@ class BaileysProvider extends WhatsAppProvider {
     }, delay);
   }
 
-  setupHistorySyncHandlers() {
+  setupHistorySyncHandlers(socketId) {
     // History Sync - utilise batch processing pour la performance
     this.sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, isLatest }) => {
+      // Ignorer les événements des anciens sockets
+      if (socketId !== this.socketId) {
+        logger.info(`[Socket #${socketId}] Ignoring stale history sync (current: #${this.socketId})`);
+        return;
+      }
       logger.info(`📜 HISTORY SYNC: ${chats.length} chats, ${contacts.length} contacts, ${messages.length} messages, isLatest=${isLatest}`);
 
       // IMPORTANT: Vérifier si le compte a changé AVANT de stocker les données
