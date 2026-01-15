@@ -48,13 +48,15 @@ providers:
   # ----------------------------------------------------------
   sms:
     # SMS Bridge interne (Android Gateway)
+    # IMPORTANT: Désactivé par défaut. Activer uniquement si vous avez un trunk SMS configuré.
     - id: sms_bridge
       type: sms_bridge
-      enabled: true
+      enabled: false
       config:
         api_url: "${SMS_BRIDGE_URL:https://192.168.1.155:8443}"
         api_token: "${PWA_API_TOKEN}"
         sync_interval_ms: 5000
+        max_sync_interval_ms: 60000  # Max 1 min entre les polls en cas d'erreur
 
     # OVH SMS (France)
     - id: ovh_sms

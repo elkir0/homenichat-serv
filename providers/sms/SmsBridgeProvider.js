@@ -14,9 +14,16 @@ class SmsBridgeProvider extends WhatsAppProvider {
         this.apiUrl = config.apiUrl || 'https://192.168.1.155:8443';
         this.apiToken = config.apiToken || '';
         this.syncIntervalMs = config.syncIntervalMs || 5000;
+        this.maxSyncIntervalMs = config.maxSyncIntervalMs || 60000; // Max 1 minute between polls on error
 
         this.connectionState = 'disconnected';
         this.pollingInterval = null;
+
+        // Error tracking for exponential backoff
+        this.consecutiveErrors = 0;
+        this.lastErrorMessage = null;
+        this.currentBackoffMs = this.syncIntervalMs;
+        this.maxConsecutiveErrorLogs = 3; // Only log first N consecutive errors
 
         // Client Axios avec SSL auto-signé supporté
         this.client = axios.create({
@@ -140,12 +147,35 @@ class SmsBridgeProvider extends WhatsAppProvider {
 
         logger.info(`Starting SMS Bridge polling every ${this.syncIntervalMs}ms`);
 
+        // Reset backoff state
+        this.consecutiveErrors = 0;
+        this.currentBackoffMs = this.syncIntervalMs;
+
         // Premier sync immédiat
         this.checkForNewMessages();
 
-        this.pollingInterval = setInterval(async () => {
+        // Use dynamic interval via setTimeout for backoff support
+        this.scheduleNextPoll();
+    }
+
+    scheduleNextPoll() {
+        if (this.pollingTimeout) clearTimeout(this.pollingTimeout);
+
+        this.pollingTimeout = setTimeout(async () => {
             await this.checkForNewMessages();
-        }, this.syncIntervalMs);
+            this.scheduleNextPoll();
+        }, this.currentBackoffMs);
+    }
+
+    stopPolling() {
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+        }
+        if (this.pollingTimeout) {
+            clearTimeout(this.pollingTimeout);
+            this.pollingTimeout = null;
+        }
     }
 
     async checkForNewMessages() {
@@ -166,8 +196,32 @@ class SmsBridgeProvider extends WhatsAppProvider {
                 await this.syncMessagesForChat(conv.id, chatData.id);
             }
 
+            // Success: reset backoff
+            if (this.consecutiveErrors > 0) {
+                logger.info('SMS Bridge connection restored');
+            }
+            this.consecutiveErrors = 0;
+            this.lastErrorMessage = null;
+            this.currentBackoffMs = this.syncIntervalMs;
+
         } catch (error) {
-            logger.warn('SMS Polling Error:', error.message); // Warn pour ne pas spammer error
+            this.consecutiveErrors++;
+
+            // Only log first few consecutive errors, then suppress
+            const isSameError = this.lastErrorMessage === error.message;
+            if (this.consecutiveErrors <= this.maxConsecutiveErrorLogs || !isSameError) {
+                logger.warn(`SMS Polling Error (attempt ${this.consecutiveErrors}): ${error.message}`);
+                if (this.consecutiveErrors === this.maxConsecutiveErrorLogs) {
+                    logger.warn('SMS Bridge: Suppressing repeated error logs. Will notify when connection is restored.');
+                }
+            }
+            this.lastErrorMessage = error.message;
+
+            // Exponential backoff: double the interval on each error, up to max
+            this.currentBackoffMs = Math.min(
+                this.currentBackoffMs * 2,
+                this.maxSyncIntervalMs
+            );
         }
     }
 
@@ -388,7 +442,7 @@ class SmsBridgeProvider extends WhatsAppProvider {
 
     // --- Stubs ---
     async logout() {
-        if (this.pollingInterval) clearInterval(this.pollingInterval);
+        this.stopPolling();
         this.connectionState = 'disconnected';
         return { success: true };
     }

@@ -86,10 +86,10 @@ class ProviderManager {
       // Si pas de config, créer une config par défaut
       logger.warn('No provider config found, creating default');
       this.config = {
-        defaultProvider: 'sms-bridge',
+        defaultProvider: 'baileys',
         providers: {
           baileys: {
-            enabled: false,
+            enabled: true,
             sessionName: process.env.BAILEYS_SESSION_NAME || 'lekipchat',
             webhookUrl: process.env.WEBHOOK_URL || ''
           },
@@ -101,10 +101,11 @@ class ProviderManager {
             webhookVerifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || ''
           },
           'sms-bridge': {
-            enabled: true,
+            enabled: false, // Disabled by default - enable only if SMS trunk is configured
             apiUrl: process.env.SMS_BRIDGE_URL || 'https://192.168.1.155:8443',
             apiToken: process.env.PWA_API_TOKEN || '',
-            syncIntervalMs: 5000
+            syncIntervalMs: 5000,
+            maxSyncIntervalMs: 60000 // Max 1 min between polls on error
           }
         }
       };

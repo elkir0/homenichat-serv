@@ -227,7 +227,7 @@ class ChatStorageServicePersistent {
       this.updateChatName(chatId, messageData.pushName);
     }
 
-    // Données Message
+    // Données Message - IMPORTANT: préserver le message original pour le téléchargement média
     const messageToStore = {
       id: messageData.id || messageData.key?.id || `msg_${Date.now()} `,
       chatId: chatId,
@@ -237,7 +237,11 @@ class ChatStorageServicePersistent {
       status: mapMessageStatus(messageData.status) || 'received',
       type: messageData.type || 'text',
       userId: messageData.participant || chatId, // Pour les groupes
-      mediaUrl: messageData.media?.localUrl || messageData.mediaUrl || null
+      mediaUrl: messageData.media?.localUrl || messageData.mediaUrl || null,
+      // Préserver les données originales Baileys pour le téléchargement média ultérieur
+      key: messageData.key,
+      message: messageData.message,
+      messageTimestamp: messageData.messageTimestamp
     };
 
     try {
