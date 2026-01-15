@@ -20,6 +20,7 @@ const sessionsRoutes = require('./routes/sessions');
 const callHistoryRoutes = require('./routes/call-history');
 const configRoutes = require('./routes/config');
 const { router: adminRouter, initAdminRoutes } = require('./routes/admin');
+const { router: discoveryRouter, initDiscoveryRoutes } = require('./routes/discovery');
 // const MessagePoller = require('./messagePoller');
 // const { logWebhook } = require('./webhookDebugger');
 const { verifyToken, verifyWebSocketToken } = require('./middleware/auth');
@@ -175,6 +176,13 @@ app.use('/api/config', configRoutes); // Configuration YAML multi-provider
 
 // Routes Admin (protégées par auth + admin only)
 app.use('/api/admin', verifyToken, adminOnlyMiddleware(securityService), adminRouter);
+
+// Routes Discovery pour l'app mobile (protégées par auth simple)
+// Health check sans auth, autres routes avec auth
+app.get('/api/discovery/health', (req, res) => {
+  res.json({ status: 'ok', server: 'Homenichat-serv', timestamp: Date.now() });
+});
+app.use('/api/discovery', verifyToken, discoveryRouter);
 
 // Endpoint configuration VoIP (protégé par token)
 app.get('/api/config/voip', verifyToken, (req, res) => {
@@ -593,6 +601,14 @@ async function startServer() {
       db,
     });
     logger.info('Admin routes initialized successfully');
+
+    // Initialiser les routes discovery pour l'app mobile
+    initDiscoveryRoutes({
+      securityService,
+      providerManager,
+      db,
+    });
+    logger.info('Discovery routes initialized successfully');
 
     // Initialiser le gestionnaire de providers
     await providerManager.initialize();
