@@ -588,19 +588,86 @@ class ModemService {
   }
 
   /**
-   * Envoie un SMS
+   * Envoie un SMS directement via commandes AT (bypass Asterisk)
+   * Plus fiable que chan_quectel pour EC25
    */
   async sendSms(modemId, to, message) {
     if (!to || !message) {
       throw new Error('Missing "to" or "message"');
     }
 
-    // Échapper les caractères spéciaux
-    const safeMessage = message.replace(/"/g, '\\"').replace(/'/g, "\\'");
-    const result = await this.asteriskCmd(`quectel sms ${modemId} ${to} "${safeMessage}"`);
+    const dataPort = this.modemConfig.dataPort || '/dev/ttyUSB2';
 
-    this.logger.info(`[ModemService] SMS sent via ${modemId} to ${to}`);
-    return { success: true, modem: modemId, to, result };
+    try {
+      // Script Python inline pour envoi SMS robuste
+      const pythonScript = `
+import serial
+import time
+import sys
+
+port = "${dataPort}"
+phone = "${to}"
+message = """${message.replace(/"/g, '\\"')}"""
+
+try:
+    ser = serial.Serial(port, 115200, timeout=5)
+    time.sleep(0.3)
+    ser.flushInput()
+
+    # Mode texte
+    ser.write(b"AT+CMGF=1\\r\\n")
+    time.sleep(0.5)
+    r = ser.read(100).decode(errors="ignore")
+    if "OK" not in r:
+        print("ERROR: CMGF failed")
+        sys.exit(1)
+
+    # Préparer envoi
+    cmd = 'AT+CMGS="' + phone + '"\\r\\n'
+    ser.write(cmd.encode())
+    time.sleep(2)
+
+    # Message + Ctrl+Z
+    ser.write((message + chr(26)).encode())
+    time.sleep(15)
+    r = ser.read(500).decode(errors="ignore")
+
+    ser.close()
+
+    if "+CMGS" in r or "OK" in r:
+        print("OK")
+        sys.exit(0)
+    else:
+        print("ERROR: " + r.replace("\\n", " "))
+        sys.exit(1)
+
+except Exception as e:
+    print("ERROR: " + str(e))
+    sys.exit(1)
+`;
+
+      // Exécuter via Python
+      const result = await this.runCmd(`python3 -c '${pythonScript.replace(/'/g, "'\"'\"'")}'`, 30000);
+
+      if (result && result.includes('OK')) {
+        this.logger.info(`[ModemService] SMS sent directly via ${dataPort} to ${to}`);
+        return { success: true, modem: modemId, to, method: 'direct-at' };
+      } else {
+        throw new Error(result || 'Unknown error sending SMS');
+      }
+    } catch (error) {
+      // Fallback: essayer via Asterisk quand même
+      this.logger.warn(`[ModemService] Direct SMS failed, trying Asterisk: ${error.message}`);
+      try {
+        const safeMessage = message.replace(/"/g, '\\"').replace(/'/g, "\\'");
+        const result = await this.asteriskCmd(`quectel sms send ${modemId} ${to} "${safeMessage}"`);
+        this.logger.info(`[ModemService] SMS sent via Asterisk ${modemId} to ${to}`);
+        return { success: true, modem: modemId, to, method: 'asterisk', result };
+      } catch (asteriskError) {
+        this.logger.error(`[ModemService] All SMS methods failed for ${to}`);
+        throw new Error(`SMS failed: Direct (${error.message}), Asterisk (${asteriskError.message})`);
+      }
+    }
   }
 
   /**
