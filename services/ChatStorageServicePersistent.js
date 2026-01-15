@@ -2,6 +2,30 @@ const db = require('./DatabaseService');
 const logger = require('../utils/logger'); // Use shared logger
 
 /**
+ * Map Baileys numeric status to string status
+ * Baileys: 0=ERROR, 1=PENDING, 2=SERVER_ACK, 3=DELIVERY_ACK, 4=READ, 5=PLAYED
+ */
+function mapMessageStatus(status) {
+  if (typeof status === 'string') {
+    // Already a string, return as-is if valid
+    if (['sending', 'sent', 'delivered', 'read', 'played', 'received', 'failed'].includes(status)) {
+      return status;
+    }
+  }
+  // Convert numeric status to string
+  const numStatus = parseInt(status, 10);
+  switch (numStatus) {
+    case 0: return 'failed';
+    case 1: return 'sending';
+    case 2: return 'sent';
+    case 3: return 'delivered';
+    case 4: return 'read';
+    case 5: return 'read'; // PLAYED = read for voice messages
+    default: return 'sent';
+  }
+}
+
+/**
  * Service de stockage des conversations utilisant DatabaseService (SQLite)
  * Centralise la gestion des chats et messages pour tous les providers
  */
@@ -124,7 +148,7 @@ class ChatStorageServicePersistent {
         type: messageData.type || 'text',
         content: messageData.content || messageData.text,
         timestamp: messageData.timestamp,
-        status: messageData.status || 'received',
+        status: mapMessageStatus(messageData.status) || 'received',
         mediaUrl: messageData.mediaUrl || null,
         rawData: JSON.stringify(messageData)
       });
@@ -210,7 +234,7 @@ class ChatStorageServicePersistent {
       content: messageText,
       timestamp: timestamp,
       fromMe: messageData.fromMe || messageData.key?.fromMe || false,
-      status: messageData.status || 'received',
+      status: mapMessageStatus(messageData.status) || 'received',
       type: messageData.type || 'text',
       userId: messageData.participant || chatId, // Pour les groupes
       mediaUrl: messageData.media?.localUrl || messageData.mediaUrl || null
@@ -285,7 +309,7 @@ class ChatStorageServicePersistent {
         },
         messageTimestamp: msg.timestamp,
         pushName: '', // Pas stocké séparément parfois
-        status: msg.status,
+        status: mapMessageStatus(msg.status),
         type: msg.type,
         media: msg.media_url ? { url: msg.media_url, localUrl: msg.media_url } : null
       }));
@@ -362,7 +386,7 @@ class ChatStorageServicePersistent {
         type: messageData.type || 'text',
         content: messageText,
         timestamp: timestamp,
-        status: messageData.status || 'received',
+        status: mapMessageStatus(messageData.status) || 'received',
         mediaUrl: messageData.media?.localUrl || messageData.mediaUrl || null,
         rawData: JSON.stringify(messageData)
       });
