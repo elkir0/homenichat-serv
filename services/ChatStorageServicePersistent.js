@@ -307,6 +307,22 @@ class ChatStorageServicePersistent {
           }
         }
 
+        // Détecter le vrai type de message (peut être mal stocké comme 'text')
+        let actualType = msg.type;
+        if (msg.type === 'text' && msg.content) {
+          if (msg.content.startsWith('📷')) actualType = 'image';
+          else if (msg.content.startsWith('🎥')) actualType = 'video';
+          else if (msg.content.startsWith('🎵')) actualType = 'audio';
+          else if (msg.content.startsWith('📄')) actualType = 'document';
+        }
+        // Aussi détecter via raw_data si disponible
+        if (rawData?.message) {
+          if (rawData.message.imageMessage) actualType = 'image';
+          else if (rawData.message.videoMessage) actualType = 'video';
+          else if (rawData.message.audioMessage) actualType = 'audio';
+          else if (rawData.message.documentMessage) actualType = 'document';
+        }
+
         // Construire l'objet message selon le type
         let messageObj = {
           conversation: msg.content || '',
@@ -314,7 +330,7 @@ class ChatStorageServicePersistent {
         };
 
         // Ajouter les propriétés média si c'est un message média
-        if (msg.type === 'image') {
+        if (actualType === 'image') {
           messageObj.imageMessage = {
             caption: msg.content?.startsWith('📷 ') ? msg.content.substring(3) : '',
             localMediaId: msg.media_url?.split('/').pop(),
@@ -322,14 +338,14 @@ class ChatStorageServicePersistent {
             mimetype: rawData?.message?.imageMessage?.mimetype || 'image/jpeg',
             hasMedia: true
           };
-        } else if (msg.type === 'video') {
+        } else if (actualType === 'video') {
           messageObj.videoMessage = {
             caption: msg.content?.startsWith('🎥 ') ? msg.content.substring(3) : '',
             localMediaId: msg.media_url?.split('/').pop(),
             mimetype: rawData?.message?.videoMessage?.mimetype || 'video/mp4',
             hasMedia: true
           };
-        } else if (msg.type === 'audio') {
+        } else if (actualType === 'audio') {
           messageObj.audioMessage = {
             ptt: true,
             localMediaId: msg.media_url?.split('/').pop(),
@@ -337,7 +353,7 @@ class ChatStorageServicePersistent {
             seconds: rawData?.message?.audioMessage?.seconds,
             hasMedia: true
           };
-        } else if (msg.type === 'document') {
+        } else if (actualType === 'document') {
           messageObj.documentMessage = {
             fileName: rawData?.message?.documentMessage?.fileName || 'Document',
             localMediaId: msg.media_url?.split('/').pop(),
@@ -357,7 +373,7 @@ class ChatStorageServicePersistent {
           messageTimestamp: msg.timestamp,
           pushName: '',
           status: mapMessageStatus(msg.status),
-          type: msg.type,
+          type: actualType,
           media: msg.media_url ? { url: msg.media_url, localUrl: msg.media_url } : null
         };
       });
