@@ -159,7 +159,8 @@ class ModemService {
    * Exécute une commande Asterisk CLI
    */
   async asteriskCmd(command) {
-    return this.runCmd(`asterisk -rx '${command}' 2>/dev/null`);
+    // Utiliser le chemin complet car asterisk peut ne pas être dans le PATH
+    return this.runCmd(`/usr/sbin/asterisk -rx '${command}'`);
   }
 
   /**
