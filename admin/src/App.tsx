@@ -9,6 +9,7 @@ import {
   ProvidersPage,
   WhatsAppPage,
   SmsPage,
+  ModemsPage,
   VoipPage,
   UsersPage,
   SecurityPage,
@@ -123,6 +124,7 @@ function App() {
                         <Route path="/providers" element={<ProvidersPage />} />
                         <Route path="/whatsapp" element={<WhatsAppPage />} />
                         <Route path="/sms" element={<SmsPage />} />
+                        <Route path="/modems" element={<ModemsPage />} />
                         <Route path="/voip" element={<VoipPage />} />
                         <Route path="/users" element={<UsersPage />} />
                         <Route path="/security" element={<SecurityPage />} />

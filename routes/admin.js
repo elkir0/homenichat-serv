@@ -16,6 +16,10 @@ let providerManager = null;
 let sessionManager = null;
 let configService = null;
 let db = null;
+let modemService = null;
+
+// Import ModemService
+const ModemService = require('../services/ModemService');
 
 /**
  * Initialise les routes avec les services nécessaires
@@ -26,6 +30,13 @@ function initAdminRoutes(services) {
   sessionManager = services.sessionManager;
   configService = services.configService;
   db = services.db;
+
+  // Initialize ModemService
+  modemService = new ModemService({
+    modems: services.modemConfig || {},
+    logger: console,
+  });
+
   return router;
 }
 
@@ -541,7 +552,7 @@ router.delete('/whatsapp/sessions/:id', [
 });
 
 // =============================================================================
-// MODEMS (pour future implémentation)
+// MODEMS - GSM Modem Management via chan_quectel/Asterisk
 // =============================================================================
 
 /**
@@ -550,13 +561,63 @@ router.delete('/whatsapp/sessions/:id', [
  */
 router.get('/modems', async (req, res) => {
   try {
-    // TODO: Implémenter ModemManagerService
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const modemIds = await modemService.listModems();
     const modems = [];
 
-    res.json({ modems, message: 'Modem management coming soon' });
+    for (const id of modemIds) {
+      const status = await modemService.collectModemStatus(id);
+      modems.push(status);
+    }
+
+    res.json({ modems });
 
   } catch (error) {
     console.error('[Admin] List modems error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/modems/full-status
+ * État complet de tous les modems, services, système
+ */
+router.get('/modems/full-status', async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const data = await modemService.collectAll();
+    res.json(data);
+
+  } catch (error) {
+    console.error('[Admin] Full modem status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/modems/watchdog-logs
+ * Logs du watchdog
+ */
+router.get('/modems/watchdog-logs', [
+  query('lines').optional().isInt({ min: 1, max: 200 }).toInt(),
+], validate, async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const { lines = 30 } = req.query;
+    const logs = await modemService.collectWatchdogLogs(lines);
+    res.json(logs);
+
+  } catch (error) {
+    console.error('[Admin] Watchdog logs error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -567,8 +628,25 @@ router.get('/modems', async (req, res) => {
  */
 router.post('/modems/scan', async (req, res) => {
   try {
-    // TODO: Implémenter la détection
-    res.json({ modems: [], message: 'Scan not yet implemented' });
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const modems = await modemService.listModems();
+    const results = [];
+
+    for (const id of modems) {
+      const status = await modemService.collectModemStatus(id);
+      results.push(status);
+    }
+
+    await securityService?.logAction(req.user.id, 'modems_scanned', {
+      category: 'admin',
+      modemCount: results.length,
+      username: req.user.username,
+    }, req);
+
+    res.json({ modems: results });
 
   } catch (error) {
     console.error('[Admin] Scan modems error:', error);
@@ -584,16 +662,15 @@ router.get('/modems/:id/status', [
   param('id').notEmpty(),
 ], validate, async (req, res) => {
   try {
-    const { id } = req.params;
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
 
-    // TODO: Implémenter
-    res.json({
-      id,
-      connected: false,
-      signalStrength: null,
-      operator: null,
-      message: 'Status not yet implemented',
-    });
+    const { id } = req.params;
+    const status = await modemService.collectModemStatus(id);
+    const stats = await modemService.collectModemStats(id);
+
+    res.json({ status, stats });
 
   } catch (error) {
     console.error('[Admin] Get modem status error:', error);
@@ -602,26 +679,174 @@ router.get('/modems/:id/status', [
 });
 
 /**
+ * POST /api/admin/modems/:id/restart
+ * Redémarrer un modem
+ */
+router.post('/modems/:id/restart', [
+  param('id').notEmpty(),
+], validate, async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const { id } = req.params;
+    const result = await modemService.restartModem(id);
+
+    await securityService?.logAction(req.user.id, 'modem_restarted', {
+      category: 'admin',
+      resource: `modem:${id}`,
+      username: req.user.username,
+    }, req);
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[Admin] Restart modem error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modems/:id/at-command
+ * Envoyer une commande AT
+ */
+router.post('/modems/:id/at-command', [
+  param('id').notEmpty(),
+  body('command').notEmpty().matches(/^AT/i).withMessage('Command must start with AT'),
+], validate, async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const { id } = req.params;
+    const { command } = req.body;
+    const result = await modemService.sendAtCommand(id, command);
+
+    await securityService?.logAction(req.user.id, 'at_command_sent', {
+      category: 'admin',
+      resource: `modem:${id}`,
+      command,
+      username: req.user.username,
+    }, req);
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[Admin] AT command error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * POST /api/admin/modems/:id/sms
- * Envoyer un SMS test via un modem
+ * Envoyer un SMS via un modem
  */
 router.post('/modems/:id/sms', [
   param('id').notEmpty(),
-  body('to').matches(/^\+?[0-9]{10,15}$/),
-  body('message').notEmpty().isLength({ max: 160 }),
+  body('to').matches(/^\+?[0-9]{6,15}$/).withMessage('Invalid phone number'),
+  body('message').notEmpty().isLength({ max: 500 }).withMessage('Message required (max 500 chars)'),
 ], validate, async (req, res) => {
   try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
     const { id } = req.params;
     const { to, message } = req.body;
+    const result = await modemService.sendSms(id, to, message);
 
-    // TODO: Implémenter
-    res.json({
-      success: false,
-      message: 'SMS via modem not yet implemented',
-    });
+    await securityService?.logAction(req.user.id, 'sms_sent_via_modem', {
+      category: 'admin',
+      resource: `modem:${id}`,
+      to,
+      username: req.user.username,
+    }, req);
+
+    res.json(result);
 
   } catch (error) {
     console.error('[Admin] Send SMS via modem error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modems/:id/configure-audio
+ * Configure l'audio 16kHz pour un modem
+ */
+router.post('/modems/:id/configure-audio', [
+  param('id').notEmpty(),
+], validate, async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const { id } = req.params;
+    const result = await modemService.configureAudio(id);
+
+    await securityService?.logAction(req.user.id, 'modem_audio_configured', {
+      category: 'admin',
+      resource: `modem:${id}`,
+      username: req.user.username,
+    }, req);
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[Admin] Configure audio error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modems/restart-asterisk
+ * Redémarrer Asterisk
+ */
+router.post('/modems/restart-asterisk', async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const result = await modemService.restartAsterisk();
+
+    await securityService?.logAction(req.user.id, 'asterisk_restarted', {
+      category: 'admin',
+      username: req.user.username,
+    }, req);
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[Admin] Restart Asterisk error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modems/restart-services
+ * Redémarrer tous les services modem
+ */
+router.post('/modems/restart-services', async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const result = await modemService.restartAllServices();
+
+    await securityService?.logAction(req.user.id, 'modem_services_restarted', {
+      category: 'admin',
+      username: req.user.username,
+    }, req);
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[Admin] Restart services error:', error);
     res.status(500).json({ error: error.message });
   }
 });
