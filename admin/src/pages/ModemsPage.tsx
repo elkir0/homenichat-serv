@@ -63,6 +63,10 @@ interface ModemStatus {
   name: string;
   number: string;
   state: string;
+  stateMessage?: string;
+  needsPin?: boolean;
+  pinAttemptsRemaining?: number;
+  pinLocked?: boolean;
   rssi: number;
   rssiDbm: number;
   rssiPercent: number;
@@ -583,7 +587,8 @@ export default function ModemsPage() {
     },
   });
 
-  const initializeModemMutation = useMutation({
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _initializeModemMutation = useMutation({
     mutationFn: (modemId?: string) => modemsApi.initializeModem(modemId),
     onSuccess: (result) => {
       setActionResult({
