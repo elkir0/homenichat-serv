@@ -587,20 +587,6 @@ export default function ModemsPage() {
     },
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const _initializeModemMutation = useMutation({
-    mutationFn: (modemId?: string) => modemsApi.initializeModem(modemId),
-    onSuccess: (result) => {
-      setActionResult({
-        success: result.success,
-        message: `PIN: ${result.pinStatus.message}${result.audioConfigured ? ', Audio configuré' : ''}`,
-      });
-      refetchSimStatus();
-    },
-    onError: (err: Error) => {
-      setActionResult({ success: false, message: err.message });
-    },
-  });
 
   // Handlers
   const handleAtCommand = () => {
