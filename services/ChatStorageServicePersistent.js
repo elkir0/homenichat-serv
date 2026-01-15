@@ -296,23 +296,71 @@ class ChatStorageServicePersistent {
         `).all(chatId, limit);
 
       // Formatage pour le frontend
-      const messages = rows.reverse().map(msg => ({
-        id: msg.id,
-        key: {
-          id: msg.id,
-          fromMe: msg.from_me === 1,
-          remoteJid: chatId
-        },
-        message: {
+      const messages = rows.reverse().map(msg => {
+        // Parse raw_data si disponible
+        let rawData = null;
+        if (msg.raw_data) {
+          try {
+            rawData = JSON.parse(msg.raw_data);
+          } catch (e) {
+            // Ignore parse errors
+          }
+        }
+
+        // Construire l'objet message selon le type
+        let messageObj = {
           conversation: msg.content || '',
           messageTimestamp: msg.timestamp
-        },
-        messageTimestamp: msg.timestamp,
-        pushName: '', // Pas stocké séparément parfois
-        status: mapMessageStatus(msg.status),
-        type: msg.type,
-        media: msg.media_url ? { url: msg.media_url, localUrl: msg.media_url } : null
-      }));
+        };
+
+        // Ajouter les propriétés média si c'est un message média
+        if (msg.type === 'image') {
+          messageObj.imageMessage = {
+            caption: msg.content?.startsWith('📷 ') ? msg.content.substring(3) : '',
+            localMediaId: msg.media_url?.split('/').pop(),
+            jpegThumbnail: rawData?.message?.imageMessage?.jpegThumbnail,
+            mimetype: rawData?.message?.imageMessage?.mimetype || 'image/jpeg',
+            hasMedia: true
+          };
+        } else if (msg.type === 'video') {
+          messageObj.videoMessage = {
+            caption: msg.content?.startsWith('🎥 ') ? msg.content.substring(3) : '',
+            localMediaId: msg.media_url?.split('/').pop(),
+            mimetype: rawData?.message?.videoMessage?.mimetype || 'video/mp4',
+            hasMedia: true
+          };
+        } else if (msg.type === 'audio') {
+          messageObj.audioMessage = {
+            ptt: true,
+            localMediaId: msg.media_url?.split('/').pop(),
+            mimetype: rawData?.message?.audioMessage?.mimetype || 'audio/ogg',
+            seconds: rawData?.message?.audioMessage?.seconds,
+            hasMedia: true
+          };
+        } else if (msg.type === 'document') {
+          messageObj.documentMessage = {
+            fileName: rawData?.message?.documentMessage?.fileName || 'Document',
+            localMediaId: msg.media_url?.split('/').pop(),
+            mimetype: rawData?.message?.documentMessage?.mimetype,
+            hasMedia: true
+          };
+        }
+
+        return {
+          id: msg.id,
+          key: {
+            id: msg.id,
+            fromMe: msg.from_me === 1,
+            remoteJid: chatId
+          },
+          message: messageObj,
+          messageTimestamp: msg.timestamp,
+          pushName: '',
+          status: mapMessageStatus(msg.status),
+          type: msg.type,
+          media: msg.media_url ? { url: msg.media_url, localUrl: msg.media_url } : null
+        };
+      });
 
       this.messageCache.set(cacheKey, { messages, timestamp: Date.now() });
       return messages;
