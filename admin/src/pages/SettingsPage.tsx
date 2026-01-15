@@ -15,6 +15,10 @@ import {
   Chip,
   alpha,
   useTheme,
+  IconButton,
+  Tooltip,
+  CircularProgress,
+  Link,
 } from '@mui/material';
 import {
   Settings as SettingsIcon,
@@ -23,9 +27,23 @@ import {
   Security as SecurityIcon,
   Speed as SpeedIcon,
   Notifications as NotificationsIcon,
+  Public as PublicIcon,
+  ContentCopy as CopyIcon,
+  OpenInNew as OpenInNewIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { configApi } from '../services/api';
+import { configApi, tunnelApi } from '../services/api';
+
+interface TunnelStatus {
+  available: boolean;
+  enabled: boolean;
+  status: 'disconnected' | 'connecting' | 'connected' | 'error';
+  url: string | null;
+  connectedAt: number | null;
+  uptime: number | null;
+  lastError: string | null;
+  totalConnections: number;
+}
 
 interface ServerConfig {
   server: {
@@ -52,11 +70,45 @@ export default function SettingsPage() {
   const theme = useTheme();
   const queryClient = useQueryClient();
   const [hasChanges, setHasChanges] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   const { data: config, isLoading } = useQuery<ServerConfig>({
     queryKey: ['config'],
     queryFn: configApi.get,
   });
+
+  // Tunnel status query
+  const { data: tunnelStatus, isLoading: isTunnelLoading } = useQuery<TunnelStatus>({
+    queryKey: ['tunnelStatus'],
+    queryFn: tunnelApi.getStatus,
+    refetchInterval: 5000, // Poll every 5 seconds when tunnel is connecting
+  });
+
+  // Tunnel toggle mutation
+  const tunnelToggleMutation = useMutation({
+    mutationFn: tunnelApi.toggle,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tunnelStatus'] });
+    },
+  });
+
+  const handleCopyUrl = async () => {
+    if (tunnelStatus?.url) {
+      await navigator.clipboard.writeText(tunnelStatus.url);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    }
+  };
+
+  const formatUptime = (ms: number | null) => {
+    if (!ms) return '-';
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+    return `${seconds}s`;
+  };
 
   const [localConfig, setLocalConfig] = useState<ServerConfig | null>(null);
 
@@ -373,6 +425,162 @@ export default function SettingsPage() {
                     data/homenichat.db
                   </Typography>
                 </Box>
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Remote Access / Tunnel */}
+        <Grid item xs={12}>
+          <Card
+            sx={{
+              border: tunnelStatus?.status === 'connected' ? '1px solid' : 'none',
+              borderColor: 'success.main',
+            }}
+          >
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <PublicIcon sx={{ mr: 1, color: tunnelStatus?.status === 'connected' ? 'success.main' : 'text.secondary' }} />
+                  <Typography variant="h6" fontWeight={600}>
+                    Acces distant (tunnl.gg)
+                  </Typography>
+                  <Chip
+                    label="Gratuit"
+                    size="small"
+                    color="success"
+                    variant="outlined"
+                    sx={{ ml: 1 }}
+                  />
+                </Box>
+
+                {/* Toggle Switch */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  {tunnelToggleMutation.isPending && (
+                    <CircularProgress size={20} />
+                  )}
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={tunnelStatus?.enabled ?? false}
+                        onChange={() => tunnelToggleMutation.mutate()}
+                        disabled={!tunnelStatus?.available || tunnelToggleMutation.isPending}
+                      />
+                    }
+                    label={tunnelStatus?.enabled ? 'Active' : 'Desactive'}
+                    labelPlacement="start"
+                  />
+                </Box>
+              </Box>
+
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                Exposez votre serveur Homenichat sur Internet sans configuration reseau.
+                Ideal pour connecter l'application mobile depuis n'importe ou.
+              </Typography>
+
+              {!tunnelStatus?.available && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  SSH n'est pas disponible sur ce systeme. Installez OpenSSH pour utiliser le tunnel.
+                </Alert>
+              )}
+
+              {tunnelStatus?.lastError && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  {tunnelStatus.lastError}
+                </Alert>
+              )}
+
+              {tunnelStatus?.status === 'connecting' && (
+                <Box sx={{ mb: 2 }}>
+                  <Alert severity="info" icon={<CircularProgress size={16} />}>
+                    Connexion au tunnel en cours...
+                  </Alert>
+                </Box>
+              )}
+
+              {tunnelStatus?.status === 'connected' && tunnelStatus?.url && (
+                <Box
+                  sx={{
+                    p: 2,
+                    borderRadius: 2,
+                    backgroundColor: alpha(theme.palette.success.main, 0.08),
+                    border: '1px solid',
+                    borderColor: alpha(theme.palette.success.main, 0.3),
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
+                      URL publique
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Chip
+                        label="Connecte"
+                        size="small"
+                        color="success"
+                      />
+                      <Typography variant="caption" color="text.secondary">
+                        Uptime: {formatUptime(tunnelStatus.uptime)}
+                      </Typography>
+                    </Box>
+                  </Box>
+
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Link
+                      href={tunnelStatus.url}
+                      target="_blank"
+                      rel="noopener"
+                      sx={{
+                        fontFamily: 'monospace',
+                        fontSize: '1.1rem',
+                        fontWeight: 500,
+                        color: 'success.main',
+                        textDecoration: 'none',
+                        '&:hover': { textDecoration: 'underline' },
+                      }}
+                    >
+                      {tunnelStatus.url}
+                    </Link>
+                    <Tooltip title={copySuccess ? 'Copie!' : 'Copier l\'URL'}>
+                      <IconButton size="small" onClick={handleCopyUrl}>
+                        <CopyIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Ouvrir dans un nouvel onglet">
+                      <IconButton
+                        size="small"
+                        component="a"
+                        href={tunnelStatus.url}
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        <OpenInNewIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                    Utilisez cette URL dans l'application mobile pour vous connecter depuis Internet.
+                  </Typography>
+                </Box>
+              )}
+
+              {tunnelStatus?.enabled && tunnelStatus?.status === 'disconnected' && (
+                <Alert severity="warning">
+                  Le tunnel est active mais deconnecte. Une reconnexion automatique est en cours...
+                </Alert>
+              )}
+
+              <Divider sx={{ my: 2 }} />
+
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Typography variant="caption" color="text.secondary">
+                  Propulse par tunnl.gg - Tunnel SSH gratuit et securise
+                </Typography>
+                {tunnelStatus && (
+                  <Typography variant="caption" color="text.secondary">
+                    Total connexions: {tunnelStatus.totalConnections}
+                  </Typography>
+                )}
               </Box>
             </CardContent>
           </Card>

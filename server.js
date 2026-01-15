@@ -599,6 +599,8 @@ async function startServer() {
       sessionManager,
       configService: require('./services/ConfigurationService'),
       db,
+      port: PORT,
+      dataDir: DATA_DIR,
     });
     logger.info('Admin routes initialized successfully');
 

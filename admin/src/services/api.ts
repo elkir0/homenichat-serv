@@ -374,4 +374,27 @@ export const configApi = {
   },
 };
 
+// API Admin - Tunnel (tunnl.gg)
+export const tunnelApi = {
+  getStatus: async () => {
+    const response = await api.get('/api/admin/tunnel/status');
+    return response.data;
+  },
+
+  start: async () => {
+    const response = await api.post('/api/admin/tunnel/start');
+    return response.data;
+  },
+
+  stop: async () => {
+    const response = await api.post('/api/admin/tunnel/stop');
+    return response.data;
+  },
+
+  toggle: async () => {
+    const response = await api.post('/api/admin/tunnel/toggle');
+    return response.data;
+  },
+};
+
 export default api;

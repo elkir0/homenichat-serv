@@ -21,6 +21,10 @@ let modemService = null;
 // Import ModemService
 const ModemService = require('../services/ModemService');
 
+// Import TunnelService
+const TunnelService = require('../services/TunnelService');
+let tunnelService = null;
+
 /**
  * Initialise les routes avec les services nécessaires
  */
@@ -35,6 +39,12 @@ function initAdminRoutes(services) {
   modemService = new ModemService({
     modems: services.modemConfig || {},
     logger: console,
+  });
+
+  // Initialize TunnelService
+  tunnelService = new TunnelService({
+    port: services.port || 3001,
+    dataDir: services.dataDir || '/var/lib/homenichat',
   });
 
   return router;
@@ -1346,6 +1356,132 @@ router.get('/logs', [
 
   } catch (error) {
     console.error('[Admin] Get logs error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
+// TUNNEL (tunnl.gg)
+// =============================================================================
+
+/**
+ * GET /api/admin/tunnel/status
+ * Récupère l'état du tunnel
+ */
+router.get('/tunnel/status', async (req, res) => {
+  try {
+    if (!tunnelService) {
+      return res.json({
+        available: false,
+        error: 'Tunnel service not initialized',
+      });
+    }
+
+    const status = tunnelService.getStatus();
+    const sshAvailable = await TunnelService.checkSshAvailable();
+
+    res.json({
+      available: sshAvailable,
+      ...status,
+    });
+  } catch (error) {
+    console.error('[Admin] Tunnel status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/tunnel/start
+ * Démarre le tunnel
+ */
+router.post('/tunnel/start', async (req, res) => {
+  try {
+    if (!tunnelService) {
+      return res.status(500).json({ error: 'Tunnel service not initialized' });
+    }
+
+    const sshAvailable = await TunnelService.checkSshAvailable();
+    if (!sshAvailable) {
+      return res.status(400).json({
+        error: 'SSH n\'est pas disponible sur ce système. Installez OpenSSH pour utiliser le tunnel.',
+      });
+    }
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'tunnel_start', {
+        category: 'system',
+        username: req.user.username,
+      }, req);
+    }
+
+    const result = await tunnelService.start();
+    res.json(result);
+  } catch (error) {
+    console.error('[Admin] Tunnel start error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/tunnel/stop
+ * Arrête le tunnel
+ */
+router.post('/tunnel/stop', async (req, res) => {
+  try {
+    if (!tunnelService) {
+      return res.status(500).json({ error: 'Tunnel service not initialized' });
+    }
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'tunnel_stop', {
+        category: 'system',
+        username: req.user.username,
+      }, req);
+    }
+
+    const result = tunnelService.stop();
+    res.json(result);
+  } catch (error) {
+    console.error('[Admin] Tunnel stop error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/tunnel/toggle
+ * Bascule l'état du tunnel
+ */
+router.post('/tunnel/toggle', async (req, res) => {
+  try {
+    if (!tunnelService) {
+      return res.status(500).json({ error: 'Tunnel service not initialized' });
+    }
+
+    const sshAvailable = await TunnelService.checkSshAvailable();
+    if (!sshAvailable && !tunnelService.enabled) {
+      return res.status(400).json({
+        error: 'SSH n\'est pas disponible sur ce système. Installez OpenSSH pour utiliser le tunnel.',
+      });
+    }
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'tunnel_toggle', {
+        category: 'system',
+        username: req.user.username,
+        action: tunnelService.enabled ? 'disable' : 'enable',
+      }, req);
+    }
+
+    const result = await tunnelService.toggle();
+    res.json({
+      ...result,
+      ...tunnelService.getStatus(),
+    });
+  } catch (error) {
+    console.error('[Admin] Tunnel toggle error:', error);
     res.status(500).json({ error: error.message });
   }
 });
