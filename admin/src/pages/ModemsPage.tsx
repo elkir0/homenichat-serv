@@ -448,8 +448,8 @@ export default function ModemsPage() {
       )}
 
       {/* Modem Content */}
-      {modemsList.map(([modemId, data]) => (
-        <Box key={modemId} sx={{ display: selectedTab === index ? 'block' : 'none' }}>
+      {modemsList.map(([modemId, data], idx) => (
+        <Box key={modemId} sx={{ display: selectedTab === idx ? 'block' : 'none' }}>
           <Grid container spacing={3}>
             {/* Modem Status Card */}
             <Grid item xs={12} md={4}>
