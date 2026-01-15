@@ -393,6 +393,62 @@ class BaileysProvider extends WhatsAppProvider {
         }
       }
     });
+
+    // Presence update - indicateurs de frappe entrants
+    this.sock.ev.on('presence.update', async ({ id, presences }) => {
+      if (socketId !== this.socketId) return;
+
+      for (const [jid, presence] of Object.entries(presences)) {
+        const isTyping = presence.lastKnownPresence === 'composing';
+        const chatId = id; // Le chat où la présence a changé
+
+        logger.info(`✏️ Presence update: ${jid} is ${presence.lastKnownPresence} in ${chatId}`);
+
+        // Émettre l'événement pour que le WebSocket le broadcast
+        this.emit('presence.update', {
+          chatId,
+          participantJid: jid,
+          isTyping,
+          presence: presence.lastKnownPresence
+        });
+      }
+    });
+
+    // Message receipt updates - accusés de réception (delivered, read)
+    this.sock.ev.on('messages.update', async (updates) => {
+      if (socketId !== this.socketId) return;
+
+      for (const update of updates) {
+        const { key, update: msgUpdate } = update;
+        if (!key || !msgUpdate) continue;
+
+        // Vérifier si c'est une mise à jour de statut
+        if (msgUpdate.status !== undefined) {
+          const statusMap = {
+            2: 'sent',      // SERVER_ACK
+            3: 'delivered', // DELIVERY_ACK
+            4: 'read'       // READ
+          };
+          const status = statusMap[msgUpdate.status] || 'sent';
+
+          logger.info(`📬 Message status update: ${key.id} -> ${status}`);
+
+          // Mettre à jour le statut dans la DB locale
+          try {
+            chatStorage.updateMessageStatus(key.id, status);
+          } catch (err) {
+            // Ignorer silencieusement
+          }
+
+          // Émettre l'événement pour que le WebSocket le broadcast
+          this.emit('message.status', {
+            chatId: key.remoteJid,
+            messageId: key.id,
+            status
+          });
+        }
+      }
+    });
   }
 
   async handleMessagesUpsert({ messages, type }) {

@@ -214,6 +214,30 @@ class PushService {
   }
 
   /**
+   * Push un indicateur de frappe (typing)
+   */
+  pushTypingIndicator(chatId, participantJid, isTyping) {
+    this.broadcast(this.eventTypes.TYPING_STATUS, {
+      chatId,
+      participantJid,
+      isTyping,
+      timestamp: Date.now()
+    });
+  }
+
+  /**
+   * Push une mise à jour de statut de message (sent, delivered, read)
+   */
+  pushMessageStatus(chatId, messageId, status) {
+    this.broadcast(this.eventTypes.MESSAGE_STATUS, {
+      chatId,
+      messageId,
+      status,
+      timestamp: Date.now()
+    });
+  }
+
+  /**
    * Push une notification
    */
   pushNotification(type, message, options = {}) {

@@ -239,6 +239,18 @@ class ChatStorageServicePersistent {
   }
 
   /**
+   * Met à jour le statut d'un message (sent, delivered, read)
+   */
+  updateMessageStatus(messageId, status) {
+    try {
+      db.prepare('UPDATE messages SET status = ? WHERE id = ?').run(status, messageId);
+      this.messageCache.clear();
+    } catch (error) {
+      logger.error('Error updating message status:', error);
+    }
+  }
+
+  /**
    * Récupère les messages d'une conversation
    */
   async getMessages(userId, chatId, limit = 50) {

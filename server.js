@@ -633,6 +633,20 @@ async function startServer() {
       pushService.pushConnectionUpdate(data.provider, data);
     });
 
+    // Écouter les indicateurs de frappe (typing) des providers
+    providerManager.on('presence.update', (data) => {
+      // data = { provider: 'baileys', chatId, participantJid, isTyping, presence }
+      logger.info(`✏️ Presence from ${data.provider}: ${data.participantJid} is ${data.isTyping ? 'typing' : 'idle'} in ${data.chatId}`);
+      pushService.pushTypingIndicator(data.chatId, data.participantJid, data.isTyping);
+    });
+
+    // Écouter les mises à jour de statut des messages (delivered, read)
+    providerManager.on('message.status', (data) => {
+      // data = { provider: 'baileys', chatId, messageId, status }
+      logger.info(`📬 Message status from ${data.provider}: ${data.messageId} -> ${data.status}`);
+      pushService.pushMessageStatus(data.chatId, data.messageId, data.status);
+    });
+
     // Écouter les messages entrants des providers (Baileys, SMS, Meta, etc.)
     providerManager.on('message', (data) => {
       // data = { provider: 'baileys'|'sms-bridge'|'meta', ...messageData }
