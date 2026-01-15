@@ -163,6 +163,31 @@ app.get('/api/version/check', (req, res) => {
 // Route media en PREMIER sans auth pour les GET
 app.use('/api/media', mediaRoutes);
 
+// ============================================
+// INTERNAL API - SMS depuis Asterisk (localhost only)
+// ============================================
+app.post('/api/internal/sms/incoming', (req, res) => {
+  // Vérifier que la requête vient de localhost
+  const ip = req.ip || req.connection.remoteAddress;
+  if (!ip.includes('127.0.0.1') && !ip.includes('::1') && !ip.includes('localhost')) {
+    console.log(`[SMS] Rejected incoming SMS from non-local IP: ${ip}`);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const { from, text, device } = req.body;
+  console.log(`[SMS] Incoming SMS from ${from} via ${device}: ${text}`);
+
+  // TODO: Stocker le SMS dans la base de données et notifier les clients
+  // Pour l'instant, on log juste
+
+  // Émettre via Socket.IO si disponible
+  if (global.io) {
+    global.io.emit('sms:incoming', { from, text, device, timestamp: new Date().toISOString() });
+  }
+
+  res.json({ success: true, message: 'SMS received' });
+});
+
 // Routes protégées - Ajouter le middleware d'authentification
 app.use('/api/evolution', verifyToken, proxyRoutes);
 app.use('/api/providers', providersRoutes);

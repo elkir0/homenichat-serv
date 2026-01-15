@@ -708,6 +708,40 @@ UDEV_RULES
     udevadm control --reload-rules 2>/dev/null || true
     udevadm trigger 2>/dev/null || true
 
+    # Add SMS handler context to extensions.conf
+    if ! grep -q "sms-handler" /etc/asterisk/extensions.conf 2>/dev/null; then
+        cat >> /etc/asterisk/extensions.conf << 'EXTENSIONS_SMS'
+
+; ============================================
+; HOMENICHAT - SMS Handler
+; ============================================
+[sms-handler]
+exten => process,1,NoOp(=== SMS ENTRANT HOMENICHAT ===)
+ same => n,Set(SMS_DEVICE=${JSON_DECODE(QUECTEL,name)})
+ same => n,Set(SMS_FROM=${CALLERID(num)})
+ same => n,Set(SMS_TEXT=${JSON_DECODE(SMS,msg)})
+ same => n,NoOp(Device: ${SMS_DEVICE}, From: ${SMS_FROM}, Text: ${SMS_TEXT})
+ same => n,GotoIf($["${SMS_TEXT}" = ""]?empty)
+ same => n,System(curl -s -X POST http://localhost:3001/api/internal/sms/incoming -H "Content-Type: application/json" -d '{"from":"${SMS_FROM}","text":"${SMS_TEXT}","device":"${SMS_DEVICE}"}')
+ same => n,Hangup()
+ same => n(empty),Hangup()
+
+; ============================================
+; HOMENICHAT - GSM Context
+; ============================================
+[from-gsm]
+exten => _+X.,1,NoOp(=== APPEL ENTRANT GSM ===)
+ same => n,Hangup()
+exten => _X.,1,NoOp(=== APPEL ENTRANT GSM ===)
+ same => n,Hangup()
+exten => s,1,Hangup()
+exten => sms,1,Goto(sms-handler,process,1)
+exten => report,1,NoOp(=== SMS REPORT ===)
+ same => n,Hangup()
+EXTENSIONS_SMS
+        info "Added SMS handler to extensions.conf"
+    fi
+
     # Cleanup source directories
     cd /usr/src
     rm -rf asterisk-chan-quectel
