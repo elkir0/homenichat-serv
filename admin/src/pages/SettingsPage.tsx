@@ -78,7 +78,7 @@ export default function SettingsPage() {
   });
 
   // Tunnel status query
-  const { data: tunnelStatus, isLoading: isTunnelLoading } = useQuery<TunnelStatus>({
+  const { data: tunnelStatus } = useQuery<TunnelStatus>({
     queryKey: ['tunnelStatus'],
     queryFn: tunnelApi.getStatus,
     refetchInterval: 5000, // Poll every 5 seconds when tunnel is connecting

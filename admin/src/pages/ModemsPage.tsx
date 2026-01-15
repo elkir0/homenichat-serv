@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   Box,
   Card,
@@ -14,17 +14,8 @@ import {
   DialogActions,
   Alert,
   LinearProgress,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  IconButton,
-  Tooltip,
   alpha,
   useTheme,
-  CircularProgress,
   Tabs,
   Tab,
   Paper,
@@ -43,11 +34,9 @@ import {
   VolumeUp as AudioIcon,
   Visibility as ViewIcon,
   Memory as MemoryIcon,
-  Storage as StorageIcon,
   Speed as SpeedIcon,
   CheckCircle as CheckIcon,
   Error as ErrorIcon,
-  Warning as WarningIcon,
   PlayArrow as PlayIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -424,7 +413,7 @@ export default function ModemsPage() {
             onChange={(_, newValue) => setSelectedTab(newValue)}
             variant="fullWidth"
           >
-            {modemsList.map(([modemId, data], index) => (
+            {modemsList.map(([modemId, data]) => (
               <Tab
                 key={modemId}
                 label={
@@ -459,7 +448,7 @@ export default function ModemsPage() {
       )}
 
       {/* Modem Content */}
-      {modemsList.map(([modemId, data], index) => (
+      {modemsList.map(([modemId, data]) => (
         <Box key={modemId} sx={{ display: selectedTab === index ? 'block' : 'none' }}>
           <Grid container spacing={3}>
             {/* Modem Status Card */}
