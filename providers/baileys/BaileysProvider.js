@@ -765,7 +765,10 @@ class BaileysProvider extends WhatsAppProvider {
     if (!this.sock || this.connectionState !== 'connected') return;
     try {
       const jid = this.formatJid(chatId);
-      await this.sock.sendPresenceUpdate(type === 'typing' ? 'composing' : 'paused', jid);
+      // type can be 'composing', 'paused', 'typing', or boolean-like
+      const presenceType = (type === 'composing' || type === 'typing' || type === true) ? 'composing' : 'paused';
+      logger.info(`📝 Sending presence update: ${presenceType} to ${jid}`);
+      await this.sock.sendPresenceUpdate(presenceType, jid);
     } catch (error) {
       logger.warn(`Failed to send presence update: ${error.message}`);
     }
