@@ -159,6 +159,10 @@ interface SimStatus {
   status: string;
   message: string;
   needsPin: boolean;
+  attemptsUsed?: number;
+  attemptsRemaining?: number;
+  isLocked?: boolean;
+  maxAttempts?: number;
 }
 
 // API functions
@@ -203,7 +207,7 @@ const modemsApi = {
   },
 
   getSimStatus: async (modemId?: string): Promise<SimStatus> => {
-    const url = modemId ? `/api/admin/modems/sim-status?modemId=${modemId}` : '/api/admin/modems/sim-status';
+    const url = modemId ? `/api/admin/modems/pin-status?modemId=${modemId}` : '/api/admin/modems/pin-status';
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
     });
@@ -211,19 +215,28 @@ const modemsApi = {
     return response.json();
   },
 
-  enterPin: async (pin: string, modemId?: string): Promise<{ success: boolean; message: string }> => {
+  enterPin: async (pin: string, pinConfirm: string, modemId?: string): Promise<{ success: boolean; message: string; attemptsRemaining?: number }> => {
     const response = await fetch('/api/admin/modems/enter-pin', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ pin, modemId }),
+      body: JSON.stringify({ pin, pinConfirm, modemId }),
     });
+    const result = await response.json();
     if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.error || 'Failed to enter PIN');
+      throw new Error(result.error || 'Failed to enter PIN');
     }
+    return result;
+  },
+
+  resetPinAttempts: async (): Promise<{ success: boolean; message: string }> => {
+    const response = await fetch('/api/admin/modems/reset-pin-attempts', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
+    });
+    if (!response.ok) throw new Error('Failed to reset PIN attempts');
     return response.json();
   },
 
@@ -387,6 +400,8 @@ export default function ModemsPage() {
   const [confDialogOpen, setConfDialogOpen] = useState(false);
   const [pinDialogOpen, setPinDialogOpen] = useState(false);
   const [pinInput, setPinInput] = useState('');
+  const [pinConfirmInput, setPinConfirmInput] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
   const [configForm, setConfigForm] = useState<Partial<ModemConfig>>({
     modemType: 'ec25',
     modemName: 'homenichat-modem',
@@ -525,14 +540,30 @@ export default function ModemsPage() {
   });
 
   const enterPinMutation = useMutation({
-    mutationFn: ({ pin, modemId }: { pin: string; modemId?: string }) =>
-      modemsApi.enterPin(pin, modemId),
+    mutationFn: ({ pin, pinConfirm, modemId }: { pin: string; pinConfirm: string; modemId?: string }) =>
+      modemsApi.enterPin(pin, pinConfirm, modemId),
     onSuccess: (result) => {
       setActionResult({ success: result.success, message: result.message });
       setPinDialogOpen(false);
       setPinInput('');
+      setPinConfirmInput('');
+      setPinError(null);
       refetchSimStatus();
       queryClient.invalidateQueries({ queryKey: ['modemConfig'] });
+      queryClient.invalidateQueries({ queryKey: ['modemFullStatus'] });
+    },
+    onError: (err: Error) => {
+      setPinError(err.message);
+      refetchSimStatus();
+    },
+  });
+
+  const resetPinAttemptsMutation = useMutation({
+    mutationFn: modemsApi.resetPinAttempts,
+    onSuccess: (result) => {
+      setActionResult({ success: result.success, message: result.message });
+      setPinError(null);
+      refetchSimStatus();
     },
     onError: (err: Error) => {
       setActionResult({ success: false, message: err.message });
@@ -892,7 +923,9 @@ export default function ModemsPage() {
                         backgroundColor:
                           data.status.state === 'Free'
                             ? theme.palette.success.main
-                            : data.status.state === 'Unknown'
+                            : data.status.needsPin || data.status.state?.toLowerCase().includes('pin')
+                            ? theme.palette.warning.main
+                            : data.status.state === 'Unknown' || data.status.state?.toLowerCase().includes('not init')
                             ? theme.palette.error.main
                             : theme.palette.warning.main,
                       }}
@@ -925,15 +958,20 @@ export default function ModemsPage() {
                       {data.status.name || modemId}
                     </Typography>
                     <Chip
-                      label={data.status.state}
+                      icon={data.status.needsPin ? <LockIcon /> : undefined}
+                      label={data.status.needsPin ? 'PIN requis' : data.status.state}
                       size="small"
                       color={
                         data.status.state === 'Free'
                           ? 'success'
-                          : data.status.state === 'Unknown'
+                          : data.status.needsPin || data.status.state?.toLowerCase().includes('pin')
+                          ? 'warning'
+                          : data.status.state === 'Unknown' || data.status.state?.toLowerCase().includes('not init')
                           ? 'error'
                           : 'warning'
                       }
+                      onClick={data.status.needsPin ? () => setPinDialogOpen(true) : undefined}
+                      sx={data.status.needsPin ? { cursor: 'pointer' } : {}}
                     />
                   </Box>
 
@@ -1394,7 +1432,7 @@ export default function ModemsPage() {
       </Dialog>
 
       {/* PIN Dialog */}
-      <Dialog open={pinDialogOpen} onClose={() => setPinDialogOpen(false)} maxWidth="xs" fullWidth>
+      <Dialog open={pinDialogOpen} onClose={() => { setPinDialogOpen(false); setPinError(null); }} maxWidth="sm" fullWidth>
         <DialogTitle>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <LockIcon color="warning" />
@@ -1402,10 +1440,48 @@ export default function ModemsPage() {
           </Box>
         </DialogTitle>
         <DialogContent>
-          <Alert severity="info" sx={{ mb: 2 }}>
-            Statut actuel: {simStatusData?.message || 'Verification...'}
+          {/* Avertissement important */}
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <strong>ATTENTION:</strong> 3 codes PIN incorrects bloqueront definitivement votre carte SIM!
+            Pour votre securite, l'interface limite a 2 tentatives.
           </Alert>
 
+          {/* Statut actuel */}
+          <Alert
+            severity={simStatusData?.status === 'ready' ? 'success' : simStatusData?.isLocked ? 'error' : 'info'}
+            sx={{ mb: 2 }}
+          >
+            <strong>Statut:</strong> {simStatusData?.message || 'Verification...'}
+            {simStatusData?.attemptsRemaining !== undefined && (
+              <Box component="span" sx={{ ml: 1 }}>
+                | Tentatives restantes: <strong>{simStatusData.attemptsRemaining}</strong>/{simStatusData.maxAttempts}
+              </Box>
+            )}
+          </Alert>
+
+          {/* Verrouillage des tentatives */}
+          {simStatusData?.isLocked && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              Les tentatives sont verrouillees. Cliquez sur "Reinitialiser" si vous etes sur du code.
+              <Button
+                size="small"
+                color="error"
+                onClick={() => resetPinAttemptsMutation.mutate()}
+                sx={{ ml: 2 }}
+              >
+                Reinitialiser le compteur
+              </Button>
+            </Alert>
+          )}
+
+          {/* Erreur */}
+          {pinError && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {pinError}
+            </Alert>
+          )}
+
+          {/* Champs PIN */}
           <TextField
             autoFocus
             margin="dense"
@@ -1417,6 +1493,22 @@ export default function ModemsPage() {
             placeholder="****"
             helperText="4 a 8 chiffres"
             inputProps={{ maxLength: 8, inputMode: 'numeric' }}
+            disabled={simStatusData?.isLocked}
+            sx={{ mb: 2 }}
+          />
+
+          <TextField
+            margin="dense"
+            label="Confirmer le code PIN"
+            fullWidth
+            type="password"
+            value={pinConfirmInput}
+            onChange={(e) => setPinConfirmInput(e.target.value.replace(/\D/g, '').slice(0, 8))}
+            placeholder="****"
+            helperText={pinInput && pinConfirmInput && pinInput !== pinConfirmInput ? 'Les codes ne correspondent pas' : 'Entrez le meme code pour confirmer'}
+            error={pinInput.length > 0 && pinConfirmInput.length > 0 && pinInput !== pinConfirmInput}
+            inputProps={{ maxLength: 8, inputMode: 'numeric' }}
+            disabled={simStatusData?.isLocked}
           />
 
           {modemConfigData?.config?.pinConfigured && (
@@ -1426,16 +1518,22 @@ export default function ModemsPage() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setPinDialogOpen(false); setPinInput(''); }}>
+          <Button onClick={() => { setPinDialogOpen(false); setPinInput(''); setPinConfirmInput(''); setPinError(null); }}>
             Annuler
           </Button>
           <Button
             variant="contained"
             color="warning"
-            onClick={() => enterPinMutation.mutate({ pin: pinInput })}
-            disabled={!pinInput || pinInput.length < 4 || enterPinMutation.isPending}
+            onClick={() => enterPinMutation.mutate({ pin: pinInput, pinConfirm: pinConfirmInput })}
+            disabled={
+              !pinInput ||
+              pinInput.length < 4 ||
+              pinInput !== pinConfirmInput ||
+              enterPinMutation.isPending ||
+              simStatusData?.isLocked
+            }
           >
-            {enterPinMutation.isPending ? 'Envoi...' : 'Valider PIN'}
+            {enterPinMutation.isPending ? 'Verification...' : 'Valider PIN'}
           </Button>
         </DialogActions>
       </Dialog>

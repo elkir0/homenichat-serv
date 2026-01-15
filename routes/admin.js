@@ -998,11 +998,37 @@ router.get('/modems/sim-status', async (req, res) => {
 });
 
 /**
+ * GET /api/admin/modems/pin-status
+ * Récupère le statut des tentatives PIN
+ */
+router.get('/modems/pin-status', async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const modemId = req.query.modemId || null;
+    const simStatus = await modemService.checkSimPin(modemId);
+    const attemptsStatus = modemService.getPinAttemptsRemaining();
+
+    res.json({
+      ...simStatus,
+      ...attemptsStatus,
+    });
+
+  } catch (error) {
+    console.error('[Admin] PIN status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * POST /api/admin/modems/enter-pin
  * Entre le code PIN SIM
  */
 router.post('/modems/enter-pin', [
   body('pin').matches(/^\d{4,8}$/).withMessage('PIN must be 4-8 digits'),
+  body('pinConfirm').matches(/^\d{4,8}$/).withMessage('PIN confirmation required'),
   body('modemId').optional().isString(),
 ], validate, async (req, res) => {
   try {
@@ -1010,7 +1036,26 @@ router.post('/modems/enter-pin', [
       return res.status(503).json({ error: 'Modem service not available' });
     }
 
-    const { pin, modemId } = req.body;
+    const { pin, pinConfirm, modemId } = req.body;
+
+    // Vérifier que les deux PIN correspondent
+    if (pin !== pinConfirm) {
+      return res.status(400).json({
+        error: 'Les codes PIN ne correspondent pas. Veuillez réessayer.',
+        success: false,
+      });
+    }
+
+    // Vérifier le statut des tentatives
+    const attemptsStatus = modemService.getPinAttemptsRemaining();
+    if (attemptsStatus.isLocked) {
+      return res.status(403).json({
+        error: 'Trop de tentatives échouées. Contactez l\'administrateur pour réinitialiser.',
+        success: false,
+        ...attemptsStatus,
+      });
+    }
+
     const result = await modemService.enterSimPin(pin, modemId);
 
     await securityService?.logAction(req.user.id, 'sim_pin_entered', {
@@ -1019,10 +1064,42 @@ router.post('/modems/enter-pin', [
       username: req.user.username,
     }, req);
 
-    res.json(result);
+    res.json({
+      ...result,
+      ...modemService.getPinAttemptsRemaining(),
+    });
 
   } catch (error) {
     console.error('[Admin] Enter PIN error:', error);
+    res.status(400).json({
+      error: error.message,
+      success: false,
+      ...modemService.getPinAttemptsRemaining(),
+    });
+  }
+});
+
+/**
+ * POST /api/admin/modems/reset-pin-attempts
+ * Réinitialise le compteur de tentatives PIN (admin seulement)
+ */
+router.post('/modems/reset-pin-attempts', async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const result = modemService.resetPinAttempts();
+
+    await securityService?.logAction(req.user.id, 'pin_attempts_reset', {
+      category: 'admin',
+      username: req.user.username,
+    }, req);
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[Admin] Reset PIN attempts error:', error);
     res.status(500).json({ error: error.message });
   }
 });

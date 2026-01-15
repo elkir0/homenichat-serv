@@ -57,6 +57,11 @@ const CONFIG_DIR = '/var/lib/homenichat';
 const MODEM_CONFIG_FILE = path.join(CONFIG_DIR, 'modem-config.json');
 const QUECTEL_CONF_PATH = '/etc/asterisk/quectel.conf';
 
+// PIN attempt tracking (max 2 attempts before requiring admin reset)
+const MAX_PIN_ATTEMPTS = 2;
+let pinAttempts = 0;
+let pinLocked = false;
+
 class ModemService {
   constructor(config = {}) {
     this.modems = config.modems || DEFAULT_MODEMS;
@@ -184,6 +189,10 @@ class ModemService {
       number: config.number || '',
       sipPort: config.sipPort || 5060,
       state: 'Unknown',
+      stateMessage: '',
+      needsPin: false,
+      pinAttemptsRemaining: MAX_PIN_ATTEMPTS - pinAttempts,
+      pinLocked: pinLocked,
       rssi: 0,
       rssiDbm: -113,
       rssiPercent: 0,
@@ -213,6 +222,15 @@ class ModemService {
         switch (key) {
           case 'State':
             data.state = value;
+            // Améliorer le message d'état
+            if (value.toLowerCase().includes('not init')) {
+              data.stateMessage = 'Code PIN requis ou modem non connecté';
+              data.needsPin = true; // Probablement besoin du PIN
+            } else if (value === 'Free') {
+              data.stateMessage = 'Prêt';
+            } else if (value === 'Ring' || value === 'Dialing') {
+              data.stateMessage = 'En communication';
+            }
             break;
           case 'RSSI':
             // Format: "15, -83 dBm"
@@ -265,6 +283,25 @@ class ModemService {
       }
     } catch (error) {
       data.error = error.message;
+    }
+
+    // Si modem non initialisé, vérifier le PIN directement
+    if (data.state.toLowerCase().includes('not init') || data.state === 'Unknown') {
+      try {
+        const pinStatus = await this.checkSimPin(modemId);
+        if (pinStatus.needsPin) {
+          data.needsPin = true;
+          data.state = 'PIN requis';
+          data.stateMessage = 'Entrez le code PIN de la carte SIM pour activer le modem';
+        } else if (pinStatus.status === 'ready') {
+          data.stateMessage = 'SIM déverrouillée - redémarrage modem en cours...';
+        } else if (pinStatus.status === 'puk_required') {
+          data.state = 'SIM bloquée';
+          data.stateMessage = 'Code PUK requis - la carte SIM est bloquée';
+        }
+      } catch (e) {
+        // Ignorer les erreurs de vérification PIN
+      }
     }
 
     return data;
@@ -736,9 +773,36 @@ class ModemService {
   }
 
   /**
+   * Récupère le nombre de tentatives PIN restantes
+   */
+  getPinAttemptsRemaining() {
+    return {
+      attemptsUsed: pinAttempts,
+      attemptsRemaining: MAX_PIN_ATTEMPTS - pinAttempts,
+      isLocked: pinLocked,
+      maxAttempts: MAX_PIN_ATTEMPTS,
+    };
+  }
+
+  /**
+   * Réinitialise le compteur de tentatives PIN (admin only)
+   */
+  resetPinAttempts() {
+    pinAttempts = 0;
+    pinLocked = false;
+    this.logger.info('[ModemService] PIN attempts counter reset');
+    return { success: true, message: 'Compteur de tentatives réinitialisé' };
+  }
+
+  /**
    * Entre le code PIN SIM
    */
   async enterSimPin(pin, modemId) {
+    // Vérifier si verrouillé
+    if (pinLocked) {
+      throw new Error('Trop de tentatives échouées. Réinitialisez le compteur ou utilisez le code PUK.');
+    }
+
     if (!pin || !/^\d{4,8}$/.test(pin)) {
       throw new Error('Code PIN invalide (doit être 4-8 chiffres)');
     }
@@ -759,18 +823,26 @@ class ModemService {
       }
 
       // Vérifier le résultat
-      if (result.includes('OK')) {
-        // Sauvegarder le PIN pour les prochains démarrages
+      if (result.includes('OK') && !result.includes('ERROR')) {
+        // Succès - réinitialiser le compteur et sauvegarder
+        pinAttempts = 0;
         this.saveModemConfig({ pinCode: pin });
         this.logger.info('[ModemService] SIM PIN entered successfully');
-        return { success: true, message: 'Code PIN accepté' };
+        return { success: true, message: 'Code PIN accepté. La carte SIM est déverrouillée.' };
       }
 
-      if (result.includes('ERROR')) {
-        // Vérifier le nombre de tentatives restantes
-        const attemptsMatch = result.match(/(\d+) retries/i);
-        const remaining = attemptsMatch ? attemptsMatch[1] : 'inconnu';
-        throw new Error(`Code PIN incorrect. Tentatives restantes: ${remaining}`);
+      if (result.includes('ERROR') || result.includes('incorrect')) {
+        // Incrémenter le compteur d'échecs
+        pinAttempts++;
+
+        if (pinAttempts >= MAX_PIN_ATTEMPTS) {
+          pinLocked = true;
+          this.logger.error('[ModemService] PIN attempts exhausted - locking further attempts');
+          throw new Error(`Code PIN incorrect. ATTENTION: Limite de ${MAX_PIN_ATTEMPTS} tentatives atteinte. Pour protéger votre carte SIM, les tentatives sont bloquées. Contactez l'administrateur.`);
+        }
+
+        const remaining = MAX_PIN_ATTEMPTS - pinAttempts;
+        throw new Error(`Code PIN incorrect. Il vous reste ${remaining} tentative(s) avant blocage dans l'interface.`);
       }
 
       return { success: true, message: 'Commande envoyée', result };
