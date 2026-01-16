@@ -2,7 +2,7 @@
 
 > 🏠 **Self-Hosted Unified Communication Server** - Stop paying monthly fees, own your data
 
-[![License](https://img.shields.io/badge/license-GPL%20v3-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL%20v3-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org)
 [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-4%2F5-red.svg)](#raspberry-pi-installation)
 
@@ -348,7 +348,7 @@ your-domain.com {
 
 ## 📄 License
 
-GNU General Public License v3.0 - see [LICENSE](LICENSE)
+GNU Affero General Public License v3.0 - see [LICENSE](LICENSE)
 
 ---
 

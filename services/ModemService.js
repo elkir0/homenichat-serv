@@ -81,20 +81,31 @@ class ModemService {
     try {
       if (fs.existsSync(MODEM_CONFIG_FILE)) {
         const data = fs.readFileSync(MODEM_CONFIG_FILE, 'utf8');
-        return JSON.parse(data);
+        const config = JSON.parse(data);
+        // Auto-detect modem type if not set or if autoDetect is enabled
+        if (!config.modemType || config.autoDetect) {
+          const detectedType = this.detectModemTypeFromUsb();
+          if (detectedType) {
+            config.modemType = detectedType;
+          }
+        }
+        return config;
       }
     } catch (error) {
       this.logger.error('[ModemService] Error loading modem config:', error);
     }
 
+    // Auto-detect modem type for default config
+    const detectedType = this.detectModemTypeFromUsb();
+
     // Configuration par défaut
     return {
-      modemType: 'ec25',
+      modemType: detectedType || 'sim7600', // Default to sim7600 if detection fails
       modemName: 'hni-modem',
       phoneNumber: '',
       pinCode: '',
-      dataPort: '/dev/ttyUSB2',
-      audioPort: '/dev/ttyUSB1',
+      dataPort: detectedType === 'ec25' ? '/dev/ttyUSB2' : '/dev/ttyUSB2',
+      audioPort: detectedType === 'ec25' ? '/dev/ttyUSB1' : '/dev/ttyUSB1',
       autoDetect: true,
       // Configuration SMS
       sms: {
@@ -106,6 +117,47 @@ class ModemService {
         encoding: 'auto',       // 'auto' | 'gsm7' | 'ucs2'
       },
     };
+  }
+
+  /**
+   * Détecte le type de modem depuis les informations USB
+   * @returns {string|null} 'sim7600' ou 'ec25' ou null
+   */
+  detectModemTypeFromUsb() {
+    try {
+      const lsusbOutput = execSync('lsusb 2>/dev/null', { encoding: 'utf8', timeout: 5000 });
+
+      // SIM7600: vendor ID 1e0e (Simcom/Qualcomm)
+      if (lsusbOutput.includes('1e0e:9001') || lsusbOutput.includes('1e0e:9011') ||
+          lsusbOutput.toLowerCase().includes('simcom') || lsusbOutput.toLowerCase().includes('sim7600')) {
+        this.logger.info('[ModemService] Auto-detected modem type: SIM7600');
+        return 'sim7600';
+      }
+
+      // EC25: vendor ID 2c7c (Quectel)
+      if (lsusbOutput.includes('2c7c:0125') || lsusbOutput.toLowerCase().includes('quectel')) {
+        this.logger.info('[ModemService] Auto-detected modem type: EC25');
+        return 'ec25';
+      }
+
+      // Check number of ttyUSB ports as fallback
+      const portsResult = execSync('ls /dev/ttyUSB* 2>/dev/null | wc -l', { encoding: 'utf8', timeout: 3000 });
+      const portCount = parseInt(portsResult.trim()) || 0;
+
+      // 5+ ports usually means SIM7600, 3-4 ports usually EC25
+      if (portCount >= 5) {
+        this.logger.info('[ModemService] Auto-detected modem type from port count: SIM7600 (5+ ports)');
+        return 'sim7600';
+      } else if (portCount >= 3) {
+        this.logger.info('[ModemService] Auto-detected modem type from port count: EC25 (3-4 ports)');
+        return 'ec25';
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.warn('[ModemService] Failed to auto-detect modem type:', error.message);
+      return null;
+    }
   }
 
   /**
@@ -745,6 +797,7 @@ except Exception as e:
       suggestedDataPort: null,
       suggestedAudioPort: null,
       modemType: null,
+      modems: [], // Liste des modems détectés
     };
 
     try {
@@ -757,7 +810,44 @@ except Exception as e:
       // Chercher des indices sur le type de modem via USB vendor/product
       const usbDevices = await this.runCmd('lsusb 2>/dev/null');
 
-      if (usbDevices.toLowerCase().includes('quectel')) {
+      // Compter les modems SIM7600 (vendor 1e0e)
+      const sim7600Count = (usbDevices.match(/1e0e:9001/gi) || []).length;
+      // Compter les modems EC25 (vendor 2c7c)
+      const ec25Count = (usbDevices.match(/2c7c:0125/gi) || []).length;
+
+      // SIM7600 detection (priority - vendor ID 1e0e)
+      if (usbDevices.includes('1e0e:9001') || usbDevices.includes('1e0e:9011') ||
+          usbDevices.toLowerCase().includes('simcom')) {
+        detected.modemType = 'sim7600';
+        // SIM7600: data=ttyUSB2 (port AT), audio=ttyUSB1
+        // Pour 2 modems: modem1=ttyUSB0-4, modem2=ttyUSB5-9
+        if (detected.ports.includes('/dev/ttyUSB2')) {
+          detected.suggestedDataPort = '/dev/ttyUSB2';
+        }
+        if (detected.ports.includes('/dev/ttyUSB1')) {
+          detected.suggestedAudioPort = '/dev/ttyUSB1';
+        }
+
+        // Ajouter les modems détectés
+        if (sim7600Count >= 1) {
+          detected.modems.push({
+            id: 'modem-1',
+            type: 'SIM7600',
+            dataPort: '/dev/ttyUSB2',
+            audioPort: '/dev/ttyUSB1',
+          });
+        }
+        if (sim7600Count >= 2) {
+          detected.modems.push({
+            id: 'modem-2',
+            type: 'SIM7600',
+            dataPort: '/dev/ttyUSB7',
+            audioPort: '/dev/ttyUSB6',
+          });
+        }
+      }
+      // EC25 detection (vendor ID 2c7c)
+      else if (usbDevices.includes('2c7c:0125') || usbDevices.toLowerCase().includes('quectel')) {
         detected.modemType = 'ec25';
         // EC25: data=ttyUSB2, audio=ttyUSB1
         if (detected.ports.includes('/dev/ttyUSB2')) {
@@ -766,43 +856,42 @@ except Exception as e:
         if (detected.ports.includes('/dev/ttyUSB1')) {
           detected.suggestedAudioPort = '/dev/ttyUSB1';
         }
-      } else if (usbDevices.toLowerCase().includes('simcom') ||
-                 usbDevices.toLowerCase().includes('sim7600')) {
-        detected.modemType = 'sim7600';
-        // SIM7600: data=ttyUSB3, audio=ttyUSB2
-        if (detected.ports.includes('/dev/ttyUSB3')) {
-          detected.suggestedDataPort = '/dev/ttyUSB3';
-        }
-        if (detected.ports.includes('/dev/ttyUSB2')) {
-          detected.suggestedAudioPort = '/dev/ttyUSB2';
+
+        if (ec25Count >= 1) {
+          detected.modems.push({
+            id: 'modem-1',
+            type: 'EC25',
+            dataPort: '/dev/ttyUSB2',
+            audioPort: '/dev/ttyUSB1',
+          });
         }
       }
 
       // Si pas détecté mais ports présents, suggérer selon le nombre de ports
       if (!detected.modemType && detected.ports.length >= 3) {
-        // Généralement 5 ports = SIM7600, 3-4 ports = EC25
+        // Généralement 5+ ports = SIM7600, 3-4 ports = EC25
         if (detected.ports.length >= 5) {
           detected.modemType = 'sim7600';
-          detected.suggestedDataPort = '/dev/ttyUSB3';
-          detected.suggestedAudioPort = '/dev/ttyUSB2';
+          detected.suggestedDataPort = '/dev/ttyUSB2';
+          detected.suggestedAudioPort = '/dev/ttyUSB1';
+          detected.modems.push({
+            id: 'modem-1',
+            type: 'SIM7600',
+            dataPort: '/dev/ttyUSB2',
+            audioPort: '/dev/ttyUSB1',
+          });
+          if (detected.ports.length >= 10) {
+            detected.modems.push({
+              id: 'modem-2',
+              type: 'SIM7600',
+              dataPort: '/dev/ttyUSB7',
+              audioPort: '/dev/ttyUSB6',
+            });
+          }
         } else {
           detected.modemType = 'ec25';
           detected.suggestedDataPort = '/dev/ttyUSB2';
           detected.suggestedAudioPort = '/dev/ttyUSB1';
-        }
-      }
-
-      // Vérifier quel port répond aux commandes AT
-      for (const port of detected.ports) {
-        try {
-          // Test rapide avec timeout court
-          const testResult = await this.runCmd(`echo "AT" | timeout 2 cat > ${port} && timeout 2 cat < ${port} 2>/dev/null`, 5000);
-          if (testResult.includes('OK')) {
-            detected.suggestedDataPort = port;
-            break;
-          }
-        } catch (e) {
-          // Ignorer les erreurs de test
         }
       }
     } catch (error) {

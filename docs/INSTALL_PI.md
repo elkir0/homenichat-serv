@@ -274,8 +274,8 @@ sudo dphys-swapfile swapon
 
 ## Getting Help
 
-- GitHub Issues: https://github.com/your-repo/homenichat/issues
-- Documentation: https://github.com/your-repo/homenichat/docs
+- GitHub Issues: https://github.com/elkir0/homenichat-serv/issues
+- Documentation: https://github.com/elkir0/homenichat-serv/docs
 
 ---
 

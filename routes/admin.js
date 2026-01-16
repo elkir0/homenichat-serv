@@ -579,31 +579,70 @@ router.get('/modems', async (req, res) => {
     const modems = [];
     const modemConfig = modemService.getModemConfig();
 
-    for (const id of modemIds) {
-      const status = await modemService.collectModemStatus(id);
+    // Get detected modem type from USB (not from config default)
+    const detectedPorts = await modemService.detectUsbPorts();
+    const detectedType = detectedPorts.modemType?.toUpperCase() || modemConfig.modemType?.toUpperCase() || 'GSM';
 
-      // Transformer en format compatible avec SmsPage
-      modems.push({
-        id: status.id,
-        device: status.name || status.id,
-        type: status.model || modemConfig.modemType?.toUpperCase() || 'GSM',
-        status: status.state === 'Free' ? 'connected' :
-                status.needsPin ? 'error' :
-                status.state?.toLowerCase().includes('not') ? 'disconnected' : 'connected',
-        signal: status.rssiPercent || 0,
-        operator: status.operator || 'Unknown',
-        phone: status.number || modemConfig.phoneNumber || '',
-        // Données étendues
-        technology: status.technology,
-        imei: status.imei,
-        registered: status.registered,
-        voice: status.voice,
-        sms: status.sms,
-        smsEnabled: modemConfig.sms?.enabled !== false,
-      });
+    // If Asterisk returned modems, use them
+    if (modemIds.length > 0) {
+      for (const id of modemIds) {
+        const status = await modemService.collectModemStatus(id);
+
+        // Determine modem type: from model field, detected USB, or config
+        let modemType = detectedType;
+        if (status.model) {
+          // Extract type from model name (e.g., "SIMCOM_SIM7600E-H" -> "SIM7600")
+          if (status.model.toLowerCase().includes('sim7600') || status.model.toLowerCase().includes('simcom')) {
+            modemType = 'SIM7600';
+          } else if (status.model.toLowerCase().includes('ec25') || status.model.toLowerCase().includes('quectel')) {
+            modemType = 'EC25';
+          }
+        }
+
+        // Transformer en format compatible avec SmsPage
+        modems.push({
+          id: status.id,
+          device: status.name || status.id,
+          type: modemType,
+          status: status.state === 'Free' ? 'connected' :
+                  status.needsPin ? 'error' :
+                  status.state?.toLowerCase().includes('not') ? 'disconnected' : 'connected',
+          signal: status.rssiPercent || 0,
+          operator: status.operator || 'Unknown',
+          phone: status.number || modemConfig.phoneNumber || '',
+          // Données étendues
+          technology: status.technology,
+          imei: status.imei,
+          registered: status.registered,
+          voice: status.voice,
+          sms: status.sms,
+          smsEnabled: modemConfig.sms?.enabled !== false,
+        });
+      }
+    }
+    // If no modems from Asterisk but USB modems detected, show them
+    else if (detectedPorts.modems && detectedPorts.modems.length > 0) {
+      for (const detected of detectedPorts.modems) {
+        modems.push({
+          id: detected.id,
+          device: detected.id,
+          type: detected.type || detectedType,
+          status: 'disconnected', // Not connected to Asterisk yet
+          signal: 0,
+          operator: 'Unknown',
+          phone: '',
+          technology: 'Unknown',
+          imei: '',
+          registered: false,
+          voice: false,
+          sms: false,
+          smsEnabled: modemConfig.sms?.enabled !== false,
+          needsConfig: true, // Flag to indicate needs configuration
+        });
+      }
     }
 
-    res.json({ modems });
+    res.json({ modems, detectedType });
 
   } catch (error) {
     console.error('[Admin] List modems error:', error);
