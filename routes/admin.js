@@ -1345,18 +1345,370 @@ router.get('/voip/trunks', async (req, res) => {
 
 /**
  * GET /api/admin/voip/extensions
- * Liste les extensions (si FreePBX connecté)
+ * Liste les extensions VoIP des utilisateurs
  */
 router.get('/voip/extensions', async (req, res) => {
   try {
-    // TODO: Récupérer depuis FreePBX via AMI
-    res.json({
-      extensions: [],
-      message: 'Extension listing requires FreePBX AMI connection',
-    });
+    if (!db) {
+      return res.status(503).json({ error: 'Database not available' });
+    }
+
+    const extensions = db.getAllVoIPExtensions();
+
+    // Get FreePBX AMI status for each extension
+    const amiService = require('../services/FreePBXAmiService');
+    for (const ext of extensions) {
+      if (amiService.connected && amiService.authenticated) {
+        try {
+          const status = await amiService.getPjsipExtensionStatus(ext.extension);
+          ext.pbxStatus = status;
+        } catch (e) {
+          ext.pbxStatus = { error: e.message };
+        }
+      }
+    }
+
+    res.json({ extensions });
 
   } catch (error) {
     console.error('[Admin] List extensions error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/voip/extensions
+ * Créer une extension VoIP pour un utilisateur
+ */
+router.post('/voip/extensions', [
+  body('userId').isInt().withMessage('User ID is required'),
+  body('extension').optional().matches(/^\d{3,6}$/).withMessage('Extension must be 3-6 digits'),
+  body('displayName').optional().isString().isLength({ max: 50 }),
+  body('createOnPbx').optional().isBoolean(),
+], validate, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not available' });
+    }
+
+    const { userId, extension, displayName, createOnPbx = true } = req.body;
+
+    // Vérifier que l'utilisateur existe
+    const user = db.getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Vérifier que l'utilisateur n'a pas déjà une extension
+    const existing = db.getVoIPExtensionByUserId(userId);
+    if (existing) {
+      return res.status(409).json({
+        error: 'User already has a VoIP extension',
+        extension: existing.extension,
+      });
+    }
+
+    // Déterminer le numéro d'extension
+    const extNumber = extension || db.getNextAvailableExtension(1000);
+
+    // Vérifier que l'extension n'est pas déjà utilisée
+    if (!db.isExtensionAvailable(extNumber)) {
+      return res.status(409).json({ error: `Extension ${extNumber} already exists` });
+    }
+
+    // Générer un secret aléatoire sécurisé
+    const crypto = require('crypto');
+    const secret = crypto.randomBytes(16).toString('hex');
+
+    // Créer l'extension dans la DB
+    const extData = db.createVoIPExtension(userId, {
+      extension: extNumber,
+      secret,
+      displayName: displayName || user.username,
+      webrtcEnabled: true,
+    });
+
+    // Créer sur FreePBX si demandé
+    let pbxResult = null;
+    if (createOnPbx) {
+      const amiService = require('../services/FreePBXAmiService');
+      if (amiService.connected && amiService.authenticated) {
+        pbxResult = await amiService.createPjsipExtension({
+          extension: extNumber,
+          secret,
+          displayName: displayName || user.username,
+        });
+
+        // Mettre à jour le statut de sync
+        db.updateVoIPExtension(userId, {
+          syncedToPbx: pbxResult.success,
+          pbxSyncError: pbxResult.success ? null : pbxResult.message,
+        });
+      } else {
+        pbxResult = { success: false, message: 'FreePBX non connecté' };
+        db.updateVoIPExtension(userId, {
+          syncedToPbx: false,
+          pbxSyncError: 'FreePBX non connecté',
+        });
+      }
+    }
+
+    await securityService?.logAction(req.user.id, 'voip_extension_created', {
+      category: 'admin',
+      resource: `extension:${extNumber}`,
+      targetUserId: userId,
+      username: req.user.username,
+    }, req);
+
+    res.status(201).json({
+      success: true,
+      extension: {
+        ...extData,
+        secret, // Retourner le secret une seule fois à la création
+      },
+      pbxSync: pbxResult,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Create VoIP extension error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/voip/extensions/:userId
+ * Récupérer l'extension VoIP d'un utilisateur
+ */
+router.get('/voip/extensions/:userId', [
+  param('userId').isInt(),
+], validate, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not available' });
+    }
+
+    const { userId } = req.params;
+    const extension = db.getVoIPExtensionByUserId(parseInt(userId));
+
+    if (!extension) {
+      return res.status(404).json({ error: 'No VoIP extension for this user' });
+    }
+
+    // Ne pas exposer le secret
+    const { secret, ...safeExtension } = extension;
+    safeExtension.hasSecret = !!secret;
+
+    res.json({ extension: safeExtension });
+
+  } catch (error) {
+    console.error('[Admin] Get VoIP extension error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * PUT /api/admin/voip/extensions/:userId
+ * Modifier une extension VoIP
+ */
+router.put('/voip/extensions/:userId', [
+  param('userId').isInt(),
+  body('displayName').optional().isString().isLength({ max: 50 }),
+  body('enabled').optional().isBoolean(),
+  body('regenerateSecret').optional().isBoolean(),
+], validate, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not available' });
+    }
+
+    const { userId } = req.params;
+    const { displayName, enabled, regenerateSecret } = req.body;
+
+    const existing = db.getVoIPExtensionByUserId(parseInt(userId));
+    if (!existing) {
+      return res.status(404).json({ error: 'No VoIP extension for this user' });
+    }
+
+    const updates = {};
+    let newSecret = null;
+
+    if (displayName !== undefined) {
+      updates.displayName = displayName;
+    }
+    if (enabled !== undefined) {
+      updates.enabled = enabled;
+    }
+    if (regenerateSecret) {
+      const crypto = require('crypto');
+      newSecret = crypto.randomBytes(16).toString('hex');
+      updates.secret = newSecret;
+    }
+
+    const updated = db.updateVoIPExtension(parseInt(userId), updates);
+
+    // Sync changes to PBX if secret changed
+    if (newSecret) {
+      const amiService = require('../services/FreePBXAmiService');
+      if (amiService.connected && amiService.authenticated) {
+        const pbxResult = await amiService.updatePjsipExtensionSecret(existing.extension, newSecret);
+        db.updateVoIPExtension(parseInt(userId), {
+          syncedToPbx: pbxResult.success,
+          pbxSyncError: pbxResult.success ? null : pbxResult.message,
+        });
+      }
+    }
+
+    await securityService?.logAction(req.user.id, 'voip_extension_updated', {
+      category: 'admin',
+      resource: `extension:${existing.extension}`,
+      targetUserId: userId,
+      username: req.user.username,
+    }, req);
+
+    res.json({
+      success: true,
+      extension: updated,
+      newSecret, // Only included if regenerated
+    });
+
+  } catch (error) {
+    console.error('[Admin] Update VoIP extension error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/admin/voip/extensions/:userId
+ * Supprimer une extension VoIP
+ */
+router.delete('/voip/extensions/:userId', [
+  param('userId').isInt(),
+], validate, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not available' });
+    }
+
+    const { userId } = req.params;
+    const existing = db.getVoIPExtensionByUserId(parseInt(userId));
+
+    if (!existing) {
+      return res.status(404).json({ error: 'No VoIP extension for this user' });
+    }
+
+    // Supprimer de FreePBX
+    const amiService = require('../services/FreePBXAmiService');
+    let pbxResult = null;
+    if (amiService.connected && amiService.authenticated) {
+      pbxResult = await amiService.deletePjsipExtension(existing.extension);
+    }
+
+    // Supprimer de la DB locale
+    db.deleteVoIPExtension(parseInt(userId));
+
+    await securityService?.logAction(req.user.id, 'voip_extension_deleted', {
+      category: 'admin',
+      resource: `extension:${existing.extension}`,
+      targetUserId: userId,
+      username: req.user.username,
+    }, req);
+
+    res.json({
+      success: true,
+      message: `Extension ${existing.extension} supprimée`,
+      pbxSync: pbxResult,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Delete VoIP extension error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/voip/extensions/:userId/sync
+ * Synchroniser une extension avec FreePBX
+ */
+router.post('/voip/extensions/:userId/sync', [
+  param('userId').isInt(),
+], validate, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not available' });
+    }
+
+    const { userId } = req.params;
+    const extension = db.getVoIPExtensionByUserId(parseInt(userId));
+
+    if (!extension) {
+      return res.status(404).json({ error: 'No VoIP extension for this user' });
+    }
+
+    const amiService = require('../services/FreePBXAmiService');
+    if (!amiService.connected || !amiService.authenticated) {
+      return res.status(503).json({ error: 'FreePBX non connecté' });
+    }
+
+    const user = db.getUserById(parseInt(userId));
+
+    // Recréer l'extension sur FreePBX
+    const pbxResult = await amiService.createPjsipExtension({
+      extension: extension.extension,
+      secret: extension.secret,
+      displayName: extension.displayName || user?.username,
+    });
+
+    db.updateVoIPExtension(parseInt(userId), {
+      syncedToPbx: pbxResult.success,
+      pbxSyncError: pbxResult.success ? null : pbxResult.message,
+    });
+
+    res.json({
+      success: pbxResult.success,
+      message: pbxResult.message,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Sync VoIP extension error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/voip/next-extension
+ * Récupérer le prochain numéro d'extension disponible
+ */
+router.get('/voip/next-extension', async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not available' });
+    }
+
+    const nextExtension = db.getNextAvailableExtension(1000);
+    res.json({ nextExtension });
+
+  } catch (error) {
+    console.error('[Admin] Get next extension error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/voip/ami-status
+ * État de la connexion AMI FreePBX
+ */
+router.get('/voip/ami-status', async (req, res) => {
+  try {
+    const amiService = require('../services/FreePBXAmiService');
+    const status = amiService.getStatus();
+
+    res.json({
+      ...status,
+      canCreateExtensions: status.connected && status.authenticated,
+    });
+
+  } catch (error) {
+    console.error('[Admin] AMI status error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1390,7 +1742,7 @@ router.post('/voip/test-call', [
 
 /**
  * GET /api/admin/users
- * Liste les utilisateurs
+ * Liste les utilisateurs avec leurs extensions VoIP
  */
 router.get('/users', async (req, res) => {
   try {
@@ -1404,9 +1756,22 @@ router.get('/users', async (req, res) => {
       ORDER BY created_at DESC
     `).all();
 
-    // Ajouter info 2FA
+    // Ajouter info 2FA et VoIP extension
     for (const user of users) {
       user.has2FA = await securityService?.has2FAEnabled(user.id) || false;
+
+      // Get VoIP extension info
+      const voipExt = db.getVoIPExtensionByUserId(user.id);
+      if (voipExt) {
+        user.voipExtension = {
+          extension: voipExt.extension,
+          enabled: voipExt.enabled,
+          webrtcEnabled: voipExt.webrtcEnabled,
+          syncedToPbx: voipExt.syncedToPbx,
+        };
+      } else {
+        user.voipExtension = null;
+      }
     }
 
     res.json({ users });
@@ -1419,24 +1784,31 @@ router.get('/users', async (req, res) => {
 
 /**
  * POST /api/admin/users
- * Créer un utilisateur
+ * Créer un utilisateur avec option d'extension VoIP
  */
 router.post('/users', [
   body('username').isLength({ min: 3, max: 50 }).matches(/^[a-zA-Z0-9_]+$/),
   body('password').isLength({ min: 8 }),
   body('role').isIn(['admin', 'user']),
+  body('createVoipExtension').optional().isBoolean(),
+  body('voipExtension').optional().matches(/^\d{3,6}$/),
 ], validate, async (req, res) => {
   try {
     if (!db) {
       return res.status(503).json({ error: 'Database not available' });
     }
 
-    const { username, password, role } = req.body;
+    const { username, password, role, createVoipExtension, voipExtension } = req.body;
 
     // Vérifier que l'username n'existe pas
     const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
     if (existing) {
       return res.status(409).json({ error: 'Username already exists' });
+    }
+
+    // Vérifier l'extension VoIP si spécifiée
+    if (voipExtension && !db.isExtensionAvailable(voipExtension)) {
+      return res.status(409).json({ error: `Extension ${voipExtension} already exists` });
     }
 
     // Hasher le mot de passe
@@ -1447,20 +1819,71 @@ router.post('/users', [
       VALUES (?, ?, ?)
     `).run(username, hashedPassword, role);
 
+    const userId = result.lastInsertRowid;
+
+    // Créer l'extension VoIP si demandé
+    let voipResult = null;
+    if (createVoipExtension) {
+      const crypto = require('crypto');
+      const extNumber = voipExtension || db.getNextAvailableExtension(1000);
+      const secret = crypto.randomBytes(16).toString('hex');
+
+      try {
+        const extData = db.createVoIPExtension(userId, {
+          extension: extNumber,
+          secret,
+          displayName: username,
+          webrtcEnabled: true,
+        });
+
+        voipResult = {
+          success: true,
+          extension: extNumber,
+          secret, // Retourner le secret une seule fois
+        };
+
+        // Sync to FreePBX
+        const amiService = require('../services/FreePBXAmiService');
+        if (amiService.connected && amiService.authenticated) {
+          const pbxResult = await amiService.createPjsipExtension({
+            extension: extNumber,
+            secret,
+            displayName: username,
+          });
+
+          db.updateVoIPExtension(userId, {
+            syncedToPbx: pbxResult.success,
+            pbxSyncError: pbxResult.success ? null : pbxResult.message,
+          });
+
+          voipResult.pbxSync = pbxResult;
+        } else {
+          voipResult.pbxSync = { success: false, message: 'FreePBX non connecté - sync manuel requis' };
+        }
+      } catch (voipError) {
+        voipResult = {
+          success: false,
+          error: voipError.message,
+        };
+      }
+    }
+
     await securityService?.logAction(req.user.id, 'user_created', {
       category: 'admin',
-      resource: `user:${result.lastInsertRowid}`,
+      resource: `user:${userId}`,
       targetUsername: username,
+      voipExtensionCreated: !!voipResult?.success,
       username: req.user.username,
     }, req);
 
     res.status(201).json({
       success: true,
       user: {
-        id: result.lastInsertRowid,
+        id: userId,
         username,
         role,
       },
+      voip: voipResult,
     });
 
   } catch (error) {
@@ -1526,7 +1949,7 @@ router.put('/users/:id', [
 
 /**
  * DELETE /api/admin/users/:id
- * Supprimer un utilisateur
+ * Supprimer un utilisateur et son extension VoIP
  */
 router.delete('/users/:id', [
   param('id').isInt(),
@@ -1537,9 +1960,10 @@ router.delete('/users/:id', [
     }
 
     const { id } = req.params;
+    const userId = parseInt(id);
 
     // Empêcher la suppression de soi-même
-    if (parseInt(id) === req.user.id) {
+    if (userId === req.user.id) {
       return res.status(400).json({ error: 'Cannot delete yourself' });
     }
 
@@ -1548,16 +1972,34 @@ router.delete('/users/:id', [
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // Supprimer l'extension VoIP si elle existe
+    const voipExt = db.getVoIPExtensionByUserId(userId);
+    let voipDeleteResult = null;
+    if (voipExt) {
+      const amiService = require('../services/FreePBXAmiService');
+      if (amiService.connected && amiService.authenticated) {
+        voipDeleteResult = await amiService.deletePjsipExtension(voipExt.extension);
+      }
+      // La suppression en cascade via FOREIGN KEY supprimera aussi l'entrée dans user_voip_extensions
+    }
+
     db.prepare('DELETE FROM users WHERE id = ?').run(id);
 
     await securityService?.logAction(req.user.id, 'user_deleted', {
       category: 'admin',
       resource: `user:${id}`,
       targetUsername: user.username,
+      voipExtensionDeleted: voipExt?.extension,
       username: req.user.username,
     }, req);
 
-    res.json({ success: true });
+    res.json({
+      success: true,
+      voipExtensionDeleted: voipExt ? {
+        extension: voipExt.extension,
+        pbxResult: voipDeleteResult,
+      } : null,
+    });
 
   } catch (error) {
     console.error('[Admin] Delete user error:', error);

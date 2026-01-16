@@ -218,6 +218,34 @@ class DatabaseService {
         } catch (err) {
             logger.debug('Migration voip_tokens skipped:', err.message);
         }
+
+        // Migration: Add user_voip_extensions table for WebRTC/SIP extensions per user
+        try {
+            this.db.exec(`
+                CREATE TABLE IF NOT EXISTS user_voip_extensions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL UNIQUE,
+                    extension TEXT NOT NULL UNIQUE,
+                    secret TEXT NOT NULL,
+                    display_name TEXT,
+                    context TEXT DEFAULT 'from-internal',
+                    transport TEXT DEFAULT 'wss',
+                    codecs TEXT DEFAULT 'opus,ulaw,alaw',
+                    enabled BOOLEAN DEFAULT 1,
+                    webrtc_enabled BOOLEAN DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    synced_to_pbx BOOLEAN DEFAULT 0,
+                    pbx_sync_error TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_voip_extensions_user_id ON user_voip_extensions(user_id);
+                CREATE INDEX IF NOT EXISTS idx_user_voip_extensions_extension ON user_voip_extensions(extension);
+            `);
+            logger.info('Migration: user_voip_extensions table ready');
+        } catch (err) {
+            logger.debug('Migration user_voip_extensions skipped:', err.message);
+        }
     }
 
     // --- Generic Helpers ---
@@ -635,6 +663,225 @@ class DatabaseService {
             logger.info(`Cleaned up ${result.changes} stale VoIP tokens`);
         }
         return result.changes;
+    }
+
+    // =====================================================
+    // User VoIP Extensions - WebRTC/SIP accounts per user
+    // =====================================================
+
+    /**
+     * Create a VoIP extension for a user
+     * @param {number} userId - User ID
+     * @param {object} extensionData - Extension configuration
+     */
+    createVoIPExtension(userId, extensionData) {
+        const {
+            extension,
+            secret,
+            displayName,
+            context = 'from-internal',
+            transport = 'wss',
+            codecs = 'opus,ulaw,alaw',
+            enabled = true,
+            webrtcEnabled = true
+        } = extensionData;
+
+        const stmt = this.db.prepare(`
+            INSERT INTO user_voip_extensions
+            (user_id, extension, secret, display_name, context, transport, codecs, enabled, webrtc_enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        const info = stmt.run(
+            userId,
+            extension,
+            secret,
+            displayName || null,
+            context,
+            transport,
+            codecs,
+            enabled ? 1 : 0,
+            webrtcEnabled ? 1 : 0
+        );
+
+        logger.info(`VoIP extension ${extension} created for user ${userId}`);
+        return {
+            id: info.lastInsertRowid,
+            userId,
+            extension,
+            displayName,
+            context,
+            transport,
+            codecs,
+            enabled,
+            webrtcEnabled
+        };
+    }
+
+    /**
+     * Get VoIP extension by user ID
+     * @param {number} userId - User ID
+     */
+    getVoIPExtensionByUserId(userId) {
+        const row = this.db.prepare('SELECT * FROM user_voip_extensions WHERE user_id = ?').get(userId);
+        return row ? this._formatVoIPExtensionRow(row) : null;
+    }
+
+    /**
+     * Get VoIP extension by extension number
+     * @param {string} extension - Extension number
+     */
+    getVoIPExtensionByNumber(extension) {
+        const row = this.db.prepare('SELECT * FROM user_voip_extensions WHERE extension = ?').get(extension);
+        return row ? this._formatVoIPExtensionRow(row) : null;
+    }
+
+    /**
+     * Get all VoIP extensions
+     */
+    getAllVoIPExtensions() {
+        const rows = this.db.prepare(`
+            SELECT e.*, u.username
+            FROM user_voip_extensions e
+            JOIN users u ON e.user_id = u.id
+            ORDER BY e.extension ASC
+        `).all();
+        return rows.map(row => ({
+            ...this._formatVoIPExtensionRow(row),
+            username: row.username
+        }));
+    }
+
+    /**
+     * Update VoIP extension
+     * @param {number} userId - User ID
+     * @param {object} updates - Fields to update
+     */
+    updateVoIPExtension(userId, updates) {
+        const fields = [];
+        const values = [];
+
+        if (updates.displayName !== undefined) {
+            fields.push('display_name = ?');
+            values.push(updates.displayName);
+        }
+        if (updates.secret !== undefined) {
+            fields.push('secret = ?');
+            values.push(updates.secret);
+        }
+        if (updates.context !== undefined) {
+            fields.push('context = ?');
+            values.push(updates.context);
+        }
+        if (updates.transport !== undefined) {
+            fields.push('transport = ?');
+            values.push(updates.transport);
+        }
+        if (updates.codecs !== undefined) {
+            fields.push('codecs = ?');
+            values.push(updates.codecs);
+        }
+        if (updates.enabled !== undefined) {
+            fields.push('enabled = ?');
+            values.push(updates.enabled ? 1 : 0);
+        }
+        if (updates.webrtcEnabled !== undefined) {
+            fields.push('webrtc_enabled = ?');
+            values.push(updates.webrtcEnabled ? 1 : 0);
+        }
+        if (updates.syncedToPbx !== undefined) {
+            fields.push('synced_to_pbx = ?');
+            values.push(updates.syncedToPbx ? 1 : 0);
+        }
+        if (updates.pbxSyncError !== undefined) {
+            fields.push('pbx_sync_error = ?');
+            values.push(updates.pbxSyncError);
+        }
+
+        if (fields.length === 0) return null;
+
+        fields.push('updated_at = CURRENT_TIMESTAMP');
+        values.push(userId);
+
+        const sql = `UPDATE user_voip_extensions SET ${fields.join(', ')} WHERE user_id = ?`;
+        this.db.prepare(sql).run(...values);
+
+        return this.getVoIPExtensionByUserId(userId);
+    }
+
+    /**
+     * Delete VoIP extension for a user
+     * @param {number} userId - User ID
+     */
+    deleteVoIPExtension(userId) {
+        const existing = this.getVoIPExtensionByUserId(userId);
+        if (!existing) return false;
+
+        this.db.prepare('DELETE FROM user_voip_extensions WHERE user_id = ?').run(userId);
+        logger.info(`VoIP extension ${existing.extension} deleted for user ${userId}`);
+        return true;
+    }
+
+    /**
+     * Get next available extension number
+     * @param {number} startFrom - Starting extension number (default 1000)
+     */
+    getNextAvailableExtension(startFrom = 1000) {
+        const row = this.db.prepare(`
+            SELECT MAX(CAST(extension AS INTEGER)) as max_ext
+            FROM user_voip_extensions
+            WHERE extension GLOB '[0-9]*'
+        `).get();
+
+        const maxExt = row?.max_ext || (startFrom - 1);
+        return String(Math.max(maxExt + 1, startFrom));
+    }
+
+    /**
+     * Check if extension is available
+     * @param {string} extension - Extension number to check
+     */
+    isExtensionAvailable(extension) {
+        const row = this.db.prepare('SELECT id FROM user_voip_extensions WHERE extension = ?').get(extension);
+        return !row;
+    }
+
+    /**
+     * Get extensions pending sync to PBX
+     */
+    getExtensionsPendingSync() {
+        const rows = this.db.prepare(`
+            SELECT e.*, u.username
+            FROM user_voip_extensions e
+            JOIN users u ON e.user_id = u.id
+            WHERE e.synced_to_pbx = 0 AND e.enabled = 1
+        `).all();
+        return rows.map(row => ({
+            ...this._formatVoIPExtensionRow(row),
+            username: row.username
+        }));
+    }
+
+    /**
+     * Format VoIP extension row from DB
+     */
+    _formatVoIPExtensionRow(row) {
+        return {
+            id: row.id,
+            userId: row.user_id,
+            extension: row.extension,
+            secret: row.secret,
+            displayName: row.display_name,
+            context: row.context,
+            transport: row.transport,
+            codecs: row.codecs,
+            enabled: !!row.enabled,
+            webrtcEnabled: !!row.webrtc_enabled,
+            syncedToPbx: !!row.synced_to_pbx,
+            pbxSyncError: row.pbx_sync_error,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at
+        };
     }
 }
 

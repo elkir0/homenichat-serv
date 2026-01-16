@@ -973,6 +973,304 @@ class FreePBXAmiService extends EventEmitter {
     };
   }
 
+  // =====================================================
+  // PJSIP Extension Management for WebRTC Users
+  // =====================================================
+
+  /**
+   * Create a PJSIP extension for WebRTC
+   * Uses AMI command to add to Asterisk DB and reload PJSIP
+   *
+   * @param {object} extensionData - Extension configuration
+   * @returns {Promise<{success: boolean, message: string}>}
+   */
+  async createPjsipExtension(extensionData) {
+    const {
+      extension,
+      secret,
+      displayName,
+      context = 'from-internal',
+      transport = 'transport-wss',
+      codecs = 'opus,ulaw,alaw'
+    } = extensionData;
+
+    if (!this.connected || !this.authenticated) {
+      return { success: false, message: 'Non connecté au PBX' };
+    }
+
+    try {
+      // For FreePBX, we use the database to store extension config
+      // Then reload PJSIP module
+
+      // Create PJSIP endpoint via AMI DBput commands
+      const commands = [
+        // Endpoint configuration
+        { family: `PJSIP/endpoint/${extension}`, key: 'type', value: 'endpoint' },
+        { family: `PJSIP/endpoint/${extension}`, key: 'context', value: context },
+        { family: `PJSIP/endpoint/${extension}`, key: 'disallow', value: 'all' },
+        { family: `PJSIP/endpoint/${extension}`, key: 'allow', value: codecs },
+        { family: `PJSIP/endpoint/${extension}`, key: 'auth', value: `auth_${extension}` },
+        { family: `PJSIP/endpoint/${extension}`, key: 'aors', value: extension },
+        { family: `PJSIP/endpoint/${extension}`, key: 'callerid', value: displayName ? `"${displayName}" <${extension}>` : extension },
+        { family: `PJSIP/endpoint/${extension}`, key: 'webrtc', value: 'yes' },
+        { family: `PJSIP/endpoint/${extension}`, key: 'dtls_auto_generate_cert', value: 'yes' },
+        { family: `PJSIP/endpoint/${extension}`, key: 'ice_support', value: 'yes' },
+        { family: `PJSIP/endpoint/${extension}`, key: 'media_encryption', value: 'dtls' },
+        { family: `PJSIP/endpoint/${extension}`, key: 'media_use_received_transport', value: 'yes' },
+        { family: `PJSIP/endpoint/${extension}`, key: 'rtcp_mux', value: 'yes' },
+
+        // Auth configuration
+        { family: `PJSIP/auth/auth_${extension}`, key: 'type', value: 'auth' },
+        { family: `PJSIP/auth/auth_${extension}`, key: 'auth_type', value: 'userpass' },
+        { family: `PJSIP/auth/auth_${extension}`, key: 'username', value: extension },
+        { family: `PJSIP/auth/auth_${extension}`, key: 'password', value: secret },
+
+        // AOR (Address of Record) configuration
+        { family: `PJSIP/aor/${extension}`, key: 'type', value: 'aor' },
+        { family: `PJSIP/aor/${extension}`, key: 'max_contacts', value: '5' },
+        { family: `PJSIP/aor/${extension}`, key: 'remove_existing', value: 'yes' }
+      ];
+
+      // Execute DBput commands
+      for (const cmd of commands) {
+        await this.sendDbPut(cmd.family, cmd.key, cmd.value);
+      }
+
+      // Reload PJSIP module to apply changes
+      await this.reloadPjsip();
+
+      logger.info(`[AMI] PJSIP extension ${extension} created successfully`);
+      return { success: true, message: `Extension ${extension} créée avec succès` };
+
+    } catch (error) {
+      logger.error(`[AMI] Error creating PJSIP extension ${extension}:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Delete a PJSIP extension
+   *
+   * @param {string} extension - Extension number to delete
+   * @returns {Promise<{success: boolean, message: string}>}
+   */
+  async deletePjsipExtension(extension) {
+    if (!this.connected || !this.authenticated) {
+      return { success: false, message: 'Non connecté au PBX' };
+    }
+
+    try {
+      // Delete all related database entries
+      const families = [
+        `PJSIP/endpoint/${extension}`,
+        `PJSIP/auth/auth_${extension}`,
+        `PJSIP/aor/${extension}`
+      ];
+
+      for (const family of families) {
+        await this.sendDbDelTree(family);
+      }
+
+      // Reload PJSIP module
+      await this.reloadPjsip();
+
+      logger.info(`[AMI] PJSIP extension ${extension} deleted successfully`);
+      return { success: true, message: `Extension ${extension} supprimée avec succès` };
+
+    } catch (error) {
+      logger.error(`[AMI] Error deleting PJSIP extension ${extension}:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Update PJSIP extension secret/password
+   *
+   * @param {string} extension - Extension number
+   * @param {string} newSecret - New password
+   * @returns {Promise<{success: boolean, message: string}>}
+   */
+  async updatePjsipExtensionSecret(extension, newSecret) {
+    if (!this.connected || !this.authenticated) {
+      return { success: false, message: 'Non connecté au PBX' };
+    }
+
+    try {
+      await this.sendDbPut(`PJSIP/auth/auth_${extension}`, 'password', newSecret);
+      await this.reloadPjsip();
+
+      logger.info(`[AMI] PJSIP extension ${extension} password updated`);
+      return { success: true, message: `Mot de passe mis à jour pour ${extension}` };
+
+    } catch (error) {
+      logger.error(`[AMI] Error updating PJSIP extension ${extension}:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Get PJSIP extension status (registration info)
+   *
+   * @param {string} extension - Extension number
+   * @returns {Promise<object>}
+   */
+  async getPjsipExtensionStatus(extension) {
+    if (!this.connected || !this.authenticated) {
+      return { registered: false, error: 'Non connecté au PBX' };
+    }
+
+    return new Promise((resolve) => {
+      const actionId = `pjsip_status_${Date.now()}`;
+      let responseData = '';
+
+      const timeout = setTimeout(() => {
+        resolve({ registered: false, extension });
+      }, 5000);
+
+      const handler = (data) => {
+        responseData += data.toString();
+        if (responseData.includes('EndpointDetail') && responseData.includes(actionId)) {
+          clearTimeout(timeout);
+
+          const isRegistered = responseData.includes('DeviceState: In use') ||
+                              responseData.includes('DeviceState: Not in use') ||
+                              responseData.includes('Contacts:');
+
+          resolve({
+            extension,
+            registered: isRegistered,
+            deviceState: this.extractValue(responseData, 'DeviceState'),
+            contacts: this.extractValue(responseData, 'Contacts')
+          });
+        }
+      };
+
+      this.socket.on('data', handler);
+
+      setTimeout(() => {
+        this.socket.removeListener('data', handler);
+      }, 6000);
+
+      this.sendAction({
+        Action: 'PJSIPShowEndpoint',
+        ActionID: actionId,
+        Endpoint: extension
+      });
+    });
+  }
+
+  /**
+   * Send DBput command to Asterisk
+   */
+  sendDbPut(family, key, value) {
+    return new Promise((resolve, reject) => {
+      const actionId = `dbput_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      const timeout = setTimeout(() => {
+        reject(new Error('Timeout waiting for DBput response'));
+      }, 5000);
+
+      const handler = (data) => {
+        const str = data.toString();
+        if (str.includes(actionId)) {
+          clearTimeout(timeout);
+          this.socket.removeListener('data', handler);
+
+          if (str.includes('Success')) {
+            resolve({ success: true });
+          } else {
+            reject(new Error(`DBput failed: ${str}`));
+          }
+        }
+      };
+
+      this.socket.on('data', handler);
+
+      this.sendAction({
+        Action: 'DBPut',
+        ActionID: actionId,
+        Family: family,
+        Key: key,
+        Val: value
+      });
+    });
+  }
+
+  /**
+   * Send DBDelTree command to Asterisk (delete family tree)
+   */
+  sendDbDelTree(family) {
+    return new Promise((resolve, reject) => {
+      const actionId = `dbdel_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      const timeout = setTimeout(() => {
+        // Not critical if delete times out - family may not exist
+        resolve({ success: true, message: 'Timeout - family may not exist' });
+      }, 5000);
+
+      const handler = (data) => {
+        const str = data.toString();
+        if (str.includes(actionId)) {
+          clearTimeout(timeout);
+          this.socket.removeListener('data', handler);
+          resolve({ success: true });
+        }
+      };
+
+      this.socket.on('data', handler);
+
+      this.sendAction({
+        Action: 'DBDelTree',
+        ActionID: actionId,
+        Family: family
+      });
+    });
+  }
+
+  /**
+   * Reload PJSIP module
+   */
+  reloadPjsip() {
+    return new Promise((resolve, reject) => {
+      const actionId = `reload_${Date.now()}`;
+
+      const timeout = setTimeout(() => {
+        reject(new Error('Timeout waiting for PJSIP reload'));
+      }, 10000);
+
+      const handler = (data) => {
+        const str = data.toString();
+        if (str.includes(actionId)) {
+          clearTimeout(timeout);
+          this.socket.removeListener('data', handler);
+
+          if (str.includes('Success')) {
+            resolve({ success: true });
+          } else {
+            reject(new Error(`PJSIP reload failed: ${str}`));
+          }
+        }
+      };
+
+      this.socket.on('data', handler);
+
+      this.sendAction({
+        Action: 'Command',
+        ActionID: actionId,
+        Command: 'pjsip reload'
+      });
+    });
+  }
+
+  /**
+   * Extract value from AMI response
+   */
+  extractValue(response, key) {
+    const regex = new RegExp(`${key}:\\s*(.+?)\\r?\\n`, 'i');
+    const match = response.match(regex);
+    return match ? match[1].trim() : null;
+  }
+
   /**
    * Stop the service
    */
