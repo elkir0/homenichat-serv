@@ -631,49 +631,49 @@ router.get('/sms/stats', async (req, res) => {
       const weekStart = now - (7 * 24 * 60 * 60 * 1000);
 
       try {
-        // Stats totales
+        // Stats totales - FILTRÉES PAR PROVIDER SMS
         stats.total.sent = db.prepare(
-          "SELECT COUNT(*) as count FROM messages WHERE from_me = 1"
+          "SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE c.provider = 'sms' AND m.from_me = 1"
         ).get()?.count || 0;
 
         stats.total.received = db.prepare(
-          "SELECT COUNT(*) as count FROM messages WHERE from_me = 0"
+          "SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE c.provider = 'sms' AND m.from_me = 0"
         ).get()?.count || 0;
 
         stats.total.failed = db.prepare(
-          "SELECT COUNT(*) as count FROM messages WHERE status = 'failed'"
+          "SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE c.provider = 'sms' AND m.status = 'failed'"
         ).get()?.count || 0;
 
         stats.total.pending = db.prepare(
-          "SELECT COUNT(*) as count FROM messages WHERE status = 'pending'"
+          "SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE c.provider = 'sms' AND m.status = 'pending'"
         ).get()?.count || 0;
 
         // Stats aujourd'hui
         stats.today.sent = db.prepare(
-          "SELECT COUNT(*) as count FROM messages WHERE timestamp > ? AND from_me = 1"
+          "SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE c.provider = 'sms' AND m.timestamp > ? AND m.from_me = 1"
         ).get(todayStart)?.count || 0;
 
         stats.today.received = db.prepare(
-          "SELECT COUNT(*) as count FROM messages WHERE timestamp > ? AND from_me = 0"
+          "SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE c.provider = 'sms' AND m.timestamp > ? AND m.from_me = 0"
         ).get(todayStart)?.count || 0;
 
         // Stats semaine
         stats.week.sent = db.prepare(
-          "SELECT COUNT(*) as count FROM messages WHERE timestamp > ? AND from_me = 1"
+          "SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE c.provider = 'sms' AND m.timestamp > ? AND m.from_me = 1"
         ).get(weekStart)?.count || 0;
 
         stats.week.received = db.prepare(
-          "SELECT COUNT(*) as count FROM messages WHERE timestamp > ? AND from_me = 0"
+          "SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE c.provider = 'sms' AND m.timestamp > ? AND m.from_me = 0"
         ).get(weekStart)?.count || 0;
 
-        // Stockage
+        // Stockage SMS uniquement
         stats.storage.count = db.prepare(
-          "SELECT COUNT(*) as count FROM messages"
+          "SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE c.provider = 'sms'"
         ).get()?.count || 0;
 
-        // Dernière activité
+        // Dernière activité SMS
         const lastMsg = db.prepare(
-          "SELECT MAX(timestamp) as ts FROM messages"
+          "SELECT MAX(m.timestamp) as ts FROM messages m JOIN chats c ON m.chat_id = c.id WHERE c.provider = 'sms'"
         ).get();
         stats.lastActivity = lastMsg?.ts ? new Date(lastMsg.ts).toISOString() : null;
 
