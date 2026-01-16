@@ -222,21 +222,42 @@ class ModemService {
     const output = await this.asteriskCmd('quectel show devices');
     const modems = [];
 
+    // Skip if Asterisk returned an error or is not running
+    if (!output ||
+        output.startsWith('Error') ||
+        output.includes('/bin/sh:') ||
+        output.includes('Unable to connect') ||
+        output.includes('command not found') ||
+        output.includes('No such file') ||
+        output.includes('not running') ||
+        output.includes('not available')) {
+      this.logger.warn('[ModemService] Asterisk not available or chan_quectel not loaded:', output?.substring(0, 100));
+      return modems;
+    }
+
     // Parser la sortie de "quectel show devices"
     // Format: ID           Group State      RSSI Mode Provide Model...
     const lines = output.split('\n');
     for (const line of lines) {
       const trimmed = line.trim();
-      // Skip empty lines and header line (contains "ID" at start or "Group")
-      if (!trimmed || trimmed.startsWith('ID') || trimmed.includes('Group State')) {
+      // Skip empty lines, header line, and error messages
+      if (!trimmed ||
+          trimmed.startsWith('ID') ||
+          trimmed.includes('Group State') ||
+          trimmed.startsWith('Error') ||
+          trimmed.startsWith('/bin/sh') ||
+          trimmed.startsWith('Unable') ||
+          trimmed.includes('not found') ||
+          trimmed.includes('No ')) {
         continue;
       }
       // Extract modem ID (first column)
-      const match = trimmed.match(/^(\S+)\s+/);
+      // Valid modem IDs are alphanumeric with optional hyphens (e.g., "quectel-modem", "hni-modem")
+      const match = trimmed.match(/^([a-zA-Z][a-zA-Z0-9_-]*)\s+/);
       if (match && match[1]) {
-        // Valid modem ID (not a number, not empty)
         const modemId = match[1];
-        if (modemId && !/^\d+$/.test(modemId)) {
+        // Additional validation: modem ID should be reasonable length
+        if (modemId.length >= 2 && modemId.length <= 32) {
           modems.push(modemId);
         }
       }
