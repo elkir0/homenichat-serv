@@ -30,7 +30,10 @@ import {
   IconButton,
   Tooltip,
   Collapse,
+  CircularProgress,
 } from '@mui/material';
+import { systemApi } from '../services/api';
+import InstallWizard from '../components/InstallWizard';
 import {
   Send as SendIcon,
   Refresh as RefreshIcon,
@@ -456,6 +459,15 @@ export default function ModemsPage() {
   const queryClient = useQueryClient();
   const [selectedTab, setSelectedTab] = useState(0);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [showInstallWizard, setShowInstallWizard] = useState(false);
+
+  // Query system status to check if Asterisk is installed
+  const { data: systemStatus, isLoading: isLoadingSystem, refetch: refetchSystem } = useQuery({
+    queryKey: ['systemStatus'],
+    queryFn: systemApi.getStatus,
+    staleTime: 60000, // 1 minute
+    retry: 1,
+  });
 
   // Dialogs
   const [atDialogOpen, setAtDialogOpen] = useState(false);
@@ -762,6 +774,110 @@ export default function ModemsPage() {
 
   const modemsList = fullStatus?.modems ? Object.entries(fullStatus.modems) : [];
 
+  // Handler for when installation is complete
+  const handleInstallComplete = () => {
+    setShowInstallWizard(false);
+    refetchSystem();
+    queryClient.invalidateQueries({ queryKey: ['modemFullStatus'] });
+  };
+
+  // Show loading state while checking system status
+  if (isLoadingSystem) {
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 400, gap: 2 }}>
+        <CircularProgress />
+        <Typography color="text.secondary">Vérification du système...</Typography>
+      </Box>
+    );
+  }
+
+  // Show InstallWizard if Asterisk is not installed or user requested it
+  const needsInstallation = systemStatus && (!systemStatus.asterisk?.installed || !systemStatus.chanQuectel?.installed);
+  const hasModems = systemStatus?.modems && systemStatus.modems.length > 0;
+
+  if (showInstallWizard || (needsInstallation && hasModems)) {
+    return (
+      <Box>
+        {/* Header with back button if coming from explicit request */}
+        {showInstallWizard && systemStatus?.asterisk?.installed && (
+          <Box sx={{ mb: 2 }}>
+            <Button onClick={() => setShowInstallWizard(false)} variant="outlined">
+              ← Retour aux modems
+            </Button>
+          </Box>
+        )}
+        <InstallWizard onComplete={handleInstallComplete} />
+      </Box>
+    );
+  }
+
+  // Show prompt to install if modems detected but no Asterisk
+  if (needsInstallation && !hasModems) {
+    return (
+      <Box sx={{ p: 3 }}>
+        <Alert severity="info" sx={{ mb: 3 }}>
+          <Typography variant="subtitle1" fontWeight={600}>
+            Configuration requise
+          </Typography>
+          <Typography variant="body2">
+            Asterisk et chan_quectel ne sont pas installés. Connectez un modem USB pour lancer l'assistant d'installation.
+          </Typography>
+        </Alert>
+        <Card>
+          <CardContent>
+            <Typography variant="h6" gutterBottom>
+              État du système
+            </Typography>
+            <Grid container spacing={2}>
+              <Grid item xs={6} md={3}>
+                <Chip
+                  label={`Asterisk: ${systemStatus?.asterisk?.installed ? 'Installé' : 'Non installé'}`}
+                  color={systemStatus?.asterisk?.installed ? 'success' : 'error'}
+                  variant="outlined"
+                />
+              </Grid>
+              <Grid item xs={6} md={3}>
+                <Chip
+                  label={`chan_quectel: ${systemStatus?.chanQuectel?.installed ? 'Installé' : 'Non installé'}`}
+                  color={systemStatus?.chanQuectel?.installed ? 'success' : 'error'}
+                  variant="outlined"
+                />
+              </Grid>
+              <Grid item xs={6} md={3}>
+                <Chip
+                  label={`FreePBX: ${systemStatus?.freepbx?.installed ? 'Installé' : 'Non installé'}`}
+                  color={systemStatus?.freepbx?.installed ? 'success' : 'default'}
+                  variant="outlined"
+                />
+              </Grid>
+              <Grid item xs={6} md={3}>
+                <Chip
+                  label={`Modems: ${systemStatus?.modems?.length || 0} détecté(s)`}
+                  color={systemStatus?.modems?.length ? 'success' : 'warning'}
+                  variant="outlined"
+                />
+              </Grid>
+            </Grid>
+            <Box sx={{ mt: 3 }}>
+              <Button
+                variant="contained"
+                onClick={() => setShowInstallWizard(true)}
+                disabled={!systemStatus?.platform?.canInstall}
+              >
+                Lancer l'assistant d'installation
+              </Button>
+              {!systemStatus?.platform?.canInstall && (
+                <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+                  L'installation nécessite les droits root sur un système Linux.
+                </Typography>
+              )}
+            </Box>
+          </CardContent>
+        </Card>
+      </Box>
+    );
+  }
+
   if (error) {
     return (
       <Box sx={{ p: 3 }}>
@@ -772,6 +888,13 @@ export default function ModemsPage() {
           Assurez-vous que le service de surveillance des modems est actif et configuré.
           Cette fonctionnalité nécessite un accès au serveur Asterisk avec chan_quectel.
         </Alert>
+        {systemStatus && !systemStatus.asterisk?.installed && (
+          <Box sx={{ mt: 2 }}>
+            <Button variant="contained" onClick={() => setShowInstallWizard(true)}>
+              Installer Asterisk + chan_quectel
+            </Button>
+          </Box>
+        )}
       </Box>
     );
   }
@@ -816,6 +939,17 @@ export default function ModemsPage() {
           >
             Restart Asterisk
           </Button>
+          {systemStatus?.platform?.canInstall && (
+            <Tooltip title="Réinstaller Asterisk + chan_quectel">
+              <Button
+                variant="outlined"
+                color="secondary"
+                onClick={() => setShowInstallWizard(true)}
+              >
+                Installation
+              </Button>
+            </Tooltip>
+          )}
         </Box>
       </Box>
 

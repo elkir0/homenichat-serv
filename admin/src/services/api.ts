@@ -496,6 +496,71 @@ export const configApi = {
   },
 };
 
+// API Admin - System & Installation
+export interface SystemStatusResponse {
+  asterisk: {
+    installed: boolean;
+    version?: string;
+    running?: boolean;
+  };
+  chanQuectel: {
+    installed: boolean;
+    loaded?: boolean;
+  };
+  freepbx: {
+    installed: boolean;
+    version?: string;
+  };
+  modems: Array<{
+    type: string;
+    vendor: string;
+    ports: {
+      data: string;
+      audio: string;
+    };
+  }>;
+  platform: {
+    os: string;
+    arch: string;
+    distro?: string;
+    version?: string;
+    isRoot: boolean;
+    canInstall: boolean;
+  };
+}
+
+export interface InstallStatus {
+  isInstalling: boolean;
+  component?: string;
+  progress?: number;
+  step?: string;
+}
+
+export const systemApi = {
+  getStatus: async (): Promise<SystemStatusResponse> => {
+    const response = await api.get('/api/admin/system/status');
+    return response.data;
+  },
+
+  getInstallStatus: async (): Promise<InstallStatus> => {
+    const response = await api.get('/api/admin/install/status');
+    return response.data;
+  },
+
+  cancelInstall: async (): Promise<{ success: boolean; message: string }> => {
+    const response = await api.post('/api/admin/install/cancel');
+    return response.data;
+  },
+
+  // Note: Les installations Asterisk/FreePBX utilisent SSE directement, pas axios
+  // Voir InstallWizard.tsx pour l'implémentation avec EventSource
+  getInstallUrl: (component: 'asterisk' | 'freepbx', options?: Record<string, string>): string => {
+    const params = new URLSearchParams(options);
+    const baseUrl = API_BASE_URL || '';
+    return `${baseUrl}/api/admin/install/${component}?${params.toString()}`;
+  },
+};
+
 // API Admin - Tunnel (tunnl.gg)
 export const tunnelApi = {
   getStatus: async () => {

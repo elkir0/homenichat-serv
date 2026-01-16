@@ -25,6 +25,10 @@ const ModemService = require('../services/ModemService');
 const TunnelService = require('../services/TunnelService');
 let tunnelService = null;
 
+// Import InstallerService
+const InstallerService = require('../services/InstallerService');
+let installerService = null;
+
 /**
  * Initialise les routes avec les services nécessaires
  */
@@ -45,6 +49,11 @@ function initAdminRoutes(services) {
   tunnelService = new TunnelService({
     port: services.port || 3001,
     dataDir: services.dataDir || '/var/lib/homenichat',
+  });
+
+  // Initialize InstallerService
+  installerService = new InstallerService({
+    logger: console,
   });
 
   return router;
@@ -2580,6 +2589,152 @@ router.post('/tunnel/toggle', async (req, res) => {
     });
   } catch (error) {
     console.error('[Admin] Tunnel toggle error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
+// INSTALLATION GUIDÉE - Installer Asterisk, chan_quectel, FreePBX depuis l'UI
+// =============================================================================
+
+/**
+ * GET /api/admin/system/status
+ * Récupère le statut du système (composants installés, modems détectés)
+ */
+router.get('/system/status', async (req, res) => {
+  try {
+    if (!installerService) {
+      return res.status(503).json({ error: 'Installer service not available' });
+    }
+
+    const status = await installerService.getSystemStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('[Admin] System status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/install/status
+ * Vérifie si une installation est en cours
+ */
+router.get('/install/status', async (req, res) => {
+  try {
+    if (!installerService) {
+      return res.status(503).json({ error: 'Installer service not available' });
+    }
+
+    const status = installerService.getInstallationStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('[Admin] Install status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET/POST /api/admin/install/asterisk
+ * Lance l'installation d'Asterisk + chan_quectel (SSE stream)
+ * Supporte GET pour EventSource (params dans query string)
+ * et POST pour les requêtes programmatiques (params dans body)
+ */
+const installAsteriskHandler = async (req, res) => {
+  try {
+    if (!installerService) {
+      return res.status(503).json({ error: 'Installer service not available' });
+    }
+
+    // Support both query params (GET/EventSource) and body (POST)
+    const params = req.method === 'GET' ? req.query : req.body;
+
+    const options = {
+      installChanQuectel: params.installChanQuectel !== 'false' && params.installChanQuectel !== false,
+      configureModems: params.configureModems !== 'false' && params.configureModems !== false,
+      modemType: params.modemType || 'sim7600',
+      installFreePBX: params.installFreePBX === 'true' || params.installFreePBX === true,
+    };
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'install_asterisk', {
+        category: 'system',
+        username: req.user.username,
+        options,
+      }, req);
+    }
+
+    // Start installation with SSE
+    await installerService.installAsterisk(options, res);
+  } catch (error) {
+    console.error('[Admin] Install Asterisk error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+};
+
+router.get('/install/asterisk', installAsteriskHandler);
+router.post('/install/asterisk', installAsteriskHandler);
+
+/**
+ * GET/POST /api/admin/install/freepbx
+ * Lance l'installation de FreePBX (SSE stream)
+ * Supporte GET pour EventSource et POST pour les requêtes programmatiques
+ */
+const installFreepbxHandler = async (req, res) => {
+  try {
+    if (!installerService) {
+      return res.status(503).json({ error: 'Installer service not available' });
+    }
+
+    const options = req.method === 'GET' ? req.query : (req.body || {});
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'install_freepbx', {
+        category: 'system',
+        username: req.user.username,
+      }, req);
+    }
+
+    // Start installation with SSE
+    await installerService.installFreePBX(options, res);
+  } catch (error) {
+    console.error('[Admin] Install FreePBX error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+};
+
+router.get('/install/freepbx', installFreepbxHandler);
+router.post('/install/freepbx', installFreepbxHandler);
+
+/**
+ * POST /api/admin/install/cancel
+ * Annule l'installation en cours
+ */
+router.post('/install/cancel', async (req, res) => {
+  try {
+    if (!installerService) {
+      return res.status(503).json({ error: 'Installer service not available' });
+    }
+
+    const result = installerService.cancelInstallation();
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'install_cancel', {
+        category: 'system',
+        username: req.user.username,
+        result,
+      }, req);
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('[Admin] Install cancel error:', error);
     res.status(500).json({ error: error.message });
   }
 });
