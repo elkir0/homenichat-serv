@@ -22,6 +22,10 @@ import {
   LinearProgress,
   Tooltip,
   InputAdornment,
+  FormControlLabel,
+  Checkbox,
+  Divider,
+  Stack,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -32,22 +36,29 @@ import {
   Visibility,
   VisibilityOff,
   Shield as ShieldIcon,
+  Phone as PhoneIcon,
+  PhoneDisabled as PhoneDisabledIcon,
+  ContentCopy as CopyIcon,
+  Sync as SyncIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { usersApi } from '../services/api';
-import type { User } from '../services/api';
+import { usersApi, voipApi } from '../services/api';
+import type { User, CreateUserResponse } from '../services/api';
 
 export default function UsersPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [voipDialogOpen, setVoipDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [showVoipSecret, setShowVoipSecret] = useState(false);
+  const [voipCredentials, setVoipCredentials] = useState<{ extension: string; secret: string } | null>(null);
   const [formData, setFormData] = useState({
     username: '',
-    email: '',
     password: '',
     role: 'user',
+    createVoipExtension: true,
   });
   const [newPassword, setNewPassword] = useState('');
 
@@ -56,10 +67,25 @@ export default function UsersPage() {
     queryFn: usersApi.getAll,
   });
 
+  const { data: amiStatus } = useQuery({
+    queryKey: ['ami-status'],
+    queryFn: voipApi.getAmiStatus,
+  });
+
   const createMutation = useMutation({
     mutationFn: usersApi.create,
-    onSuccess: () => {
+    onSuccess: (response: CreateUserResponse) => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
+
+      // Show VoIP credentials if created
+      if (response.voip?.success && response.voip.secret) {
+        setVoipCredentials({
+          extension: response.voip.extension || '',
+          secret: response.voip.secret,
+        });
+        setVoipDialogOpen(true);
+      }
+
       handleCloseDialog();
     },
   });
@@ -89,22 +115,64 @@ export default function UsersPage() {
     },
   });
 
+  const createVoipMutation = useMutation({
+    mutationFn: (userId: number) => voipApi.createExtension({ userId, createOnPbx: true }),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      if (response.secret) {
+        setVoipCredentials({
+          extension: response.extension.extension,
+          secret: response.secret,
+        });
+        setVoipDialogOpen(true);
+      }
+    },
+  });
+
+  const deleteVoipMutation = useMutation({
+    mutationFn: voipApi.deleteExtension,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+  });
+
+  const syncVoipMutation = useMutation({
+    mutationFn: voipApi.syncExtension,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+  });
+
+  const regenerateSecretMutation = useMutation({
+    mutationFn: voipApi.regenerateSecret,
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      if (response.newSecret) {
+        setVoipCredentials({
+          extension: response.extension.extension,
+          secret: response.newSecret,
+        });
+        setVoipDialogOpen(true);
+      }
+    },
+  });
+
   const handleOpenDialog = (user?: User) => {
     if (user) {
       setEditingUser(user);
       setFormData({
         username: user.username,
-        email: user.email,
         password: '',
         role: user.role,
+        createVoipExtension: false,
       });
     } else {
       setEditingUser(null);
       setFormData({
         username: '',
-        email: '',
         password: '',
         role: 'user',
+        createVoipExtension: true,
       });
     }
     setDialogOpen(true);
@@ -120,13 +188,21 @@ export default function UsersPage() {
     if (editingUser) {
       const updateData: Partial<User> = {
         username: formData.username,
-        email: formData.email,
         role: formData.role as 'admin' | 'user',
       };
       updateMutation.mutate({ id: editingUser.id, data: updateData });
     } else {
-      createMutation.mutate(formData);
+      createMutation.mutate({
+        username: formData.username,
+        password: formData.password,
+        role: formData.role,
+        createVoipExtension: formData.createVoipExtension,
+      });
     }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
   };
 
   if (isLoading) {
@@ -142,10 +218,19 @@ export default function UsersPage() {
             Utilisateurs
           </Typography>
           <Typography variant="body1" color="text.secondary">
-            Gérez les comptes utilisateurs
+            Gérez les comptes utilisateurs et leurs extensions VoIP
           </Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          {amiStatus && (
+            <Chip
+              icon={amiStatus.canCreateExtensions ? <PhoneIcon /> : <PhoneDisabledIcon />}
+              label={amiStatus.canCreateExtensions ? 'PBX connecté' : 'PBX déconnecté'}
+              color={amiStatus.canCreateExtensions ? 'success' : 'default'}
+              size="small"
+              variant="outlined"
+            />
+          )}
           <Button
             variant="outlined"
             startIcon={<RefreshIcon />}
@@ -170,11 +255,10 @@ export default function UsersPage() {
             <TableHead>
               <TableRow>
                 <TableCell>Utilisateur</TableCell>
-                <TableCell>Email</TableCell>
                 <TableCell>Rôle</TableCell>
+                <TableCell>Extension VoIP</TableCell>
                 <TableCell>2FA</TableCell>
                 <TableCell>Dernière connexion</TableCell>
-                <TableCell>Créé le</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
@@ -187,7 +271,6 @@ export default function UsersPage() {
                         {user.username}
                       </Typography>
                     </TableCell>
-                    <TableCell>{user.email}</TableCell>
                     <TableCell>
                       <Chip
                         label={user.role}
@@ -195,6 +278,62 @@ export default function UsersPage() {
                         color={user.role === 'admin' ? 'primary' : 'default'}
                         variant={user.role === 'admin' ? 'filled' : 'outlined'}
                       />
+                    </TableCell>
+                    <TableCell>
+                      {user.voipExtension ? (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Chip
+                            icon={<PhoneIcon />}
+                            label={user.voipExtension.extension}
+                            size="small"
+                            color={user.voipExtension.syncedToPbx ? 'success' : 'warning'}
+                            variant="outlined"
+                          />
+                          {!user.voipExtension.syncedToPbx && (
+                            <Tooltip title="Synchroniser avec le PBX">
+                              <IconButton
+                                size="small"
+                                onClick={() => syncVoipMutation.mutate(user.id)}
+                                disabled={syncVoipMutation.isPending}
+                              >
+                                <SyncIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          <Tooltip title="Régénérer le secret">
+                            <IconButton
+                              size="small"
+                              onClick={() => regenerateSecretMutation.mutate(user.id)}
+                              disabled={regenerateSecretMutation.isPending}
+                            >
+                              <KeyIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Supprimer l'extension">
+                            <IconButton
+                              size="small"
+                              color="error"
+                              onClick={() => {
+                                if (confirm(`Supprimer l'extension ${user.voipExtension?.extension} ?`)) {
+                                  deleteVoipMutation.mutate(user.id);
+                                }
+                              }}
+                              disabled={deleteVoipMutation.isPending}
+                            >
+                              <PhoneDisabledIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                      ) : (
+                        <Button
+                          size="small"
+                          startIcon={<PhoneIcon />}
+                          onClick={() => createVoipMutation.mutate(user.id)}
+                          disabled={createVoipMutation.isPending || !amiStatus?.canCreateExtensions}
+                        >
+                          Créer extension
+                        </Button>
+                      )}
                     </TableCell>
                     <TableCell>
                       {user.twoFactorEnabled ? (
@@ -218,11 +357,6 @@ export default function UsersPage() {
                         {user.lastLogin
                           ? new Date(user.lastLogin).toLocaleString('fr-FR')
                           : 'Jamais'}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" color="text.secondary">
-                        {new Date(user.createdAt).toLocaleDateString('fr-FR')}
                       </Typography>
                     </TableCell>
                     <TableCell align="right">
@@ -250,7 +384,7 @@ export default function UsersPage() {
                           size="small"
                           color="error"
                           onClick={() => {
-                            if (confirm(`Supprimer l'utilisateur "${user.username}" ?`)) {
+                            if (confirm(`Supprimer l'utilisateur "${user.username}" ?${user.voipExtension ? '\nSon extension VoIP sera également supprimée.' : ''}`)) {
                               deleteMutation.mutate(user.id);
                             }
                           }}
@@ -263,7 +397,7 @@ export default function UsersPage() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={7} align="center">
+                  <TableCell colSpan={6} align="center">
                     <Typography color="text.secondary" sx={{ py: 4 }}>
                       Aucun utilisateur trouvé
                     </Typography>
@@ -290,36 +424,54 @@ export default function UsersPage() {
               required
             />
 
-            <TextField
-              label="Email"
-              type="email"
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              fullWidth
-              required
-            />
-
             {!editingUser && (
-              <TextField
-                label="Mot de passe"
-                type={showPassword ? 'text' : 'password'}
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                fullWidth
-                required
-                InputProps={{
-                  endAdornment: (
-                    <InputAdornment position="end">
-                      <IconButton
-                        onClick={() => setShowPassword(!showPassword)}
-                        edge="end"
-                      >
-                        {showPassword ? <VisibilityOff /> : <Visibility />}
-                      </IconButton>
-                    </InputAdornment>
-                  ),
-                }}
-              />
+              <>
+                <TextField
+                  label="Mot de passe"
+                  type={showPassword ? 'text' : 'password'}
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  fullWidth
+                  required
+                  InputProps={{
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton
+                          onClick={() => setShowPassword(!showPassword)}
+                          edge="end"
+                        >
+                          {showPassword ? <VisibilityOff /> : <Visibility />}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  }}
+                />
+
+                <Divider sx={{ my: 1 }} />
+
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={formData.createVoipExtension}
+                      onChange={(e) => setFormData({ ...formData, createVoipExtension: e.target.checked })}
+                    />
+                  }
+                  label={
+                    <Box>
+                      <Typography variant="body1">Créer une extension VoIP</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Permet à l'utilisateur de passer des appels depuis l'app
+                      </Typography>
+                    </Box>
+                  }
+                />
+
+                {formData.createVoipExtension && !amiStatus?.canCreateExtensions && (
+                  <Alert severity="warning" sx={{ mt: 1 }}>
+                    Le PBX n'est pas connecté. L'extension sera créée localement et synchronisée plus tard.
+                  </Alert>
+                )}
+              </>
             )}
 
             <TextField
@@ -402,6 +554,75 @@ export default function UsersPage() {
             disabled={!newPassword || resetPasswordMutation.isPending}
           >
             Réinitialiser
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* VoIP Credentials Dialog */}
+      <Dialog open={voipDialogOpen} onClose={() => setVoipDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <PhoneIcon color="success" />
+            Extension VoIP créée
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Alert severity="info" sx={{ mb: 3 }}>
+            Conservez ces informations ! Le secret ne sera plus affiché après fermeture de cette fenêtre.
+          </Alert>
+
+          {voipCredentials && (
+            <Stack spacing={2}>
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary">
+                  Extension (username SIP)
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="h5" fontWeight={600}>
+                    {voipCredentials.extension}
+                  </Typography>
+                  <IconButton size="small" onClick={() => copyToClipboard(voipCredentials.extension)}>
+                    <CopyIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+              </Box>
+
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary">
+                  Secret (password SIP)
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="h6" fontFamily="monospace">
+                    {showVoipSecret ? voipCredentials.secret : '••••••••••••••••'}
+                  </Typography>
+                  <IconButton size="small" onClick={() => setShowVoipSecret(!showVoipSecret)}>
+                    {showVoipSecret ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                  </IconButton>
+                  <IconButton size="small" onClick={() => copyToClipboard(voipCredentials.secret)}>
+                    <CopyIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+              </Box>
+
+              <Divider />
+
+              <Typography variant="body2" color="text.secondary">
+                Ces identifiants permettent à l'utilisateur de se connecter en WebRTC
+                depuis l'application mobile ou la PWA pour passer et recevoir des appels.
+              </Typography>
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            variant="contained"
+            onClick={() => {
+              setVoipDialogOpen(false);
+              setVoipCredentials(null);
+              setShowVoipSecret(false);
+            }}
+          >
+            J'ai noté les identifiants
           </Button>
         </DialogActions>
       </Dialog>

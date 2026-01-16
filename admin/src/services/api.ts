@@ -55,6 +55,13 @@ export interface LoginCredentials {
   twoFactorCode?: string;
 }
 
+export interface UserVoIPInfo {
+  extension: string;
+  enabled: boolean;
+  webrtcEnabled: boolean;
+  syncedToPbx: boolean;
+}
+
 export interface User {
   id: number;
   username: string;
@@ -63,6 +70,7 @@ export interface User {
   createdAt: string;
   lastLogin?: string;
   twoFactorEnabled: boolean;
+  voipExtension?: UserVoIPInfo | null;
 }
 
 export interface Provider {
@@ -292,6 +300,27 @@ export const smsApi = {
 };
 
 // API Admin - VoIP
+export interface VoIPExtension {
+  id: number;
+  userId: number;
+  username?: string;
+  extension: string;
+  secret?: string;
+  displayName?: string;
+  enabled: boolean;
+  webrtcEnabled: boolean;
+  syncedToPbx: boolean;
+  pbxSyncError?: string;
+  createdAt: string;
+}
+
+export interface CreateVoIPExtensionParams {
+  userId: number;
+  extension?: string;
+  displayName?: string;
+  createOnPbx?: boolean;
+}
+
 export const voipApi = {
   getTrunks: async () => {
     const response = await api.get('/api/admin/voip/trunks');
@@ -303,6 +332,49 @@ export const voipApi = {
     return response.data.extensions || response.data || [];
   },
 
+  getUserExtensions: async (): Promise<VoIPExtension[]> => {
+    const response = await api.get('/api/admin/voip/extensions');
+    return response.data.extensions || response.data || [];
+  },
+
+  getExtensionByUserId: async (userId: number): Promise<VoIPExtension | null> => {
+    try {
+      const response = await api.get(`/api/admin/voip/extensions/${userId}`);
+      return response.data.extension || null;
+    } catch {
+      return null;
+    }
+  },
+
+  createExtension: async (params: CreateVoIPExtensionParams): Promise<{ extension: VoIPExtension; secret: string; pbxSync?: { success: boolean; message?: string } }> => {
+    const response = await api.post('/api/admin/voip/extensions', params);
+    return response.data;
+  },
+
+  deleteExtension: async (userId: number): Promise<void> => {
+    await api.delete(`/api/admin/voip/extensions/${userId}`);
+  },
+
+  regenerateSecret: async (userId: number): Promise<{ extension: VoIPExtension; newSecret: string }> => {
+    const response = await api.put(`/api/admin/voip/extensions/${userId}`, { regenerateSecret: true });
+    return response.data;
+  },
+
+  syncExtension: async (userId: number): Promise<{ success: boolean; message?: string }> => {
+    const response = await api.post(`/api/admin/voip/extensions/${userId}/sync`);
+    return response.data;
+  },
+
+  getNextExtension: async (): Promise<string> => {
+    const response = await api.get('/api/admin/voip/next-extension');
+    return response.data.nextExtension;
+  },
+
+  getAmiStatus: async (): Promise<{ connected: boolean; authenticated: boolean; canCreateExtensions: boolean }> => {
+    const response = await api.get('/api/admin/voip/ami-status');
+    return response.data;
+  },
+
   testCall: async (extension: string) => {
     const response = await api.post('/api/admin/voip/test-call', { extension });
     return response.data;
@@ -310,6 +382,27 @@ export const voipApi = {
 };
 
 // API Admin - Users
+export interface CreateUserParams {
+  username: string;
+  email?: string;
+  password: string;
+  role: string;
+  createVoipExtension?: boolean;
+  voipExtension?: string;
+}
+
+export interface CreateUserResponse {
+  success: boolean;
+  user: User;
+  voip?: {
+    success: boolean;
+    extension?: string;
+    secret?: string;
+    error?: string;
+    pbxSync?: { success: boolean; message?: string };
+  };
+}
+
 export const usersApi = {
   getAll: async (): Promise<User[]> => {
     const response = await api.get('/api/admin/users');
@@ -321,7 +414,7 @@ export const usersApi = {
     return response.data;
   },
 
-  create: async (user: { username: string; email: string; password: string; role: string }): Promise<User> => {
+  create: async (user: CreateUserParams): Promise<CreateUserResponse> => {
     const response = await api.post('/api/admin/users', user);
     return response.data;
   },
