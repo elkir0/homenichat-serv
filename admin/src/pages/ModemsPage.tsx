@@ -54,6 +54,8 @@ import {
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
   Code as CodeIcon,
+  PhoneForwarded as TrunkIcon,
+  Delete as DeleteIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
@@ -348,6 +350,61 @@ const modemsApi = {
     if (!response.ok) throw new Error('Failed to restart Asterisk');
     return response.json();
   },
+
+  // Trunk SIP Management
+  getTrunkStatus: async (modemId: string): Promise<{ exists: boolean; trunkName?: string; status?: string; canCreate: boolean; error?: string }> => {
+    const response = await fetch(`/api/admin/modems/${modemId}/trunk`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
+    });
+    if (!response.ok) throw new Error('Failed to get trunk status');
+    return response.json();
+  },
+
+  createTrunk: async (modemId: string, config: {
+    phoneNumber?: string;
+    modemName?: string;
+    context?: string;
+    maxChannels?: number;
+    callerIdMode?: string;
+  }): Promise<{ success: boolean; message: string; trunkName?: string; dialString?: string }> => {
+    const response = await fetch(`/api/admin/modems/${modemId}/trunk`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(config),
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Failed to create trunk');
+    }
+    return response.json();
+  },
+
+  deleteTrunk: async (modemId: string): Promise<{ success: boolean; message: string }> => {
+    const response = await fetch(`/api/admin/modems/${modemId}/trunk`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
+    });
+    if (!response.ok) throw new Error('Failed to delete trunk');
+    return response.json();
+  },
+
+  getTrunkDefaults: async (): Promise<{
+    defaults: { context: string; maxChannels: number; callerIdMode: string };
+    options: {
+      contexts: { value: string; label: string; description: string }[];
+      callerIdModes: { value: string; label: string; description: string }[];
+    };
+    pbxConnected: boolean;
+  }> => {
+    const response = await fetch('/api/admin/modems/trunk-defaults', {
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
+    });
+    if (!response.ok) throw new Error('Failed to get trunk defaults');
+    return response.json();
+  },
 };
 
 // Signal strength component
@@ -413,6 +470,14 @@ export default function ModemsPage() {
   const [configExpanded, setConfigExpanded] = useState(true);
   const [confDialogOpen, setConfDialogOpen] = useState(false);
   const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  const [trunkDialogOpen, setTrunkDialogOpen] = useState(false);
+  const [trunkConfig, setTrunkConfig] = useState({
+    phoneNumber: '',
+    modemName: '',
+    context: 'from-gsm',
+    maxChannels: 1,
+    callerIdMode: 'keep',
+  });
   const [pinInput, setPinInput] = useState('');
   const [pinConfirmInput, setPinConfirmInput] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
@@ -464,6 +529,19 @@ export default function ModemsPage() {
     queryKey: ['quectelConf'],
     queryFn: modemsApi.getQuectelConf,
     enabled: confDialogOpen,
+  });
+
+  const { data: trunkDefaultsData } = useQuery({
+    queryKey: ['trunkDefaults'],
+    queryFn: modemsApi.getTrunkDefaults,
+    staleTime: 60000,
+  });
+
+  // Trunk status for selected modem
+  const { data: trunkStatusData, refetch: refetchTrunkStatus } = useQuery({
+    queryKey: ['trunkStatus', selectedModemId],
+    queryFn: () => selectedModemId ? modemsApi.getTrunkStatus(selectedModemId) : Promise.resolve({ exists: false, canCreate: false, trunkName: undefined }),
+    enabled: !!selectedModemId && trunkDialogOpen,
   });
 
   // Update configForm when config is loaded
@@ -614,6 +692,32 @@ export default function ModemsPage() {
     },
   });
 
+  // Trunk mutations
+  const createTrunkMutation = useMutation({
+    mutationFn: ({ modemId, config }: { modemId: string; config: typeof trunkConfig }) =>
+      modemsApi.createTrunk(modemId, config),
+    onSuccess: (result) => {
+      setActionResult({
+        success: result.success,
+        message: result.message + (result.dialString ? `\n\nDial string: ${result.dialString}` : ''),
+      });
+      refetchTrunkStatus();
+    },
+    onError: (err: Error) => {
+      setActionResult({ success: false, message: err.message });
+    },
+  });
+
+  const deleteTrunkMutation = useMutation({
+    mutationFn: (modemId: string) => modemsApi.deleteTrunk(modemId),
+    onSuccess: (result) => {
+      setActionResult({ success: result.success, message: result.message });
+      refetchTrunkStatus();
+    },
+    onError: (err: Error) => {
+      setActionResult({ success: false, message: err.message });
+    },
+  });
 
   // Handlers
   const handleAtCommand = () => {
@@ -641,6 +745,19 @@ export default function ModemsPage() {
     setSmsMessage('Test SMS depuis Homenichat Admin');
     setActionResult(null);
     setSmsDialogOpen(true);
+  };
+
+  const openTrunkDialog = (modemId: string, modemData?: { status: ModemStatus }) => {
+    setSelectedModemId(modemId);
+    setTrunkConfig({
+      phoneNumber: modemData?.status?.number || '',
+      modemName: modemData?.status?.name || modemId,
+      context: trunkDefaultsData?.defaults?.context || 'from-gsm',
+      maxChannels: trunkDefaultsData?.defaults?.maxChannels || 1,
+      callerIdMode: trunkDefaultsData?.defaults?.callerIdMode || 'keep',
+    });
+    setActionResult(null);
+    setTrunkDialogOpen(true);
   };
 
   const modemsList = fullStatus?.modems ? Object.entries(fullStatus.modems) : [];
@@ -1327,6 +1444,18 @@ export default function ModemsPage() {
                         Config Audio 16kHz
                       </Button>
                     </Grid>
+                    <Grid item xs={12}>
+                      <Button
+                        fullWidth
+                        variant="contained"
+                        color="secondary"
+                        startIcon={<TrunkIcon />}
+                        onClick={() => openTrunkDialog(modemId, data)}
+                        disabled={!trunkDefaultsData?.pbxConnected}
+                      >
+                        {trunkDefaultsData?.pbxConnected ? 'Créer Trunk SIP FreePBX' : 'PBX non connecté'}
+                      </Button>
+                    </Grid>
                   </Grid>
 
                   {actionResult && (
@@ -1778,6 +1907,178 @@ export default function ModemsPage() {
           >
             Appliquer cette configuration
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Trunk SIP Dialog */}
+      <Dialog open={trunkDialogOpen} onClose={() => setTrunkDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <TrunkIcon color="secondary" />
+            Créer Trunk SIP FreePBX
+          </Box>
+          <Typography variant="body2" color="text.secondary">
+            Modem: {selectedModemId}
+          </Typography>
+        </DialogTitle>
+        <DialogContent>
+          {/* Trunk Status */}
+          {trunkStatusData?.exists && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Un trunk <strong>{trunkStatusData.trunkName}</strong> existe déjà pour ce modem.
+              <Button
+                size="small"
+                color="error"
+                onClick={() => selectedModemId && deleteTrunkMutation.mutate(selectedModemId)}
+                sx={{ ml: 2 }}
+              >
+                Supprimer
+              </Button>
+            </Alert>
+          )}
+
+          {!trunkDefaultsData?.pbxConnected && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              FreePBX n'est pas connecté. Vérifiez la configuration AMI.
+            </Alert>
+          )}
+
+          <Grid container spacing={2} sx={{ mt: 1 }}>
+            {/* Phone Number */}
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Numéro de téléphone"
+                value={trunkConfig.phoneNumber}
+                onChange={(e) => setTrunkConfig({ ...trunkConfig, phoneNumber: e.target.value.replace(/[^0-9+]/g, '') })}
+                placeholder="+590690XXXXXX"
+                helperText="CallerID sortant"
+              />
+            </Grid>
+
+            {/* Modem Name */}
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Nom du trunk"
+                value={trunkConfig.modemName}
+                onChange={(e) => setTrunkConfig({ ...trunkConfig, modemName: e.target.value })}
+                helperText="Ex: GSM-Principal"
+              />
+            </Grid>
+
+            {/* Context */}
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth size="small">
+                <InputLabel>Contexte entrant</InputLabel>
+                <Select
+                  value={trunkConfig.context}
+                  label="Contexte entrant"
+                  onChange={(e) => setTrunkConfig({ ...trunkConfig, context: e.target.value })}
+                >
+                  {trunkDefaultsData?.options?.contexts?.map((ctx) => (
+                    <MenuItem key={ctx.value} value={ctx.value}>
+                      <Box>
+                        <Typography variant="body2" fontWeight={500}>{ctx.label}</Typography>
+                        <Typography variant="caption" color="text.secondary">{ctx.description}</Typography>
+                      </Box>
+                    </MenuItem>
+                  )) || (
+                    <>
+                      <MenuItem value="from-gsm">from-gsm (défaut)</MenuItem>
+                      <MenuItem value="from-internal">from-internal</MenuItem>
+                      <MenuItem value="from-trunk">from-trunk</MenuItem>
+                    </>
+                  )}
+                </Select>
+              </FormControl>
+            </Grid>
+
+            {/* Caller ID Mode */}
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth size="small">
+                <InputLabel>Mode CallerID</InputLabel>
+                <Select
+                  value={trunkConfig.callerIdMode}
+                  label="Mode CallerID"
+                  onChange={(e) => setTrunkConfig({ ...trunkConfig, callerIdMode: e.target.value })}
+                >
+                  {trunkDefaultsData?.options?.callerIdModes?.map((mode) => (
+                    <MenuItem key={mode.value} value={mode.value}>
+                      <Box>
+                        <Typography variant="body2" fontWeight={500}>{mode.label}</Typography>
+                        <Typography variant="caption" color="text.secondary">{mode.description}</Typography>
+                      </Box>
+                    </MenuItem>
+                  )) || (
+                    <>
+                      <MenuItem value="keep">Conserver</MenuItem>
+                      <MenuItem value="trunk">Trunk</MenuItem>
+                      <MenuItem value="none">Aucun</MenuItem>
+                    </>
+                  )}
+                </Select>
+              </FormControl>
+            </Grid>
+
+            {/* Max Channels */}
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                size="small"
+                type="number"
+                label="Canaux max"
+                value={trunkConfig.maxChannels}
+                onChange={(e) => setTrunkConfig({ ...trunkConfig, maxChannels: Math.max(1, Math.min(4, parseInt(e.target.value) || 1)) })}
+                inputProps={{ min: 1, max: 4 }}
+                helperText="1 pour modem GSM standard"
+              />
+            </Grid>
+          </Grid>
+
+          {/* Info */}
+          <Alert severity="info" sx={{ mt: 2 }}>
+            <Typography variant="body2">
+              Le trunk sera créé avec le dial string: <code>Quectel/{selectedModemId}/$OUTNUM$</code>
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Utilisez ce trunk dans les routes sortantes FreePBX pour router les appels via ce modem.
+            </Typography>
+          </Alert>
+
+          {actionResult && (
+            <Alert severity={actionResult.success ? 'success' : 'error'} sx={{ mt: 2 }}>
+              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                {actionResult.message}
+              </pre>
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setTrunkDialogOpen(false)}>Annuler</Button>
+          {trunkStatusData?.exists ? (
+            <Button
+              variant="contained"
+              color="error"
+              startIcon={<DeleteIcon />}
+              onClick={() => selectedModemId && deleteTrunkMutation.mutate(selectedModemId)}
+              disabled={deleteTrunkMutation.isPending}
+            >
+              Supprimer le trunk
+            </Button>
+          ) : (
+            <Button
+              variant="contained"
+              color="secondary"
+              startIcon={<TrunkIcon />}
+              onClick={() => selectedModemId && createTrunkMutation.mutate({ modemId: selectedModemId, config: trunkConfig })}
+              disabled={createTrunkMutation.isPending || !trunkDefaultsData?.pbxConnected}
+            >
+              Créer le trunk
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
     </Box>

@@ -1308,6 +1308,177 @@ router.post('/modems/initialize', [
 });
 
 // =============================================================================
+// MODEM SIP TRUNKS - Auto-configuration chan_quectel -> FreePBX
+// =============================================================================
+
+/**
+ * GET /api/admin/modems/:modemId/trunk
+ * Récupérer le statut du trunk SIP pour un modem
+ */
+router.get('/modems/:modemId/trunk', async (req, res) => {
+  try {
+    const amiService = require('../services/FreePBXAmiService');
+    const { modemId } = req.params;
+
+    if (!amiService.connected || !amiService.authenticated) {
+      return res.json({
+        exists: false,
+        error: 'FreePBX non connecté',
+        canCreate: false,
+      });
+    }
+
+    const status = await amiService.getModemTrunkStatus(modemId);
+    res.json({
+      ...status,
+      canCreate: true,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Get modem trunk status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modems/:modemId/trunk
+ * Créer un trunk SIP FreePBX pour un modem GSM
+ */
+router.post('/modems/:modemId/trunk', [
+  param('modemId').notEmpty(),
+  body('phoneNumber').optional().matches(/^\+?[0-9]{6,15}$/),
+  body('modemName').optional().isString().isLength({ max: 20 }),
+  body('context').optional().isString().isLength({ max: 30 }),
+  body('maxChannels').optional().isInt({ min: 1, max: 4 }),
+  body('callerIdMode').optional().isIn(['keep', 'trunk', 'none']),
+], validate, async (req, res) => {
+  try {
+    const amiService = require('../services/FreePBXAmiService');
+    const { modemId } = req.params;
+
+    if (!amiService.connected || !amiService.authenticated) {
+      return res.status(503).json({
+        error: 'FreePBX non connecté',
+        suggestion: 'Vérifiez la configuration AMI dans les variables d\'environnement',
+      });
+    }
+
+    // Get modem config for defaults
+    let modemConfig = {};
+    if (modemService) {
+      try {
+        const fullStatus = await modemService.getFullStatus();
+        if (fullStatus?.modems?.[modemId]) {
+          modemConfig = fullStatus.modems[modemId].status || {};
+        }
+      } catch (e) {
+        // Use provided values
+      }
+    }
+
+    // Build trunk config with defaults
+    const trunkConfig = {
+      modemId,
+      modemName: req.body.modemName || modemConfig.name || modemId,
+      phoneNumber: req.body.phoneNumber || modemConfig.number || '',
+      context: req.body.context || 'from-gsm',
+      maxChannels: req.body.maxChannels || 1,
+      callerIdMode: req.body.callerIdMode || 'keep',
+    };
+
+    const result = await amiService.createModemTrunk(trunkConfig);
+
+    if (result.success) {
+      await securityService?.logAction(req.user.id, 'modem_trunk_created', {
+        category: 'admin',
+        modemId,
+        trunkName: result.trunkName,
+        phoneNumber: trunkConfig.phoneNumber,
+        username: req.user.username,
+      }, req);
+    }
+
+    res.json({
+      ...result,
+      config: trunkConfig,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Create modem trunk error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/admin/modems/:modemId/trunk
+ * Supprimer le trunk SIP d'un modem
+ */
+router.delete('/modems/:modemId/trunk', [
+  param('modemId').notEmpty(),
+], validate, async (req, res) => {
+  try {
+    const amiService = require('../services/FreePBXAmiService');
+    const { modemId } = req.params;
+
+    if (!amiService.connected || !amiService.authenticated) {
+      return res.status(503).json({ error: 'FreePBX non connecté' });
+    }
+
+    const result = await amiService.deleteModemTrunk(modemId);
+
+    if (result.success) {
+      await securityService?.logAction(req.user.id, 'modem_trunk_deleted', {
+        category: 'admin',
+        modemId,
+        username: req.user.username,
+      }, req);
+    }
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[Admin] Delete modem trunk error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/modems/trunk-defaults
+ * Récupérer les valeurs par défaut pour la création de trunk
+ */
+router.get('/modems/trunk-defaults', async (req, res) => {
+  try {
+    const amiService = require('../services/FreePBXAmiService');
+
+    res.json({
+      defaults: {
+        context: 'from-gsm',
+        maxChannels: 1,
+        callerIdMode: 'keep',
+        dialPrefix: '',
+      },
+      options: {
+        contexts: [
+          { value: 'from-gsm', label: 'GSM Entrant (from-gsm)', description: 'Contexte standard pour appels GSM' },
+          { value: 'from-internal', label: 'Interne (from-internal)', description: 'Comme une extension interne' },
+          { value: 'from-trunk', label: 'Trunk externe (from-trunk)', description: 'Comme un trunk SIP externe' },
+        ],
+        callerIdModes: [
+          { value: 'keep', label: 'Conserver', description: 'Garder le CallerID original' },
+          { value: 'trunk', label: 'Trunk', description: 'Utiliser le numéro du modem' },
+          { value: 'none', label: 'Aucun', description: 'Ne pas envoyer de CallerID' },
+        ],
+      },
+      pbxConnected: amiService.connected && amiService.authenticated,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Get trunk defaults error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
 // VOIP / FREEPBX
 // =============================================================================
 

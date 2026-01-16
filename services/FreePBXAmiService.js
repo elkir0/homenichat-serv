@@ -1271,6 +1271,181 @@ class FreePBXAmiService extends EventEmitter {
     return match ? match[1].trim() : null;
   }
 
+  // =====================================================
+  // GSM Modem Trunk Management (chan_quectel -> SIP Trunk)
+  // =====================================================
+
+  /**
+   * Create a PJSIP trunk for a GSM modem
+   * This allows routing calls through the modem via FreePBX
+   *
+   * @param {object} modemData - Modem configuration
+   * @returns {Promise<{success: boolean, message: string, trunkName: string}>}
+   */
+  async createModemTrunk(modemData) {
+    const {
+      modemId,         // chan_quectel device name (e.g., 'hni-modem')
+      modemName,       // Display name for the trunk
+      phoneNumber,     // Phone number associated with the modem
+      context = 'from-gsm',
+    } = modemData;
+
+    if (!this.connected || !this.authenticated) {
+      return { success: false, message: 'Non connecté au PBX' };
+    }
+
+    const trunkName = `GSM-${modemId}`.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+
+    try {
+      // Create custom trunk configuration via AMI
+      // This creates a trunk that uses Quectel/<modemId>/$OUTNUM$ for dialing
+
+      const commands = [
+        // Trunk definition
+        { family: `TRUNK/${trunkName}`, key: 'tech', value: 'custom' },
+        { family: `TRUNK/${trunkName}`, key: 'name', value: trunkName },
+        { family: `TRUNK/${trunkName}`, key: 'outcid', value: phoneNumber || '' },
+        { family: `TRUNK/${trunkName}`, key: 'keepcid', value: 'on' },
+        { family: `TRUNK/${trunkName}`, key: 'maxchans', value: '1' },
+        { family: `TRUNK/${trunkName}`, key: 'dialoutprefix', value: '' },
+        { family: `TRUNK/${trunkName}`, key: 'channelid', value: modemId },
+        { family: `TRUNK/${trunkName}`, key: 'disabled', value: 'off' },
+        { family: `TRUNK/${trunkName}`, key: 'description', value: `Modem GSM ${modemName || modemId}` },
+
+        // Custom dial string for chan_quectel
+        { family: `TRUNK/${trunkName}`, key: 'dial', value: `Quectel/${modemId}/$OUTNUM$` },
+
+        // Context for incoming calls on this trunk
+        { family: `TRUNK/${trunkName}`, key: 'context', value: context },
+      ];
+
+      // Execute DBput commands
+      for (const cmd of commands) {
+        try {
+          await this.sendDbPut(cmd.family, cmd.key, cmd.value);
+        } catch (e) {
+          logger.warn(`[AMI] DBput warning for ${cmd.key}: ${e.message}`);
+        }
+      }
+
+      // Reload dialplan
+      await this.sendCommand('dialplan reload');
+
+      logger.info(`[AMI] GSM trunk ${trunkName} created for modem ${modemId}`);
+      return {
+        success: true,
+        message: `Trunk ${trunkName} créé avec succès. Utilisez "Quectel/${modemId}/$OUTNUM$" pour les appels sortants.`,
+        trunkName,
+        dialString: `Quectel/${modemId}/$OUTNUM$`,
+      };
+
+    } catch (error) {
+      logger.error(`[AMI] Error creating modem trunk ${trunkName}:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Delete a modem trunk
+   */
+  async deleteModemTrunk(modemId) {
+    if (!this.connected || !this.authenticated) {
+      return { success: false, message: 'Non connecté au PBX' };
+    }
+
+    const trunkName = `GSM-${modemId}`.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+
+    try {
+      await this.sendDbDelTree(`TRUNK/${trunkName}`);
+      await this.sendCommand('dialplan reload');
+
+      logger.info(`[AMI] GSM trunk ${trunkName} deleted`);
+      return { success: true, message: `Trunk ${trunkName} supprimé` };
+
+    } catch (error) {
+      logger.error(`[AMI] Error deleting modem trunk:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Get modem trunk status
+   */
+  async getModemTrunkStatus(modemId) {
+    const trunkName = `GSM-${modemId}`.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+
+    if (!this.connected || !this.authenticated) {
+      return { exists: false, trunkName, error: 'Non connecté au PBX' };
+    }
+
+    return new Promise((resolve) => {
+      const actionId = `trunk_status_${Date.now()}`;
+      let responseData = '';
+
+      const timeout = setTimeout(() => {
+        resolve({ exists: false, trunkName });
+      }, 5000);
+
+      const handler = (data) => {
+        responseData += data.toString();
+        if (responseData.includes(actionId)) {
+          clearTimeout(timeout);
+          this.socket.removeListener('data', handler);
+
+          const exists = responseData.includes('Val:') && !responseData.includes('not found');
+          resolve({
+            exists,
+            trunkName,
+            status: exists ? 'configured' : 'not_found',
+          });
+        }
+      };
+
+      this.socket.on('data', handler);
+
+      setTimeout(() => {
+        this.socket.removeListener('data', handler);
+      }, 6000);
+
+      this.sendAction({
+        Action: 'DBGet',
+        ActionID: actionId,
+        Family: `TRUNK/${trunkName}`,
+        Key: 'tech',
+      });
+    });
+  }
+
+  /**
+   * Send a CLI command to Asterisk
+   */
+  sendCommand(command) {
+    return new Promise((resolve, reject) => {
+      const actionId = `cmd_${Date.now()}`;
+
+      const timeout = setTimeout(() => {
+        resolve({ success: true, message: 'Command sent' });
+      }, 5000);
+
+      const handler = (data) => {
+        const str = data.toString();
+        if (str.includes(actionId)) {
+          clearTimeout(timeout);
+          this.socket.removeListener('data', handler);
+          resolve({ success: true });
+        }
+      };
+
+      this.socket.on('data', handler);
+
+      this.sendAction({
+        Action: 'Command',
+        ActionID: actionId,
+        Command: command,
+      });
+    });
+  }
+
   /**
    * Stop the service
    */
