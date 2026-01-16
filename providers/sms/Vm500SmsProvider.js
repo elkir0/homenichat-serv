@@ -1,16 +1,11 @@
 /**
- * Vm500SmsProvider - Connexion à l'infrastructure VM500 existante
+ * Vm500SmsProvider - Connexion à une infrastructure SMS externe
  *
- * Ce provider permet de se connecter au service sms-bridge existant
- * sur la VM500 (192.168.1.155) qui gère les modems chan_quectel.
+ * Ce provider permet de se connecter à un service sms-bridge externe
+ * qui gère les modems chan_quectel.
  *
- * IMPORTANT: Ne modifie PAS l'infrastructure VM500 existante.
  * Ce provider agit uniquement comme client de l'API sms-bridge.
- *
- * Infrastructure de référence:
- * - VM500: 192.168.1.155 (Asterisk + chan_quectel + sms-bridge)
- * - sms-bridge: port 8443
- * - Modems: quectel-chiro (+590690137147), quectel-osteo (+590690402352)
+ * Configuration requise: host, port, apiKey
  */
 
 const EventEmitter = require('events');
@@ -22,7 +17,7 @@ class Vm500SmsProvider extends EventEmitter {
     super();
 
     this.config = {
-      host: config.host || '192.168.1.155',
+      host: config.host || '',
       port: config.port || 8443,
       protocol: config.protocol || 'https',
       apiKey: config.apiKey || process.env.VM500_API_KEY,

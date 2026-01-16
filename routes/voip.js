@@ -10,11 +10,11 @@ const { verifyToken } = require('../middleware/auth');
 
 // Configuration globale VoIP (serveur commun)
 const getGlobalConfig = () => ({
-  server: process.env.VOIP_WSS_URL || 'wss://rtc.chirosteo-guadeloupe.com/ws',
-  domain: process.env.VOIP_DOMAIN || '192.168.1.160',
-  extension: process.env.VOIP_EXTENSION || '200',
-  password: process.env.VOIP_PASSWORD || 'webrtc200pwd',
-  displayName: process.env.VOIP_DISPLAY_NAME || 'L\'ekip-Chat WebRTC',
+  server: process.env.VOIP_WSS_URL || '',
+  domain: process.env.VOIP_DOMAIN || '',
+  extension: process.env.VOIP_EXTENSION || '',
+  password: process.env.VOIP_PASSWORD || '',
+  displayName: process.env.VOIP_DISPLAY_NAME || 'Homenichat WebRTC',
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' }

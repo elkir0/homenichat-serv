@@ -229,7 +229,7 @@ class ConfigurationService {
             type: 'sms_bridge',
             enabled: true,
             config: {
-              api_url: '${SMS_BRIDGE_URL:https://192.168.1.155:8443}',
+              api_url: '${SMS_BRIDGE_URL}',
               api_token: '${PWA_API_TOKEN}',
               sync_interval_ms: 5000
             }

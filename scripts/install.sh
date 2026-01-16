@@ -922,7 +922,7 @@ install_freepbx() {
 #     type: freepbx
 #     enabled: false
 #     config:
-#       host: "192.168.1.160"
+#       host: "your-freepbx-host"
 #       ami_port: 5038
 #       ami_user: "homenichat"
 #       ami_secret: "your-ami-secret"

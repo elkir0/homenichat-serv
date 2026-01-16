@@ -93,7 +93,7 @@ const voipProvider = new VoipProvider({
 // Autres middlewares
 app.use(compression());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || ['http://localhost:3000', 'http://192.168.1.141:8090'],
+  origin: process.env.FRONTEND_URL || ['http://localhost:3000', 'http://localhost:8090'],
   credentials: true
 }));
 app.use(express.json({ limit: '50mb' }));
@@ -551,7 +551,7 @@ webSocketManager.setBroadcastFunction(broadcastToChat);
 // Connexion à Evolution API WebSocket - Désactivé temporairement (404)
 // TODO: Vérifier l'URL correcte du WebSocket Evolution API
 /*
-const evolutionWs = new WebSocket(`ws://192.168.1.141:8080/ws`);
+const evolutionWs = new WebSocket(process.env.EVOLUTION_WS_URL || 'ws://localhost:8080/ws');
 
 evolutionWs.on('open', () => {
   logger.info('Connecté au WebSocket Evolution API');

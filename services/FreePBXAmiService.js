@@ -22,10 +22,10 @@ class FreePBXAmiService extends EventEmitter {
     super();
 
     this.config = {
-      host: process.env.AMI_HOST || '192.168.1.160',
+      host: process.env.AMI_HOST || '127.0.0.1',
       port: parseInt(process.env.AMI_PORT) || 5038,
-      username: process.env.AMI_USERNAME || 'lekipchat',
-      password: process.env.AMI_PASSWORD || 'lekipchat_ami_pwd'
+      username: process.env.AMI_USERNAME || 'homenichat',
+      password: process.env.AMI_PASSWORD || ''
     };
 
     this.socket = null;

@@ -102,7 +102,7 @@ class ProviderManager {
           },
           'sms-bridge': {
             enabled: false, // Disabled by default - enable only if SMS trunk is configured
-            apiUrl: process.env.SMS_BRIDGE_URL || 'https://192.168.1.155:8443',
+            apiUrl: process.env.SMS_BRIDGE_URL || '',
             apiToken: process.env.PWA_API_TOKEN || '',
             syncIntervalMs: 5000,
             maxSyncIntervalMs: 60000 // Max 1 min between polls on error

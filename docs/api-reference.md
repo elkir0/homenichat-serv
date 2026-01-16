@@ -703,7 +703,7 @@ class HomenichatWebSocket {
 }
 
 // Usage
-const ws = new HomenichatWebSocket('ws://192.168.1.152:3001', token);
+const ws = new HomenichatWebSocket('ws://localhost:3001', token);
 
 ws.on('message', (msg) => {
   console.log('New message:', msg);

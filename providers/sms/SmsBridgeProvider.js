@@ -11,7 +11,7 @@ const chatStorage = require('../../services/ChatStorageServicePersistent');
 class SmsBridgeProvider extends WhatsAppProvider {
     constructor(config = {}) {
         super(config);
-        this.apiUrl = config.apiUrl || 'https://192.168.1.155:8443';
+        this.apiUrl = config.apiUrl || '';
         this.apiToken = config.apiToken || '';
         this.syncIntervalMs = config.syncIntervalMs || 5000;
         this.maxSyncIntervalMs = config.maxSyncIntervalMs || 60000; // Max 1 minute between polls on error
