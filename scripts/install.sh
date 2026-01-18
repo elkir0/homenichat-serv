@@ -669,12 +669,21 @@ install_chan_quectel() {
     chown asterisk:asterisk /var/lib/asterisk/smsdb 2>/dev/null || true
 
     # Ensure chan_quectel is loaded at startup
+    # The load directive MUST be under [modules] section to work
     if [ -f /etc/asterisk/modules.conf ]; then
         if ! grep -q "chan_quectel.so" /etc/asterisk/modules.conf 2>/dev/null; then
-            echo "" >> /etc/asterisk/modules.conf
-            echo "; Homenichat - Load chan_quectel for GSM modems" >> /etc/asterisk/modules.conf
-            echo "load => chan_quectel.so" >> /etc/asterisk/modules.conf
-            info "Added chan_quectel.so to modules.conf"
+            # Check if [modules] section exists
+            if grep -q "^\[modules\]" /etc/asterisk/modules.conf 2>/dev/null; then
+                # Insert load directive right after [modules] section
+                sed -i '/^\[modules\]/a \; Homenichat - Load chan_quectel for GSM modems\nload => chan_quectel.so' /etc/asterisk/modules.conf
+                info "Added chan_quectel.so to modules.conf [modules] section"
+            else
+                # No [modules] section - add it at the beginning of the file
+                sed -i '1i [modules]\nautoload=yes\n\n; Homenichat - Load chan_quectel for GSM modems\nload => chan_quectel.so\n' /etc/asterisk/modules.conf
+                info "Added [modules] section with chan_quectel.so to modules.conf"
+            fi
+        else
+            info "chan_quectel.so already in modules.conf"
         fi
     else
         # Create modules.conf if it doesn't exist
@@ -990,6 +999,18 @@ MODEM_SERVICE
     systemctl daemon-reload
     systemctl enable homenichat-modem-init.service >> "$LOG_FILE" 2>&1 || true
 
+    # Reload Asterisk modules to load chan_quectel immediately
+    if systemctl is-active --quiet asterisk 2>/dev/null; then
+        info "Reloading Asterisk modules..."
+        asterisk -rx "module load chan_quectel.so" >> "$LOG_FILE" 2>&1 || true
+        # Verify module loaded
+        if asterisk -rx "module show like quectel" 2>/dev/null | grep -q "chan_quectel"; then
+            info "chan_quectel module loaded successfully"
+        else
+            warning "chan_quectel module may not have loaded - will load on next Asterisk restart"
+        fi
+    fi
+
     success "chan_quectel installed"
 }
 
@@ -1270,6 +1291,29 @@ start_services() {
         success "Homenichat service started"
     else
         warning "Service may not have started. Check: supervisorctl status homenichat"
+    fi
+
+    # Restart Asterisk to ensure all config changes and modules are loaded
+    if [ "$INSTALL_ASTERISK" = true ] && systemctl is-enabled asterisk 2>/dev/null; then
+        info "Restarting Asterisk to apply all configurations..."
+        systemctl restart asterisk >> "$LOG_FILE" 2>&1 || true
+        sleep 3
+
+        # Verify Asterisk is running
+        if systemctl is-active --quiet asterisk 2>/dev/null; then
+            success "Asterisk restarted successfully"
+
+            # Verify chan_quectel loaded (if modems installed)
+            if [ "$INSTALL_MODEMS" = true ]; then
+                if asterisk -rx "module show like quectel" 2>/dev/null | grep -q "chan_quectel"; then
+                    success "chan_quectel module loaded"
+                else
+                    warning "chan_quectel module not loaded - check /etc/asterisk/modules.conf"
+                fi
+            fi
+        else
+            warning "Asterisk may not have started. Check: systemctl status asterisk"
+        fi
     fi
 }
 
