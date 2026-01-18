@@ -963,7 +963,7 @@ export default function ModemsPage() {
             onChange={(_, newValue) => setSelectedTab(newValue)}
             variant="fullWidth"
           >
-            {modemsList.map(([modemId, data], idx) => (
+            {modemsList.map(([modemId, data]) => (
               <Tab
                 key={modemId}
                 label={
@@ -1022,7 +1022,7 @@ export default function ModemsPage() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <SettingsIcon sx={{ color: 'primary.main' }} />
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                Configuration {modemsList.length > 0 && modemsList[selectedTab] ? `- ${modemsList[selectedTab][1].status.name || modemsList[selectedTab][0]}` : 'Modem'}
+                Configuration Modem
               </Typography>
               {modemConfigData?.config?.modemType && (
                 <Chip
@@ -1230,7 +1230,7 @@ export default function ModemsPage() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <SendIcon color="primary" />
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                Configuration SMS {modemsList.length > 0 && modemsList[selectedTab] ? `- ${modemsList[selectedTab][1].status.name || modemsList[selectedTab][0]}` : ''}
+                Configuration SMS
               </Typography>
             </Box>
             <FormControlLabel
