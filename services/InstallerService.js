@@ -294,6 +294,15 @@ class InstallerService {
     }
 
     return {
+      // Flat structure for frontend compatibility (ModemsPage.tsx)
+      asterisk,
+      chanQuectel,
+      freepbx,
+      gammu,
+      modems,  // Array directly for frontend
+      platform: { canInstall: os.platform === 'linux' },
+
+      // Nested structure for API consumers (backward compatibility)
       os,
       components: {
         asterisk,
@@ -301,7 +310,7 @@ class InstallerService {
         freepbx,
         gammu,
       },
-      modems: {
+      modemsInfo: {
         detected: modems.length,
         devices: modems,
       },
