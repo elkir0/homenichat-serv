@@ -737,13 +737,23 @@ callingpres=allowed_passed_screen
 ; Audio format: SIM7600 requires 16kHz (slin16=yes), EC25 uses 8kHz (slin16=no)
 slin16=${SLIN16}
 
-; Example modem configuration (will be auto-configured by Homenichat)
+; Auto-configured modem (Homenichat installation)
 ; Detected modem type: ${MODEM_TYPE}
-;[hni-modem]
-;data=${DATA_PORT}
-;audio=${AUDIO_PORT}
-;imsi=YOUR_IMSI_HERE
+; Modem will be auto-detected and configured by Homenichat admin UI
+; Or you can manually configure below
+
+[hni-modem]
+data=${DATA_PORT}
+audio=${AUDIO_PORT}
+; imsi will be auto-detected
 QUECTEL_CONF
+
+    # Create symlink for /usr/local/etc/asterisk compatibility
+    mkdir -p /usr/local/etc/asterisk
+    if [ ! -L /usr/local/etc/asterisk/quectel.conf ]; then
+        ln -sf /etc/asterisk/quectel.conf /usr/local/etc/asterisk/quectel.conf
+        info "Created symlink /usr/local/etc/asterisk/quectel.conf -> /etc/asterisk/quectel.conf"
+    fi
 
     # Detect if running in LXC container
     local IN_LXC=false
@@ -1077,6 +1087,12 @@ server {
     # Redirect root to admin interface
     location = / {
         return 301 /admin;
+    }
+
+    # Redirect known frontend routes to /admin/
+    # These are the React SPA routes handled by the admin interface
+    location ~ ^/(modems|sms|whatsapp|voip|providers|dashboard|settings|users|security|parametres|utilisateurs)(/.*)?$ {
+        return 301 /admin$request_uri;
     }
 
     # Admin interface (served directly from built files)

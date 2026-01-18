@@ -118,6 +118,7 @@ class InstallerService {
         '/usr/lib/asterisk/modules/chan_quectel.so',
         '/usr/lib64/asterisk/modules/chan_quectel.so',
         '/usr/local/lib/asterisk/modules/chan_quectel.so',
+        '/usr/local/lib/x86_64-linux-gnu/asterisk/modules/chan_quectel.so',
       ];
 
       for (const modulePath of modulePaths) {
