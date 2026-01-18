@@ -617,16 +617,21 @@ class ModemService {
 
     try {
       // Check Asterisk service
-      const asteriskStatus = await this.runCmd('systemctl is-active asterisk.service 2>/dev/null');
+      const asteriskStatus = (await this.runCmd('systemctl is-active asterisk.service 2>/dev/null') || '').trim();
       services.asterisk.active = asteriskStatus === 'active';
       services.asterisk.status = asteriskStatus || 'not installed';
 
       // Check Homenichat service (via supervisor or systemd)
-      let homenichatStatus = await this.runCmd('supervisorctl status homenichat 2>/dev/null | grep -oE "RUNNING|STOPPED|FATAL"');
-      if (!homenichatStatus || homenichatStatus.includes('Error')) {
+      // supervisorctl output: "homenichat  RUNNING  pid 1234, uptime 0:05:00"
+      let homenichatStatus = await this.runCmd("supervisorctl status homenichat 2>/dev/null | awk '{print $2}'");
+      homenichatStatus = (homenichatStatus || '').trim();
+
+      if (!homenichatStatus || homenichatStatus.includes('Error') || homenichatStatus.includes('refused')) {
         // Fallback: check systemd
         homenichatStatus = await this.runCmd('systemctl is-active homenichat.service 2>/dev/null');
+        homenichatStatus = (homenichatStatus || '').trim();
       }
+
       services.homenichat.active = homenichatStatus === 'RUNNING' || homenichatStatus === 'active';
       services.homenichat.status = homenichatStatus || 'not installed';
 
