@@ -27,7 +27,6 @@ import {
 import {
   Usb as UsbIcon,
   Settings as SettingsIcon,
-  Download as DownloadIcon,
   CheckCircle as CheckIcon,
   Error as ErrorIcon,
   PlayArrow as PlayIcon,
@@ -121,7 +120,7 @@ const steps = [
   { id: 'complete', label: 'Terminé' },
 ];
 
-export default function InstallWizard({ onComplete, onCancel }: InstallWizardProps) {
+export default function InstallWizard({ onComplete, onCancel: _onCancel }: InstallWizardProps) {
   const theme = useTheme();
   const [activeStep, setActiveStep] = useState(0);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
