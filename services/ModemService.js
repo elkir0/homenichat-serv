@@ -57,10 +57,14 @@ const CONFIG_DIR = '/var/lib/homenichat';
 const MODEM_CONFIG_FILE = path.join(CONFIG_DIR, 'modem-config.json');
 const QUECTEL_CONF_PATH = '/etc/asterisk/quectel.conf';
 
+// Maximum number of modems supported
+const MAX_MODEMS = 5;
+
 // PIN attempt tracking (max 2 attempts before requiring admin reset)
 const MAX_PIN_ATTEMPTS = 2;
-let pinAttempts = 0;
-let pinLocked = false;
+// Per-modem PIN tracking
+const pinAttempts = {};  // { modemId: count }
+const pinLocked = {};    // { modemId: boolean }
 
 class ModemService {
   constructor(config = {}) {
@@ -70,53 +74,107 @@ class ModemService {
     this.metricsDb = null; // Pour l'historique
     this.logger = config.logger || console;
 
-    // Charger la configuration modem persistante
-    this.modemConfig = this.loadModemConfig();
+    // Charger la configuration multi-modem persistante
+    // Format: { modems: { "modem-1": {...}, "modem-2": {...} }, global: {...} }
+    this.modemsConfig = this.loadModemsConfig();
+
+    // Backward compatibility: expose first modem config as modemConfig
+    this.modemConfig = this.getModemConfig('modem-1');
   }
 
   /**
-   * Charge la configuration modem depuis le fichier
+   * Crée une configuration par défaut pour un modem
+   * @param {string} modemId - ID du modem (modem-1, modem-2, etc.)
+   * @param {number} index - Index du modem (0-4) pour calculer les ports
    */
-  loadModemConfig() {
+  createDefaultModemConfig(modemId, index = 0) {
+    const detectedType = this.detectModemTypeFromUsb();
+    // Calculate port offsets based on modem index
+    // SIM7600: 5 ports per modem (data=+2, audio=+4)
+    // EC25: 4 ports per modem (data=+2, audio=+1)
+    const basePort = index * 5;  // Assume 5 ports per modem slot
+    const dataPortNum = basePort + 2;
+    const audioPortNum = detectedType === 'ec25' ? basePort + 1 : basePort + 4;
+
+    return {
+      modemType: detectedType || 'sim7600',
+      modemName: modemId,
+      phoneNumber: '',
+      pinCode: '',
+      dataPort: `/dev/ttyUSB${dataPortNum}`,
+      audioPort: `/dev/ttyUSB${audioPortNum}`,
+      autoDetect: true,
+      sms: {
+        enabled: true,
+        storage: 'sqlite',
+        autoDelete: true,
+        deliveryReports: false,
+        serviceCenter: '',
+        encoding: 'auto',
+      },
+    };
+  }
+
+  /**
+   * Charge la configuration multi-modem depuis le fichier
+   * Migre automatiquement l'ancien format single-modem vers multi-modem
+   */
+  loadModemsConfig() {
     try {
       if (fs.existsSync(MODEM_CONFIG_FILE)) {
         const data = fs.readFileSync(MODEM_CONFIG_FILE, 'utf8');
         const config = JSON.parse(data);
-        // Auto-detect modem type if not set or if autoDetect is enabled
-        if (!config.modemType || config.autoDetect) {
-          const detectedType = this.detectModemTypeFromUsb();
-          if (detectedType) {
-            config.modemType = detectedType;
-          }
+
+        // Check if it's the new multi-modem format
+        if (config.modems && typeof config.modems === 'object') {
+          this.logger.info(`[ModemService] Loaded multi-modem config with ${Object.keys(config.modems).length} modem(s)`);
+          return config;
         }
-        return config;
+
+        // Migrate old single-modem format to new format
+        this.logger.info('[ModemService] Migrating single-modem config to multi-modem format');
+        const migratedConfig = {
+          version: 2,
+          modems: {
+            'modem-1': {
+              ...config,
+              modemName: config.modemName || 'modem-1',
+            },
+          },
+          global: {
+            maxModems: MAX_MODEMS,
+          },
+        };
+
+        // Save migrated config
+        this.saveModemsConfig(migratedConfig);
+        return migratedConfig;
       }
     } catch (error) {
-      this.logger.error('[ModemService] Error loading modem config:', error);
+      this.logger.error('[ModemService] Error loading modems config:', error);
     }
 
-    // Auto-detect modem type for default config
-    const detectedType = this.detectModemTypeFromUsb();
-
-    // Configuration par défaut
+    // Default config with one modem
     return {
-      modemType: detectedType || 'sim7600', // Default to sim7600 if detection fails
-      modemName: 'hni-modem',
-      phoneNumber: '',
-      pinCode: '',
-      dataPort: '/dev/ttyUSB2',
-      audioPort: detectedType === 'ec25' ? '/dev/ttyUSB1' : '/dev/ttyUSB4',  // SIM7600: USB4, EC25: USB1
-      autoDetect: true,
-      // Configuration SMS
-      sms: {
-        enabled: true,
-        storage: 'sqlite',      // 'sqlite' | 'modem' | 'sim'
-        autoDelete: true,       // Supprimer du modem après lecture
-        deliveryReports: false, // Accusés de réception
-        serviceCenter: '',      // Auto-détecté si vide
-        encoding: 'auto',       // 'auto' | 'gsm7' | 'ucs2'
+      version: 2,
+      modems: {
+        'modem-1': this.createDefaultModemConfig('modem-1', 0),
+      },
+      global: {
+        maxModems: MAX_MODEMS,
       },
     };
+  }
+
+  /**
+   * Charge la configuration modem depuis le fichier (LEGACY - backward compat)
+   * @deprecated Use loadModemsConfig() and getModemConfig(modemId) instead
+   */
+  loadModemConfig() {
+    const config = this.loadModemsConfig();
+    // Return first modem config for backward compatibility
+    const firstModemId = Object.keys(config.modems)[0];
+    return config.modems[firstModemId] || this.createDefaultModemConfig('modem-1', 0);
   }
 
   /**
@@ -161,18 +219,75 @@ class ModemService {
   }
 
   /**
-   * Sauvegarde la configuration modem
+   * Sauvegarde la configuration complète multi-modem
    */
-  saveModemConfig(config) {
+  saveModemsConfig(config) {
     try {
-      // Créer le répertoire si nécessaire
       if (!fs.existsSync(CONFIG_DIR)) {
         fs.mkdirSync(CONFIG_DIR, { recursive: true });
       }
 
-      this.modemConfig = { ...this.modemConfig, ...config };
-      fs.writeFileSync(MODEM_CONFIG_FILE, JSON.stringify(this.modemConfig, null, 2));
-      this.logger.info('[ModemService] Modem config saved');
+      this.modemsConfig = config;
+      fs.writeFileSync(MODEM_CONFIG_FILE, JSON.stringify(config, null, 2));
+      this.logger.info(`[ModemService] Multi-modem config saved (${Object.keys(config.modems).length} modems)`);
+      return true;
+    } catch (error) {
+      this.logger.error('[ModemService] Error saving modems config:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Sauvegarde la configuration d'un modem spécifique
+   * @param {string} modemId - ID du modem (modem-1, modem-2, etc.)
+   * @param {object} config - Configuration du modem
+   */
+  saveModemConfig(modemIdOrConfig, config = null) {
+    try {
+      if (!fs.existsSync(CONFIG_DIR)) {
+        fs.mkdirSync(CONFIG_DIR, { recursive: true });
+      }
+
+      // Support both old API (saveModemConfig(config)) and new API (saveModemConfig(modemId, config))
+      let modemId, modemConfig;
+      if (config === null && typeof modemIdOrConfig === 'object') {
+        // Old API: saveModemConfig(config) - save to modem-1 for backward compat
+        modemId = 'modem-1';
+        modemConfig = modemIdOrConfig;
+      } else {
+        modemId = modemIdOrConfig;
+        modemConfig = config;
+      }
+
+      // Ensure we have a valid modem ID
+      if (!modemId || typeof modemId !== 'string') {
+        modemId = 'modem-1';
+      }
+
+      // Ensure modems object exists
+      if (!this.modemsConfig.modems) {
+        this.modemsConfig.modems = {};
+      }
+
+      // Check max modems limit
+      const existingModems = Object.keys(this.modemsConfig.modems);
+      if (!existingModems.includes(modemId) && existingModems.length >= MAX_MODEMS) {
+        throw new Error(`Maximum ${MAX_MODEMS} modems supported`);
+      }
+
+      // Merge with existing config or create new
+      const existing = this.modemsConfig.modems[modemId] || {};
+      this.modemsConfig.modems[modemId] = { ...existing, ...modemConfig };
+
+      // Save to file
+      fs.writeFileSync(MODEM_CONFIG_FILE, JSON.stringify(this.modemsConfig, null, 2));
+      this.logger.info(`[ModemService] Modem config saved for ${modemId}`);
+
+      // Update legacy modemConfig reference
+      if (modemId === 'modem-1') {
+        this.modemConfig = this.modemsConfig.modems[modemId];
+      }
+
       return true;
     } catch (error) {
       this.logger.error('[ModemService] Error saving modem config:', error);
@@ -181,10 +296,48 @@ class ModemService {
   }
 
   /**
-   * Récupère la configuration actuelle
+   * Récupère la configuration d'un modem spécifique
+   * @param {string} modemId - ID du modem (optionnel, default: modem-1)
    */
-  getModemConfig() {
-    return { ...this.modemConfig };
+  getModemConfig(modemId = 'modem-1') {
+    if (this.modemsConfig?.modems?.[modemId]) {
+      return { ...this.modemsConfig.modems[modemId] };
+    }
+    // If modemId not found, try to get first modem or return default
+    const firstModemId = Object.keys(this.modemsConfig?.modems || {})[0];
+    if (firstModemId) {
+      return { ...this.modemsConfig.modems[firstModemId] };
+    }
+    return this.createDefaultModemConfig(modemId, 0);
+  }
+
+  /**
+   * Récupère la configuration de tous les modems
+   */
+  getAllModemsConfig() {
+    return {
+      modems: { ...this.modemsConfig.modems },
+      global: { ...this.modemsConfig.global },
+      maxModems: MAX_MODEMS,
+    };
+  }
+
+  /**
+   * Supprime la configuration d'un modem
+   * @param {string} modemId - ID du modem à supprimer
+   */
+  deleteModemConfig(modemId) {
+    if (modemId === 'modem-1') {
+      throw new Error('Cannot delete primary modem (modem-1)');
+    }
+
+    if (this.modemsConfig?.modems?.[modemId]) {
+      delete this.modemsConfig.modems[modemId];
+      this.saveModemsConfig(this.modemsConfig);
+      this.logger.info(`[ModemService] Modem config deleted: ${modemId}`);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -1019,24 +1172,38 @@ except Exception as e:
   }
 
   /**
-   * Récupère le nombre de tentatives PIN restantes
+   * Récupère le nombre de tentatives PIN restantes pour un modem
+   * @param {string} modemId - ID du modem (optionnel)
    */
-  getPinAttemptsRemaining() {
+  getPinAttemptsRemaining(modemId = 'modem-1') {
+    const attempts = pinAttempts[modemId] || 0;
+    const locked = pinLocked[modemId] || false;
     return {
-      attemptsUsed: pinAttempts,
-      attemptsRemaining: MAX_PIN_ATTEMPTS - pinAttempts,
-      isLocked: pinLocked,
+      modemId,
+      attemptsUsed: attempts,
+      attemptsRemaining: MAX_PIN_ATTEMPTS - attempts,
+      isLocked: locked,
       maxAttempts: MAX_PIN_ATTEMPTS,
     };
   }
 
   /**
    * Réinitialise le compteur de tentatives PIN (admin only)
+   * @param {string} modemId - ID du modem (optionnel, reset all if not provided)
    */
-  resetPinAttempts() {
-    pinAttempts = 0;
-    pinLocked = false;
-    this.logger.info('[ModemService] PIN attempts counter reset');
+  resetPinAttempts(modemId = null) {
+    if (modemId) {
+      pinAttempts[modemId] = 0;
+      pinLocked[modemId] = false;
+      this.logger.info(`[ModemService] PIN attempts counter reset for ${modemId}`);
+    } else {
+      // Reset all
+      Object.keys(pinAttempts).forEach(id => {
+        pinAttempts[id] = 0;
+        pinLocked[id] = false;
+      });
+      this.logger.info('[ModemService] PIN attempts counter reset for all modems');
+    }
     return { success: true, message: 'Compteur de tentatives réinitialisé' };
   }
 
@@ -1075,10 +1242,15 @@ except Exception as e:
    * Entre le code PIN SIM
    * TOUJOURS utilise l'accès direct au port car Asterisk ne peut pas
    * communiquer avec un modem non initialisé
+   * @param {string} pin - Code PIN
+   * @param {string} modemId - ID du modem (modem-1, modem-2, etc.)
    */
-  async enterSimPin(pin, modemId) {
-    // Vérifier si verrouillé
-    if (pinLocked) {
+  async enterSimPin(pin, modemId = 'modem-1') {
+    // Ensure we have a valid modemId
+    const effectiveModemId = modemId || 'modem-1';
+
+    // Vérifier si verrouillé pour ce modem
+    if (pinLocked[effectiveModemId]) {
       throw new Error('Trop de tentatives échouées. Réinitialisez le compteur ou utilisez le code PUK.');
     }
 
@@ -1086,7 +1258,9 @@ except Exception as e:
       throw new Error('Code PIN invalide (doit être 4-8 chiffres)');
     }
 
-    const port = this.modemConfig.dataPort || '/dev/ttyUSB2';
+    // Get modem config for the specific modem
+    const modemConfig = this.getModemConfig(effectiveModemId);
+    const port = modemConfig.dataPort || '/dev/ttyUSB2';
 
     try {
       // Toujours utiliser l'accès direct au port pour le PIN
@@ -1095,17 +1269,17 @@ except Exception as e:
         throw new Error(`Port modem non trouvé: ${port}`);
       }
 
-      this.logger.info(`[ModemService] Entering PIN via direct port access: ${port}`);
+      this.logger.info(`[ModemService] Entering PIN for ${effectiveModemId} via direct port access: ${port}`);
 
       // D'abord, vérifier l'état actuel du PIN
       const preCheck = await this.sendDirectAtCommand(port, 'AT+CPIN?', 5000);
-      this.logger.info(`[ModemService] Pre-PIN check: ${preCheck}`);
+      this.logger.info(`[ModemService] Pre-PIN check for ${effectiveModemId}: ${preCheck}`);
 
       // Si déjà READY, pas besoin de PIN
       if (preCheck.includes('READY')) {
-        this.logger.info('[ModemService] SIM already unlocked');
-        pinAttempts = 0;
-        this.saveModemConfig({ pinCode: pin });
+        this.logger.info(`[ModemService] SIM already unlocked for ${effectiveModemId}`);
+        pinAttempts[effectiveModemId] = 0;
+        this.saveModemConfig(effectiveModemId, { pinCode: pin });
         return { success: true, message: 'La carte SIM est déjà déverrouillée.' };
       }
 
@@ -1116,14 +1290,14 @@ except Exception as e:
 
       // Envoyer la commande PIN
       const result = await this.sendDirectAtCommand(port, `AT+CPIN="${pin}"`, 7000);
-      this.logger.info(`[ModemService] PIN command result: ${result}`);
+      this.logger.info(`[ModemService] PIN command result for ${effectiveModemId}: ${result}`);
 
       // Attendre un peu que le modem traite
       await new Promise(resolve => setTimeout(resolve, 2000));
 
       // Vérifier le nouvel état du PIN
       const postCheck = await this.sendDirectAtCommand(port, 'AT+CPIN?', 5000);
-      this.logger.info(`[ModemService] Post-PIN check: ${postCheck}`);
+      this.logger.info(`[ModemService] Post-PIN check for ${effectiveModemId}: ${postCheck}`);
 
       // Analyser les résultats
       const isSuccess = postCheck.includes('READY') ||
@@ -1134,9 +1308,9 @@ except Exception as e:
 
       if (isSuccess) {
         // Succès - réinitialiser le compteur et sauvegarder
-        pinAttempts = 0;
-        this.saveModemConfig({ pinCode: pin });
-        this.logger.info('[ModemService] SIM PIN entered successfully');
+        pinAttempts[effectiveModemId] = 0;
+        this.saveModemConfig(effectiveModemId, { pinCode: pin });
+        this.logger.info(`[ModemService] SIM PIN entered successfully for ${effectiveModemId}`);
 
         // Recharger chan_quectel pour que Asterisk détecte le modem
         setTimeout(async () => {
@@ -1152,23 +1326,23 @@ except Exception as e:
       }
 
       if (isError) {
-        // Incrémenter le compteur d'échecs
-        pinAttempts++;
+        // Incrémenter le compteur d'échecs pour ce modem
+        pinAttempts[effectiveModemId] = (pinAttempts[effectiveModemId] || 0) + 1;
 
-        if (pinAttempts >= MAX_PIN_ATTEMPTS) {
-          pinLocked = true;
-          this.logger.error('[ModemService] PIN attempts exhausted - locking further attempts');
+        if (pinAttempts[effectiveModemId] >= MAX_PIN_ATTEMPTS) {
+          pinLocked[effectiveModemId] = true;
+          this.logger.error(`[ModemService] PIN attempts exhausted for ${effectiveModemId} - locking further attempts`);
           throw new Error(`Code PIN incorrect. ATTENTION: Limite de ${MAX_PIN_ATTEMPTS} tentatives atteinte. Pour protéger votre carte SIM, les tentatives sont bloquées. Contactez l'administrateur.`);
         }
 
-        const remaining = MAX_PIN_ATTEMPTS - pinAttempts;
+        const remaining = MAX_PIN_ATTEMPTS - pinAttempts[effectiveModemId];
         throw new Error(`Code PIN incorrect. Il vous reste ${remaining} tentative(s) avant blocage dans l'interface.`);
       }
 
       // Résultat ambigu mais probablement OK si pas d'erreur explicite
       if (postCheck.includes('READY')) {
-        pinAttempts = 0;
-        this.saveModemConfig({ pinCode: pin });
+        pinAttempts[effectiveModemId] = 0;
+        this.saveModemConfig(effectiveModemId, { pinCode: pin });
         return { success: true, message: 'Code PIN accepté! SIM déverrouillée.' };
       }
 
@@ -1201,11 +1375,12 @@ except Exception as e:
 
   /**
    * Génère le fichier quectel.conf pour Asterisk
-   * Supporte plusieurs modems avec détection automatique
+   * Supporte plusieurs modems avec configuration individuelle
    */
   generateQuectelConf(config = {}) {
-    const mergedConfig = { ...this.modemConfig, ...config };
-    const smsConfig = mergedConfig.sms || {};
+    // Get default SMS config from first modem or provided config
+    const firstModemConfig = this.getModemConfig('modem-1');
+    const smsConfig = config.sms || firstModemConfig.sms || {};
 
     // Mapping stockage SMS: sqlite/modem -> 'me', sim -> 'sm'
     const msgStorage = smsConfig.storage === 'sim' ? 'sm' : 'me';
@@ -1253,20 +1428,24 @@ ${modem.phoneNumber ? `exten=+${modem.phoneNumber.replace(/^\+/, '')}` : ''}
 `;
       }
     } else {
-      // Mode single modem (compatibilité)
-      const profile = MODEM_PROFILES[mergedConfig.modemType] || MODEM_PROFILES.sim7600;
-      const modemName = mergedConfig.modemName || 'hni-modem';
-      const dataPort = mergedConfig.dataPort || '/dev/ttyUSB2';
-      const audioPort = mergedConfig.audioPort || this.calculateAudioPort(dataPort, mergedConfig.modemType || 'sim7600');
+      // Use configured modems from modemsConfig
+      const modemsToGen = this.modemsConfig?.modems || {};
 
-      confContent += `
+      for (const [modemId, modemConfig] of Object.entries(modemsToGen)) {
+        const profile = MODEM_PROFILES[modemConfig.modemType?.toLowerCase()] || MODEM_PROFILES.sim7600;
+        const modemName = modemConfig.modemName || modemId;
+        const dataPort = modemConfig.dataPort || '/dev/ttyUSB2';
+        const audioPort = modemConfig.audioPort || this.calculateAudioPort(dataPort, modemConfig.modemType || 'sim7600');
+
+        confContent += `
 [${modemName}]
 data=${dataPort}
 audio=${audioPort}
 slin16=${profile.slin16 ? 'yes' : 'no'}
-${mergedConfig.imsi ? `imsi=${mergedConfig.imsi}` : '; imsi sera détecté automatiquement'}
-${mergedConfig.phoneNumber ? `exten=+${mergedConfig.phoneNumber.replace(/^\+/, '')}` : ''}
+${modemConfig.imsi ? `imsi=${modemConfig.imsi}` : '; imsi sera détecté automatiquement'}
+${modemConfig.phoneNumber ? `exten=+${modemConfig.phoneNumber.replace(/^\+/, '')}` : ''}
 `;
+      }
     }
 
     return confContent;

@@ -1024,7 +1024,9 @@ router.post('/modems/restart-services', async (req, res) => {
 
 /**
  * GET /api/admin/modems/config
- * Récupère la configuration modem actuelle
+ * Récupère la configuration de tous les modems ou d'un modem spécifique
+ * Query params:
+ *   - modemId: ID du modem spécifique (optionnel)
  */
 router.get('/modems/config', async (req, res) => {
   try {
@@ -1032,18 +1034,41 @@ router.get('/modems/config', async (req, res) => {
       return res.status(503).json({ error: 'Modem service not available' });
     }
 
-    const config = modemService.getModemConfig();
+    const { modemId } = req.query;
     const profiles = modemService.getModemProfiles();
 
-    // Ne pas exposer le PIN complet
-    if (config.pinCode) {
-      config.pinConfigured = true;
-      config.pinCode = '****';
+    if (modemId) {
+      // Return config for specific modem
+      const config = modemService.getModemConfig(modemId);
+      // Ne pas exposer le PIN complet
+      if (config.pinCode) {
+        config.pinConfigured = true;
+        config.pinCode = '****';
+      } else {
+        config.pinConfigured = false;
+      }
+      res.json({ config, profiles, modemId });
     } else {
-      config.pinConfigured = false;
+      // Return all modem configs
+      const allConfigs = modemService.getAllModemsConfig();
+      // Mask PINs for all modems
+      const maskedModems = {};
+      for (const [id, config] of Object.entries(allConfigs.modems || {})) {
+        maskedModems[id] = { ...config };
+        if (maskedModems[id].pinCode) {
+          maskedModems[id].pinConfigured = true;
+          maskedModems[id].pinCode = '****';
+        } else {
+          maskedModems[id].pinConfigured = false;
+        }
+      }
+      res.json({
+        modems: maskedModems,
+        global: allConfigs.global,
+        maxModems: allConfigs.maxModems,
+        profiles,
+      });
     }
-
-    res.json({ config, profiles });
 
   } catch (error) {
     console.error('[Admin] Get modem config error:', error);
@@ -1053,9 +1078,13 @@ router.get('/modems/config', async (req, res) => {
 
 /**
  * PUT /api/admin/modems/config
- * Met à jour la configuration modem
+ * Met à jour la configuration d'un modem spécifique
+ * Body:
+ *   - modemId: ID du modem (required)
+ *   - ... other config fields
  */
 router.put('/modems/config', [
+  body('modemId').optional().matches(/^modem-[1-5]$/).withMessage('Invalid modem ID (modem-1 to modem-5)'),
   body('modemType').optional().isIn(['ec25', 'sim7600']),
   body('modemName').optional().matches(/^[a-z0-9-]+$/i).withMessage('Invalid modem name'),
   body('phoneNumber').optional().matches(/^\+?[0-9]{0,15}$/),
@@ -1075,21 +1104,61 @@ router.put('/modems/config', [
       return res.status(503).json({ error: 'Modem service not available' });
     }
 
-    const updates = req.body;
+    const { modemId, ...updates } = req.body;
+    const effectiveModemId = modemId || 'modem-1';
 
-    // Sauvegarder la config
-    modemService.saveModemConfig(updates);
+    // Sauvegarder la config pour le modem spécifique
+    modemService.saveModemConfig(effectiveModemId, updates);
 
     await securityService?.logAction(req.user.id, 'modem_config_updated', {
       category: 'admin',
+      modemId: effectiveModemId,
       modemType: updates.modemType,
       username: req.user.username,
     }, req);
 
-    res.json({ success: true, config: modemService.getModemConfig() });
+    res.json({
+      success: true,
+      modemId: effectiveModemId,
+      config: modemService.getModemConfig(effectiveModemId),
+    });
 
   } catch (error) {
     console.error('[Admin] Update modem config error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/admin/modems/config/:modemId
+ * Supprime la configuration d'un modem
+ */
+router.delete('/modems/config/:modemId', [
+  param('modemId').matches(/^modem-[2-5]$/).withMessage('Cannot delete modem-1, only modem-2 to modem-5'),
+], validate, async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const { modemId } = req.params;
+
+    const deleted = modemService.deleteModemConfig(modemId);
+
+    if (deleted) {
+      await securityService?.logAction(req.user.id, 'modem_config_deleted', {
+        category: 'admin',
+        modemId,
+        username: req.user.username,
+      }, req);
+
+      res.json({ success: true, modemId, message: `Configuration du ${modemId} supprimée` });
+    } else {
+      res.status(404).json({ error: `Configuration du ${modemId} non trouvée` });
+    }
+
+  } catch (error) {
+    console.error('[Admin] Delete modem config error:', error);
     res.status(500).json({ error: error.message });
   }
 });

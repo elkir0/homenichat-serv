@@ -166,6 +166,16 @@ interface ModemConfig {
   sms: SmsConfig;
 }
 
+// Multi-modem config response
+interface AllModemsConfig {
+  modems: Record<string, ModemConfig>;
+  global?: {
+    maxModems: number;
+  };
+  maxModems: number;
+  profiles: ModemProfile[];
+}
+
 interface DetectedPorts {
   ports: string[];
   suggestedDataPort: string | null;
@@ -194,25 +204,45 @@ const modemsApi = {
     return response.json();
   },
 
-  // Configuration APIs
-  getConfig: async (): Promise<{ config: ModemConfig; profiles: ModemProfile[] }> => {
-    const response = await fetch('/api/admin/modems/config', {
+  // Configuration APIs - Multi-modem support
+  getConfig: async (modemId?: string): Promise<AllModemsConfig | { config: ModemConfig; profiles: ModemProfile[]; modemId: string }> => {
+    const url = modemId
+      ? `/api/admin/modems/config?modemId=${modemId}`
+      : '/api/admin/modems/config';
+    const response = await fetch(url, {
       headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
     });
     if (!response.ok) throw new Error('Failed to fetch modem config');
     return response.json();
   },
 
-  updateConfig: async (config: Partial<ModemConfig>): Promise<{ success: boolean; config: ModemConfig }> => {
+  getAllConfigs: async (): Promise<AllModemsConfig> => {
+    const response = await fetch('/api/admin/modems/config', {
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
+    });
+    if (!response.ok) throw new Error('Failed to fetch modems config');
+    return response.json();
+  },
+
+  updateConfig: async (modemId: string, config: Partial<ModemConfig>): Promise<{ success: boolean; modemId: string; config: ModemConfig }> => {
     const response = await fetch('/api/admin/modems/config', {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(config),
+      body: JSON.stringify({ modemId, ...config }),
     });
     if (!response.ok) throw new Error('Failed to update modem config');
+    return response.json();
+  },
+
+  deleteConfig: async (modemId: string): Promise<{ success: boolean; message: string }> => {
+    const response = await fetch(`/api/admin/modems/config/${modemId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
+    });
+    if (!response.ok) throw new Error('Failed to delete modem config');
     return response.json();
   },
 
@@ -267,14 +297,26 @@ const modemsApi = {
     return response.json();
   },
 
-  applyConfig: async (config: Partial<ModemConfig>): Promise<{ success: boolean; message: string }> => {
+  applyConfig: async (modemId: string, config: Partial<ModemConfig>): Promise<{ success: boolean; message: string }> => {
+    // First save the config for this specific modem
+    const saveResponse = await fetch('/api/admin/modems/config', {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ modemId, ...config }),
+    });
+    if (!saveResponse.ok) throw new Error('Failed to save modem config');
+
+    // Then apply to quectel.conf and reload Asterisk
     const response = await fetch('/api/admin/modems/apply-config', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(config),
+      body: JSON.stringify({ modemId, ...config }),
     });
     if (!response.ok) throw new Error('Failed to apply config');
     return response.json();
@@ -524,10 +566,10 @@ export default function ModemsPage() {
     refetchInterval: autoRefresh ? 30000 : false,
   });
 
-  // Configuration queries
+  // Configuration queries - Multi-modem support
   const { data: modemConfigData } = useQuery({
     queryKey: ['modemConfig'],
-    queryFn: modemsApi.getConfig,
+    queryFn: modemsApi.getAllConfigs,
     staleTime: 30000,
   });
 
@@ -556,28 +598,53 @@ export default function ModemsPage() {
     enabled: !!selectedModemId && trunkDialogOpen,
   });
 
-  // Update configForm when config is loaded
+  // Get modem ID for current tab (for config purposes)
+  // Maps tab index to modem-1, modem-2, etc.
+  const currentConfigModemId = `modem-${selectedTab + 1}`;
+
+  // Update configForm when config is loaded or when selectedTab changes
   useEffect(() => {
-    if (modemConfigData?.config) {
-      const cfg = modemConfigData.config;
-      setConfigForm({
-        modemType: cfg.modemType || 'ec25',
-        modemName: cfg.modemName || 'hni-modem',
-        phoneNumber: cfg.phoneNumber || '',
-        dataPort: cfg.dataPort || '/dev/ttyUSB2',
-        audioPort: cfg.audioPort || '/dev/ttyUSB1',
-        autoDetect: cfg.autoDetect !== false,
-        sms: {
-          enabled: cfg.sms?.enabled !== false,
-          storage: cfg.sms?.storage || 'sqlite',
-          autoDelete: cfg.sms?.autoDelete !== false,
-          deliveryReports: cfg.sms?.deliveryReports || false,
-          serviceCenter: cfg.sms?.serviceCenter || '',
-          encoding: cfg.sms?.encoding || 'auto',
-        },
-      });
+    if (modemConfigData?.modems) {
+      // Multi-modem format
+      const cfg = modemConfigData.modems[currentConfigModemId];
+      if (cfg) {
+        setConfigForm({
+          modemType: cfg.modemType || 'sim7600',
+          modemName: cfg.modemName || currentConfigModemId,
+          phoneNumber: cfg.phoneNumber || '',
+          dataPort: cfg.dataPort || `/dev/ttyUSB${selectedTab * 5 + 2}`,
+          audioPort: cfg.audioPort || `/dev/ttyUSB${selectedTab * 5 + 4}`,
+          autoDetect: cfg.autoDetect !== false,
+          sms: {
+            enabled: cfg.sms?.enabled !== false,
+            storage: cfg.sms?.storage || 'sqlite',
+            autoDelete: cfg.sms?.autoDelete !== false,
+            deliveryReports: cfg.sms?.deliveryReports || false,
+            serviceCenter: cfg.sms?.serviceCenter || '',
+            encoding: cfg.sms?.encoding || 'auto',
+          },
+        });
+      } else {
+        // No config for this modem yet - set defaults
+        setConfigForm({
+          modemType: 'sim7600',
+          modemName: currentConfigModemId,
+          phoneNumber: '',
+          dataPort: `/dev/ttyUSB${selectedTab * 5 + 2}`,
+          audioPort: `/dev/ttyUSB${selectedTab * 5 + 4}`,
+          autoDetect: true,
+          sms: {
+            enabled: true,
+            storage: 'sqlite',
+            autoDelete: true,
+            deliveryReports: false,
+            serviceCenter: '',
+            encoding: 'auto',
+          },
+        });
+      }
     }
-  }, [modemConfigData]);
+  }, [modemConfigData, selectedTab, currentConfigModemId]);
 
   // Mutations
   const restartModemMutation = useMutation({
@@ -692,7 +759,8 @@ export default function ModemsPage() {
   });
 
   const applyConfigMutation = useMutation({
-    mutationFn: modemsApi.applyConfig,
+    mutationFn: ({ modemId, config }: { modemId: string; config: Partial<ModemConfig> }) =>
+      modemsApi.applyConfig(modemId, config),
     onSuccess: (result) => {
       setActionResult({ success: result.success, message: result.message });
       queryClient.invalidateQueries({ queryKey: ['modemConfig'] });
@@ -1022,11 +1090,11 @@ export default function ModemsPage() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <SettingsIcon sx={{ color: 'primary.main' }} />
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                Configuration Modem
+                Configuration - {currentConfigModemId}
               </Typography>
-              {modemConfigData?.config?.modemType && (
+              {modemConfigData?.modems?.[currentConfigModemId]?.modemType && (
                 <Chip
-                  label={modemConfigData.config.modemType.toUpperCase()}
+                  label={modemConfigData.modems[currentConfigModemId].modemType.toUpperCase()}
                   size="small"
                   color="primary"
                   variant="outlined"
@@ -1200,7 +1268,7 @@ export default function ModemsPage() {
                     variant="contained"
                     color="primary"
                     startIcon={<SaveIcon />}
-                    onClick={() => applyConfigMutation.mutate(configForm)}
+                    onClick={() => applyConfigMutation.mutate({ modemId: currentConfigModemId, config: configForm })}
                     disabled={applyConfigMutation.isPending}
                   >
                     Appliquer la configuration
@@ -1230,7 +1298,7 @@ export default function ModemsPage() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <SendIcon color="primary" />
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                Configuration SMS
+                Configuration SMS - {currentConfigModemId}
               </Typography>
             </Box>
             <FormControlLabel
@@ -1364,7 +1432,7 @@ export default function ModemsPage() {
                     variant="contained"
                     color="primary"
                     startIcon={<SaveIcon />}
-                    onClick={() => applyConfigMutation.mutate(configForm)}
+                    onClick={() => applyConfigMutation.mutate({ modemId: currentConfigModemId, config: configForm })}
                     disabled={applyConfigMutation.isPending}
                   >
                     Appliquer
@@ -1955,7 +2023,7 @@ export default function ModemsPage() {
             disabled={simStatusData?.isLocked}
           />
 
-          {modemConfigData?.config?.pinConfigured && (
+          {modemConfigData?.modems?.[currentConfigModemId]?.pinConfigured && (
             <Alert severity="success" sx={{ mt: 2 }}>
               Un code PIN est deja configure. Entrez un nouveau code pour le remplacer.
             </Alert>
@@ -1968,7 +2036,7 @@ export default function ModemsPage() {
           <Button
             variant="contained"
             color="warning"
-            onClick={() => enterPinMutation.mutate({ pin: pinInput, pinConfirm: pinConfirmInput })}
+            onClick={() => enterPinMutation.mutate({ pin: pinInput, pinConfirm: pinConfirmInput, modemId: currentConfigModemId })}
             disabled={
               !pinInput ||
               pinInput.length < 4 ||
@@ -2042,7 +2110,7 @@ export default function ModemsPage() {
             variant="contained"
             startIcon={<SaveIcon />}
             onClick={() => {
-              applyConfigMutation.mutate(configForm);
+              applyConfigMutation.mutate({ modemId: currentConfigModemId, config: configForm });
               setConfDialogOpen(false);
             }}
             disabled={applyConfigMutation.isPending}
