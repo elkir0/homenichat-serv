@@ -375,6 +375,13 @@ install_dependencies() {
 
     apt-get update >> "$LOG_FILE" 2>&1
 
+    # Fix locale warnings first
+    apt-get install -y locales >> "$LOG_FILE" 2>&1
+    sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen 2>/dev/null || true
+    locale-gen >> "$LOG_FILE" 2>&1 || true
+    export LANG=en_US.UTF-8
+    export LC_ALL=en_US.UTF-8
+
     apt-get install -y \
         curl wget git build-essential python3 python3-pip \
         sqlite3 nginx supervisor ufw \
@@ -661,9 +668,54 @@ install_chan_quectel() {
     mkdir -p /var/lib/asterisk/smsdb
     chown asterisk:asterisk /var/lib/asterisk/smsdb 2>/dev/null || true
 
+    # Ensure chan_quectel is loaded at startup
+    if [ -f /etc/asterisk/modules.conf ]; then
+        if ! grep -q "chan_quectel.so" /etc/asterisk/modules.conf 2>/dev/null; then
+            echo "" >> /etc/asterisk/modules.conf
+            echo "; Homenichat - Load chan_quectel for GSM modems" >> /etc/asterisk/modules.conf
+            echo "load => chan_quectel.so" >> /etc/asterisk/modules.conf
+            info "Added chan_quectel.so to modules.conf"
+        fi
+    else
+        # Create modules.conf if it doesn't exist
+        cat > /etc/asterisk/modules.conf << 'MODULES_CONF'
+[modules]
+autoload=yes
+
+; Homenichat - Load chan_quectel for GSM modems
+load => chan_quectel.so
+MODULES_CONF
+        info "Created modules.conf with chan_quectel"
+    fi
+
+    # Detect modem type for proper configuration
+    # SIM7600: vendor 1e0e, uses slin16=yes, data=ttyUSB2, audio=ttyUSB4
+    # EC25: vendor 2c7c, uses slin16=no, data=ttyUSB2, audio=ttyUSB1
+    local MODEM_TYPE="unknown"
+    local SLIN16="no"
+    local DATA_PORT="/dev/ttyUSB2"
+    local AUDIO_PORT="/dev/ttyUSB1"
+
+    if lsusb 2>/dev/null | grep -q "1e0e:9001"; then
+        MODEM_TYPE="SIM7600"
+        SLIN16="yes"
+        DATA_PORT="/dev/ttyUSB2"
+        AUDIO_PORT="/dev/ttyUSB4"
+        info "Detected SIM7600 modem - using 16kHz audio (slin16=yes)"
+    elif lsusb 2>/dev/null | grep -q "2c7c:"; then
+        MODEM_TYPE="EC25"
+        SLIN16="no"
+        DATA_PORT="/dev/ttyUSB2"
+        AUDIO_PORT="/dev/ttyUSB1"
+        info "Detected Quectel EC25 modem - using 8kHz audio (slin16=no)"
+    else
+        warning "No known modem detected - using default EC25 configuration"
+    fi
+
     # Create quectel config (based on VM500 production config)
-    cat > /etc/asterisk/quectel.conf << 'QUECTEL_CONF'
+    cat > /etc/asterisk/quectel.conf << QUECTEL_CONF
 ; Homenichat - chan_quectel configuration
+; Generated for: ${MODEM_TYPE} modem
 ; Based on VM500 production config
 
 [general]
@@ -682,15 +734,26 @@ msg_storage=me
 msg_direct=off
 usecallingpres=yes
 callingpres=allowed_passed_screen
+; Audio format: SIM7600 requires 16kHz (slin16=yes), EC25 uses 8kHz (slin16=no)
+slin16=${SLIN16}
 
 ; Example modem configuration (will be auto-configured by Homenichat)
-; EC25 uses slin16=no (8kHz), SIM7600 uses slin16=yes (16kHz)
+; Detected modem type: ${MODEM_TYPE}
 ;[hni-modem]
-;data=/dev/ttyUSB2
-;audio=/dev/ttyUSB1
-;slin16=no
+;data=${DATA_PORT}
+;audio=${AUDIO_PORT}
 ;imsi=YOUR_IMSI_HERE
 QUECTEL_CONF
+
+    # Detect if running in LXC container
+    local IN_LXC=false
+    if [ -f /proc/1/environ ] && grep -qa "container=lxc" /proc/1/environ 2>/dev/null; then
+        IN_LXC=true
+    elif [ -d /proc/vz ] && [ ! -d /proc/bc ]; then
+        IN_LXC=true
+    elif grep -qa "lxc" /proc/1/cgroup 2>/dev/null; then
+        IN_LXC=true
+    fi
 
     # Create udev rules for consistent device naming
     cat > /etc/udev/rules.d/99-quectel.rules << 'UDEV_RULES'
@@ -707,6 +770,26 @@ UDEV_RULES
 
     udevadm control --reload-rules 2>/dev/null || true
     udevadm trigger 2>/dev/null || true
+
+    # If in LXC container, show important message about host configuration
+    if [ "$IN_LXC" = true ]; then
+        echo ""
+        warning "=== LXC CONTAINER DETECTED ==="
+        echo ""
+        echo -e "${YELLOW}For SIM7600 modems, you need to add udev rules on the Proxmox HOST:${NC}"
+        echo ""
+        echo "  On the Proxmox host, create this file:"
+        echo -e "  ${CYAN}/etc/udev/rules.d/99-sim7600.rules${NC}"
+        echo ""
+        echo "  With this content:"
+        echo -e '  ${CYAN}ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1e0e", ATTR{idProduct}=="9001", RUN+="/bin/sh -c '\''echo 1e0e 9001 > /sys/bus/usb-serial/drivers/option1/new_id'\''"${NC}'
+        echo ""
+        echo "  Then reload udev on the host:"
+        echo -e "  ${CYAN}udevadm control --reload-rules && udevadm trigger${NC}"
+        echo ""
+        echo "  This makes the SIM7600 recognized by the 'option' driver."
+        echo ""
+    fi
 
     # Add SMS handler context to extensions.conf
     if ! grep -q "sms-handler" /etc/asterisk/extensions.conf 2>/dev/null; then
