@@ -219,8 +219,7 @@ router.get('/', async (req, res) => {
     if (req.user && req.user.id && db) {
       let userVoip = db.getSetting(`user_${req.user.id}_voip`);
 
-      // Check if external FreePBX is configured via environment
-      const hasExternalPbx = !!process.env.VOIP_WSS_URL;
+      // Global VoIP config from environment
       const globalConfig = {
         server: process.env.VOIP_WSS_URL || `wss://${host}:8089/ws`,
         domain: process.env.VOIP_DOMAIN || host?.split(':')[0] || 'localhost',
@@ -228,13 +227,13 @@ router.get('/', async (req, res) => {
         password: process.env.VOIP_PASSWORD || '',
       };
 
-      // If user has specific VoIP config, use it
-      if (userVoip && userVoip.enabled && userVoip.extension) {
+      // PRIORITY 1: If user has VoIP config with extension AND password, use it
+      if (userVoip && userVoip.enabled && userVoip.extension && userVoip.password) {
         result.voipCredentials = {
           server: userVoip.wssUrl || globalConfig.server,
           domain: userVoip.domain || globalConfig.domain,
           extension: userVoip.extension,
-          password: userVoip.password || '',
+          password: userVoip.password,
           displayName: req.user.username || 'Homenichat User',
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -246,32 +245,20 @@ router.get('/', async (req, res) => {
         if (result.cdr && result.cdr.enabled) {
           result.cdr.extensions = [userVoip.extension];
         }
+        console.log(`[Discovery] Using existing VoIP config for user ${req.user.id}: ext ${userVoip.extension}`);
       }
-      // If external PBX configured with default extension, use global config
-      else if (hasExternalPbx && globalConfig.extension) {
-        result.voipCredentials = {
-          server: globalConfig.server,
-          domain: globalConfig.domain,
-          extension: globalConfig.extension,
-          password: globalConfig.password,
-          displayName: req.user.username || 'Homenichat User',
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ],
-          needsPassword: !globalConfig.password, // Flag if password needs to be set in app
-        };
-      }
-      // No external PBX, try auto-generation on local Asterisk
-      else if (!hasExternalPbx) {
+      // PRIORITY 2: Try to auto-create via AMI (works for both local and remote PBX)
+      else {
+        let amiCreated = false;
         try {
           const freepbxAmi = require('../services/FreePBXAmiService');
           if (freepbxAmi.connected && freepbxAmi.authenticated) {
-            const baseExtension = 200;
-            const extensionNumber = String(baseExtension + parseInt(req.user.id, 10) || 1);
+            // Use configured extension from env OR generate based on userId
+            const extensionNumber = globalConfig.extension || String(200 + (parseInt(req.user.id, 10) || 1));
             const secret = freepbxAmi.generateSecret ? freepbxAmi.generateSecret(16) :
               Math.random().toString(36).substring(2, 18);
 
+            // Update or create the PJSIP extension with new password
             const extResult = await freepbxAmi.createPjsipExtension({
               extension: extensionNumber,
               secret: secret,
@@ -292,7 +279,7 @@ router.get('/', async (req, res) => {
                 createdAt: Date.now()
               };
               db.setSetting(`user_${req.user.id}_voip`, userVoip);
-              console.log(`[Discovery] Auto-created VoIP extension ${extensionNumber} for user ${req.user.id}`);
+              console.log(`[Discovery] Auto-created VoIP extension ${extensionNumber} for user ${req.user.id} via AMI`);
 
               result.voipCredentials = {
                 server: globalConfig.server,
@@ -305,20 +292,45 @@ router.get('/', async (req, res) => {
                   { urls: 'stun:stun1.l.google.com:19302' }
                 ]
               };
+              amiCreated = true;
+
+              // Update CDR extensions
+              if (result.cdr && result.cdr.enabled) {
+                result.cdr.extensions = [extensionNumber];
+              }
             }
           }
         } catch (e) {
-          // AMI not available
+          console.log(`[Discovery] AMI auto-creation failed: ${e.message}`);
         }
-      }
-      // Fallback: server configured but no extension
-      else {
-        result.voipCredentials = {
-          server: globalConfig.server,
-          domain: globalConfig.domain,
-          needsSetup: true,
-          displayName: req.user.username || 'Homenichat User',
-        };
+
+        // PRIORITY 3: Fallback to global config if AMI failed
+        if (!amiCreated) {
+          if (globalConfig.extension && globalConfig.password) {
+            // Global config has complete credentials
+            result.voipCredentials = {
+              server: globalConfig.server,
+              domain: globalConfig.domain,
+              extension: globalConfig.extension,
+              password: globalConfig.password,
+              displayName: req.user.username || 'Homenichat User',
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+              ],
+            };
+          } else if (globalConfig.server) {
+            // Server configured but needs manual setup
+            result.voipCredentials = {
+              server: globalConfig.server,
+              domain: globalConfig.domain,
+              extension: globalConfig.extension || '',
+              needsSetup: !globalConfig.extension,
+              needsPassword: globalConfig.extension && !globalConfig.password,
+              displayName: req.user.username || 'Homenichat User',
+            };
+          }
+        }
       }
     }
 
@@ -469,20 +481,38 @@ async function getDiscoveryData(req) {
     const globalConfig = {
       server: process.env.VOIP_WSS_URL || `wss://${process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost'}:8089/ws`,
       domain: process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost',
+      extension: process.env.VOIP_EXTENSION || '',
+      password: process.env.VOIP_PASSWORD || '',
     };
 
-    // Auto-generate VoIP credentials if user doesn't have them and AMI is connected
-    if (!userVoip || !userVoip.extension) {
+    // PRIORITY 1: If user has VoIP config with extension AND password, use it
+    if (userVoip && userVoip.enabled && userVoip.extension && userVoip.password) {
+      result.voipCredentials = {
+        server: userVoip.wssUrl || globalConfig.server,
+        domain: userVoip.domain || globalConfig.domain,
+        extension: userVoip.extension,
+        password: userVoip.password,
+        displayName: req.user.username || 'Homenichat User',
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      };
+
+      if (result.cdr && result.cdr.enabled) {
+        result.cdr.extensions = [userVoip.extension];
+      }
+    }
+    // PRIORITY 2: Try AMI auto-creation
+    else {
+      let amiCreated = false;
       try {
         const freepbxAmi = require('../services/FreePBXAmiService');
         if (freepbxAmi.connected && freepbxAmi.authenticated) {
-          // Generate extension based on userId
-          const baseExtension = 200;
-          const extensionNumber = String(baseExtension + parseInt(req.user.id, 10) || 1);
+          const extensionNumber = globalConfig.extension || String(200 + (parseInt(req.user.id, 10) || 1));
           const secret = freepbxAmi.generateSecret ? freepbxAmi.generateSecret(16) :
             Math.random().toString(36).substring(2, 18);
 
-          // Create PJSIP extension
           const extResult = await freepbxAmi.createPjsipExtension({
             extension: extensionNumber,
             secret: secret,
@@ -503,39 +533,41 @@ async function getDiscoveryData(req) {
               createdAt: Date.now()
             };
             db.setSetting(`user_${req.user.id}_voip`, userVoip);
+
+            result.voipCredentials = {
+              server: globalConfig.server,
+              domain: globalConfig.domain,
+              extension: extensionNumber,
+              password: secret,
+              displayName: req.user.username || 'Homenichat User',
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+              ]
+            };
+            amiCreated = true;
+
+            if (result.cdr && result.cdr.enabled) {
+              result.cdr.extensions = [extensionNumber];
+            }
           }
         }
       } catch (e) {
-        // AMI not available, use global config
+        // AMI not available
       }
-    }
 
-    if (userVoip && userVoip.enabled && userVoip.extension) {
-      result.voipCredentials = {
-        server: userVoip.wssUrl || globalConfig.server,
-        domain: userVoip.domain || globalConfig.domain,
-        extension: userVoip.extension,
-        password: userVoip.password, // Include password for 1-click auto-config
-        displayName: req.user.username || 'Homenichat User',
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
-        ]
-      };
-
-      // Also add extension to CDR filter
-      if (result.cdr && result.cdr.enabled) {
-        result.cdr.extensions = [userVoip.extension];
+      // PRIORITY 3: Fallback to global config
+      if (!amiCreated && globalConfig.server) {
+        result.voipCredentials = {
+          server: globalConfig.server,
+          domain: globalConfig.domain,
+          extension: globalConfig.extension,
+          password: globalConfig.password || '',
+          needsSetup: !globalConfig.extension,
+          needsPassword: globalConfig.extension && !globalConfig.password,
+          displayName: req.user.username || 'Homenichat User',
+        };
       }
-    } else if (globalConfig.server) {
-      result.voipCredentials = {
-        server: globalConfig.server,
-        domain: globalConfig.domain,
-        extension: process.env.VOIP_EXTENSION || '',
-        hasPassword: !!process.env.VOIP_PASSWORD,
-        displayName: req.user.username || 'Homenichat User',
-        needsSetup: true, // Flag that VoIP needs manual setup
-      };
     }
   }
 
