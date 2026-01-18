@@ -109,9 +109,8 @@ interface SystemStatus {
 
 interface ServiceStatus {
   asterisk: { active: boolean; status: string };
-  smsBridge: { active: boolean; status: string };
-  smsGateway: { active: boolean; status: string };
-  watchdog: { active: boolean; status: string };
+  homenichat: { active: boolean; status: string };
+  chanQuectel: { active: boolean; status: string };
   allOk: boolean;
 }
 
@@ -1699,20 +1698,14 @@ export default function ModemsPage() {
                     </Grid>
                     <Grid item xs={6}>
                       <StatusChip
-                        active={fullStatus?.services?.smsBridge?.active || false}
-                        label="SMS Bridge"
+                        active={fullStatus?.services?.homenichat?.active || false}
+                        label="Homenichat"
                       />
                     </Grid>
                     <Grid item xs={6}>
                       <StatusChip
-                        active={fullStatus?.services?.smsGateway?.active || false}
-                        label="SMS Gateway"
-                      />
-                    </Grid>
-                    <Grid item xs={6}>
-                      <StatusChip
-                        active={fullStatus?.services?.watchdog?.active || false}
-                        label="Watchdog"
+                        active={fullStatus?.services?.chanQuectel?.active || false}
+                        label="chan_quectel"
                       />
                     </Grid>
                   </Grid>

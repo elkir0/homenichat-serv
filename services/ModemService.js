@@ -70,7 +70,8 @@ class ModemService {
   constructor(config = {}) {
     this.modems = config.modems || DEFAULT_MODEMS;
     this.asteriskHost = config.asteriskHost || 'localhost';
-    this.watchdogLogPath = config.watchdogLogPath || '/var/log/smsgate-watchdog.log';
+    // Homenichat logs (pas de watchdog externe, services intégrés)
+    this.logPath = config.logPath || '/var/log/homenichat/output.log';
     this.metricsDb = null; // Pour l'historique
     this.logger = config.logger || console;
 
@@ -602,33 +603,44 @@ class ModemService {
 
   /**
    * Collecte l'état des services
+   * Note: Les services sms-bridge, sms-gateway et smsgate-watchdog étaient
+   * des services manuels de VM500 (production), pas de homenichat-serv.
+   * Homenichat-serv utilise des services intégrés (WatchdogService, SmsRoutingService)
    */
   async collectServices() {
     const services = {
       asterisk: { active: false, status: 'unknown' },
-      smsBridge: { active: false, status: 'unknown' },
-      smsGateway: { active: false, status: 'unknown' },
-      watchdog: { active: false, status: 'unknown' },
+      homenichat: { active: false, status: 'unknown' },
+      chanQuectel: { active: false, status: 'unknown' },
       allOk: false,
     };
 
-    const serviceMap = {
-      asterisk: 'asterisk.service',
-      smsBridge: 'sms-bridge.service',
-      smsGateway: 'sms-gateway.service',
-      watchdog: 'smsgate-watchdog.timer',
-    };
-
     try {
-      for (const [key, service] of Object.entries(serviceMap)) {
-        const result = await this.runCmd(`systemctl is-active ${service} 2>/dev/null`);
-        services[key].active = result === 'active';
-        services[key].status = result;
+      // Check Asterisk service
+      const asteriskStatus = await this.runCmd('systemctl is-active asterisk.service 2>/dev/null');
+      services.asterisk.active = asteriskStatus === 'active';
+      services.asterisk.status = asteriskStatus || 'not installed';
+
+      // Check Homenichat service (via supervisor or systemd)
+      let homenichatStatus = await this.runCmd('supervisorctl status homenichat 2>/dev/null | grep -oE "RUNNING|STOPPED|FATAL"');
+      if (!homenichatStatus || homenichatStatus.includes('Error')) {
+        // Fallback: check systemd
+        homenichatStatus = await this.runCmd('systemctl is-active homenichat.service 2>/dev/null');
+      }
+      services.homenichat.active = homenichatStatus === 'RUNNING' || homenichatStatus === 'active';
+      services.homenichat.status = homenichatStatus || 'not installed';
+
+      // Check chan_quectel module loaded in Asterisk
+      if (services.asterisk.active) {
+        const chanQuectelLoaded = await this.asteriskCmd('module show like quectel');
+        services.chanQuectel.active = chanQuectelLoaded && chanQuectelLoaded.includes('chan_quectel');
+        services.chanQuectel.status = services.chanQuectel.active ? 'loaded' : 'not loaded';
+      } else {
+        services.chanQuectel.status = 'asterisk not running';
       }
 
-      services.allOk = Object.entries(services)
-        .filter(([k]) => k !== 'allOk')
-        .every(([, s]) => s.active);
+      // All OK if asterisk and chan_quectel are running
+      services.allOk = services.asterisk.active && services.chanQuectel.active;
     } catch (error) {
       services.error = error.message;
     }
@@ -732,29 +744,69 @@ class ModemService {
   }
 
   /**
-   * Collecte les logs du watchdog
+   * Collecte les logs homenichat (remplace l'ancien collectWatchdogLogs)
+   * Supporte plusieurs formats de logs
    */
   async collectWatchdogLogs(lines = 30) {
     const logs = [];
 
     try {
-      const result = await this.runCmd(`tail -${lines} ${this.watchdogLogPath} 2>/dev/null`);
+      // Try homenichat log first, then asterisk messages
+      let result = await this.runCmd(`tail -${lines} ${this.logPath} 2>/dev/null`);
+
+      if (!result || result.includes('No such file')) {
+        // Fallback to asterisk log
+        result = await this.runCmd(`tail -${lines} /var/log/asterisk/messages 2>/dev/null`);
+      }
 
       for (const line of result.split('\n')) {
         if (!line.trim()) continue;
 
-        // Format: "2026-01-15 12:00:00 [INFO] Message"
-        const match = line.match(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\] (.+)/);
+        // Try multiple log formats
+        // Format 1: "2026-01-15 12:00:00 [INFO] Message"
+        let match = line.match(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\] (.+)/);
         if (match) {
           logs.push({
             timestamp: match[1],
             level: match[2],
             message: match[3],
           });
+          continue;
+        }
+
+        // Format 2: Asterisk "[Jan 18 12:00:00] VERBOSE[1234] message"
+        match = line.match(/\[(\w+\s+\d+\s+[\d:]+)\]\s*(\w+)\[[\d\]]+\]\s*(.+)/);
+        if (match) {
+          logs.push({
+            timestamp: match[1],
+            level: match[2],
+            message: match[3],
+          });
+          continue;
+        }
+
+        // Format 3: Simple timestamp "2026-01-15T12:00:00.000Z message"
+        match = line.match(/^(\d{4}-\d{2}-\d{2}T[\d:.]+Z?)\s+(.+)/);
+        if (match) {
+          logs.push({
+            timestamp: match[1],
+            level: 'INFO',
+            message: match[2],
+          });
+          continue;
+        }
+
+        // No format match - include raw line
+        if (line.trim()) {
+          logs.push({
+            timestamp: '',
+            level: 'RAW',
+            message: line.trim(),
+          });
         }
       }
     } catch (error) {
-      logs.push({ error: error.message });
+      logs.push({ timestamp: '', level: 'ERROR', message: error.message });
     }
 
     return logs;
