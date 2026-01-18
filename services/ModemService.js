@@ -1224,15 +1224,15 @@ csmsttl=600
 [defaults]
 context=from-gsm
 group=0
-rxgain=3
-txgain=3
+; Audio gains tuned for production (VM500 tested values)
+rxgain=-5
+txgain=-15
 autodeletesms=${autoDeleteSms}
 resetquectel=yes
 msg_storage=${msgStorage}
 msg_direct=off
 usecallingpres=yes
 callingpres=allowed_passed_screen
-dtmf=relax
 `;
 
     // Si modems multiples fournis dans config

@@ -642,9 +642,9 @@ install_chan_quectel() {
         warning "Could not checkout known working commit, using latest"
     }
 
-    info "Building chan_quectel with CMake..."
+    info "Building chan_quectel with CMake (Release mode)..."
     mkdir -p build && cd build
-    cmake .. >> "$LOG_FILE" 2>&1
+    cmake -DCMAKE_BUILD_TYPE=Release .. >> "$LOG_FILE" 2>&1
     make >> "$LOG_FILE" 2>&1
     make install >> "$LOG_FILE" 2>&1
 
@@ -735,8 +735,11 @@ csmsttl=600
 [defaults]
 context=from-gsm
 group=0
-rxgain=3
-txgain=3
+; Audio gains tuned for production (VM500 tested values)
+; rxgain: GSM network → Asterisk (speaker/incoming audio)
+; txgain: Asterisk → GSM network (microphone/outgoing audio)
+rxgain=-5
+txgain=-15
 autodeletesms=yes
 resetquectel=yes
 msg_storage=me

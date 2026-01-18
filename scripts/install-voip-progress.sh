@@ -294,19 +294,17 @@ timeout=30
 [defaults]
 context=from-gsm
 group=0
-rxgain=0
-txgain=0
+; Audio gains tuned for production (VM500 tested values)
+rxgain=-5
+txgain=-15
 autodeletesms=yes
-resetquectel=no
+resetquectel=yes
 u2diag=-1
 usecallingpres=yes
 callingpres=allowed_passed_screen
 disablesms=no
 language=fr
 smsaspdu=yes
-mindtmfgap=45
-mindtmfduration=80
-mindtmfinterval=200
 
 ; Les modems seront configurés via l'interface web
 QUECTEL_CONF

@@ -133,8 +133,8 @@ audio = /dev/sim7600-audio
 data = /dev/sim7600-at
 context = from-gsm
 group = 0
-rxgain = 3
-txgain = 3
+rxgain = -5
+txgain = -15
 slin16 = yes
 ```
 
