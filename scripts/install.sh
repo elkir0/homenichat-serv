@@ -527,6 +527,62 @@ GAMMU_CONF
     success "Gammu installed"
 }
 
+install_upnp() {
+    info "Installing UPnP support (miniupnpc)..."
+
+    # Install miniupnpc
+    apt-get install -y miniupnpc >> "$LOG_FILE" 2>&1 || {
+        warning "miniupnpc installation failed"
+        return
+    }
+
+    # Create config directory
+    mkdir -p /etc/homenichat
+
+    # Create default config (UPnP disabled by default for security)
+    cat > /etc/homenichat/upnp.conf << 'UPNP_CONF'
+# Configuration UPnP Homenichat-serv
+# UPnP est désactivé par défaut pour des raisons de sécurité.
+# Activez-le uniquement via l'interface d'administration si nécessaire.
+
+[general]
+enabled=false
+lease_duration=3600
+
+[ports]
+sip_tls=5061
+rtp_start=10000
+rtp_end=10100
+UPNP_CONF
+
+    # Copy watchdog script
+    if [ -f "$HOMENICHAT_DIR/scripts/upnp-watchdog.sh" ]; then
+        cp "$HOMENICHAT_DIR/scripts/upnp-watchdog.sh" /usr/local/bin/upnp-watchdog.sh
+        chmod +x /usr/local/bin/upnp-watchdog.sh
+        info "UPnP watchdog script installed"
+    fi
+
+    # Copy systemd files
+    if [ -f "$HOMENICHAT_DIR/config/systemd/upnp-watchdog.service" ]; then
+        cp "$HOMENICHAT_DIR/config/systemd/upnp-watchdog.service" /etc/systemd/system/
+        cp "$HOMENICHAT_DIR/config/systemd/upnp-watchdog.timer" /etc/systemd/system/
+        systemctl daemon-reload
+        info "UPnP systemd units installed"
+    fi
+
+    # Note: Timer is NOT enabled by default - user must enable via admin UI
+    # This is intentional for security reasons
+
+    # Check if UPnP router is available
+    if upnpc -s 2>/dev/null | grep -q "Found valid IGD"; then
+        info "UPnP router detected on network"
+    else
+        info "No UPnP router detected (can be enabled later if available)"
+    fi
+
+    success "UPnP support installed (disabled by default)"
+}
+
 install_asterisk() {
     [ "$INSTALL_ASTERISK" != true ] && return
 
@@ -1433,6 +1489,7 @@ main() {
     install_baileys
     disable_modemmanager
     install_gammu
+    install_upnp
     install_asterisk
     install_chan_quectel
     install_freepbx

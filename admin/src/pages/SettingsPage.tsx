@@ -32,7 +32,11 @@ import {
   OpenInNew as OpenInNewIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { configApi, tunnelApi } from '../services/api';
+import {
+  Router as RouterIcon,
+  Warning as WarningIcon,
+} from '@mui/icons-material';
+import { configApi, tunnelApi, upnpApi } from '../services/api';
 
 interface TunnelStatus {
   available: boolean;
@@ -43,6 +47,22 @@ interface TunnelStatus {
   uptime: number | null;
   lastError: string | null;
   totalConnections: number;
+}
+
+interface UpnpStatus {
+  installed: boolean;
+  enabled: boolean;
+  available: boolean;
+  externalIp?: string;
+  router?: string;
+  localIp?: string;
+  mappings?: {
+    sipTls: boolean;
+    rtpCount: number;
+    rtpTotal: number;
+  };
+  error?: string | null;
+  hint?: string;
 }
 
 interface ServerConfig {
@@ -91,6 +111,47 @@ export default function SettingsPage() {
       queryClient.invalidateQueries({ queryKey: ['tunnelStatus'] });
     },
   });
+
+  // UPnP status query
+  const { data: upnpStatus } = useQuery<UpnpStatus>({
+    queryKey: ['upnpStatus'],
+    queryFn: upnpApi.getStatus,
+    refetchInterval: 30000, // Refresh every 30 seconds
+  });
+
+  // UPnP enable mutation
+  const upnpEnableMutation = useMutation({
+    mutationFn: upnpApi.enable,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['upnpStatus'] });
+    },
+  });
+
+  // UPnP disable mutation
+  const upnpDisableMutation = useMutation({
+    mutationFn: upnpApi.disable,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['upnpStatus'] });
+    },
+  });
+
+  // UPnP refresh mutation
+  const upnpRefreshMutation = useMutation({
+    mutationFn: upnpApi.refresh,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['upnpStatus'] });
+    },
+  });
+
+  const handleUpnpToggle = () => {
+    if (upnpStatus?.enabled) {
+      upnpDisableMutation.mutate();
+    } else {
+      upnpEnableMutation.mutate();
+    }
+  };
+
+  const isUpnpMutating = upnpEnableMutation.isPending || upnpDisableMutation.isPending || upnpRefreshMutation.isPending;
 
   const handleCopyUrl = async () => {
     if (tunnelStatus?.url) {
@@ -582,6 +643,166 @@ export default function SettingsPage() {
                   </Typography>
                 )}
               </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* UPnP Port Forwarding */}
+        <Grid item xs={12}>
+          <Card
+            sx={{
+              border: upnpStatus?.enabled && upnpStatus?.mappings?.sipTls ? '1px solid' : 'none',
+              borderColor: 'warning.main',
+            }}
+          >
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <RouterIcon sx={{ mr: 1, color: upnpStatus?.enabled ? 'warning.main' : 'text.secondary' }} />
+                  <Typography variant="h6" fontWeight={600}>
+                    UPnP Port Forwarding
+                  </Typography>
+                  <Chip
+                    label="Desactive par defaut"
+                    size="small"
+                    color="default"
+                    variant="outlined"
+                    sx={{ ml: 1 }}
+                  />
+                </Box>
+
+                {/* Toggle Switch */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  {isUpnpMutating && (
+                    <CircularProgress size={20} />
+                  )}
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={upnpStatus?.enabled ?? false}
+                        onChange={handleUpnpToggle}
+                        disabled={!upnpStatus?.installed || !upnpStatus?.available || isUpnpMutating}
+                        color="warning"
+                      />
+                    }
+                    label={upnpStatus?.enabled ? 'Active' : 'Desactive'}
+                    labelPlacement="start"
+                  />
+                </Box>
+              </Box>
+
+              {/* Warning Banner */}
+              <Alert
+                severity="warning"
+                icon={<WarningIcon />}
+                sx={{ mb: 3 }}
+              >
+                <Typography variant="body2" fontWeight={500}>
+                  Attention: Cette fonctionnalite expose votre serveur VoIP a Internet.
+                </Typography>
+                <Typography variant="caption">
+                  N'activez que si vous avez besoin d'appels depuis l'exterieur de votre reseau local.
+                  Assurez-vous d'utiliser des mots de passe forts pour les extensions SIP.
+                </Typography>
+              </Alert>
+
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                Ouvre automatiquement les ports necessaires sur votre routeur via UPnP:
+                <br />
+                • <strong>5061/TCP</strong> - SIP TLS (signalisation chiffree)
+                <br />
+                • <strong>10000-10100/UDP</strong> - RTP (flux audio/video)
+              </Typography>
+
+              {!upnpStatus?.installed && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  UPnP n'est pas installe. Executez le script d'installation ou installez miniupnpc manuellement.
+                </Alert>
+              )}
+
+              {upnpStatus?.installed && !upnpStatus?.available && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  {upnpStatus?.error || 'Aucun routeur UPnP detecte. Verifiez que UPnP est active sur votre routeur.'}
+                  {upnpStatus?.hint && (
+                    <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+                      Conseil: {upnpStatus.hint}
+                    </Typography>
+                  )}
+                </Alert>
+              )}
+
+              {upnpStatus?.enabled && upnpStatus?.available && (
+                <Box
+                  sx={{
+                    p: 2,
+                    borderRadius: 2,
+                    backgroundColor: alpha(theme.palette.warning.main, 0.08),
+                    border: '1px solid',
+                    borderColor: alpha(theme.palette.warning.main, 0.3),
+                    mb: 2,
+                  }}
+                >
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} sm={6}>
+                      <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
+                        Informations Reseau
+                      </Typography>
+                      <Box sx={{ mt: 1 }}>
+                        <Typography variant="body2">
+                          <strong>IP Externe:</strong> {upnpStatus.externalIp || 'N/A'}
+                        </Typography>
+                        <Typography variant="body2">
+                          <strong>IP Locale:</strong> {upnpStatus.localIp || 'N/A'}
+                        </Typography>
+                        <Typography variant="body2">
+                          <strong>Routeur:</strong> {upnpStatus.router || 'N/A'}
+                        </Typography>
+                      </Box>
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
+                        Ports Mappes
+                      </Typography>
+                      <Box sx={{ mt: 1 }}>
+                        <Typography variant="body2">
+                          <strong>SIP TLS (5061):</strong>{' '}
+                          {upnpStatus.mappings?.sipTls ? (
+                            <Chip label="OK" size="small" color="success" sx={{ ml: 1 }} />
+                          ) : (
+                            <Chip label="Non mappe" size="small" color="error" sx={{ ml: 1 }} />
+                          )}
+                        </Typography>
+                        <Typography variant="body2">
+                          <strong>RTP (10000-10100):</strong>{' '}
+                          {upnpStatus.mappings?.rtpCount === upnpStatus.mappings?.rtpTotal ? (
+                            <Chip label={`OK (${upnpStatus.mappings?.rtpCount}/${upnpStatus.mappings?.rtpTotal})`} size="small" color="success" sx={{ ml: 1 }} />
+                          ) : (
+                            <Chip label={`${upnpStatus.mappings?.rtpCount || 0}/${upnpStatus.mappings?.rtpTotal || 101}`} size="small" color="warning" sx={{ ml: 1 }} />
+                          )}
+                        </Typography>
+                      </Box>
+                    </Grid>
+                  </Grid>
+
+                  <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end' }}>
+                    <Button
+                      size="small"
+                      startIcon={<RefreshIcon />}
+                      onClick={() => upnpRefreshMutation.mutate()}
+                      disabled={isUpnpMutating}
+                    >
+                      Rafraichir les mappings
+                    </Button>
+                  </Box>
+                </Box>
+              )}
+
+              <Divider sx={{ my: 2 }} />
+
+              <Typography variant="caption" color="text.secondary">
+                UPnP (Universal Plug and Play) permet l'ouverture automatique des ports sur les routeurs compatibles.
+                Le bail est renouvele automatiquement toutes les heures.
+              </Typography>
             </CardContent>
           </Card>
         </Grid>

@@ -584,4 +584,27 @@ export const tunnelApi = {
   },
 };
 
+// API Admin - UPnP (Port Forwarding)
+export const upnpApi = {
+  getStatus: async () => {
+    const response = await api.get('/api/admin/upnp/status');
+    return response.data;
+  },
+
+  enable: async () => {
+    const response = await api.post('/api/admin/upnp/enable');
+    return response.data;
+  },
+
+  disable: async () => {
+    const response = await api.post('/api/admin/upnp/disable');
+    return response.data;
+  },
+
+  refresh: async () => {
+    const response = await api.post('/api/admin/upnp/refresh');
+    return response.data;
+  },
+};
+
 export default api;

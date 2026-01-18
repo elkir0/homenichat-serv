@@ -2809,6 +2809,164 @@ router.post('/install/cancel', async (req, res) => {
 });
 
 // =============================================================================
+// UPNP - Port Forwarding Automatique
+// =============================================================================
+
+// Import UpnpService
+const upnpService = require('../services/UpnpService');
+
+/**
+ * GET /api/admin/upnp/status
+ * Retourne le statut UPnP actuel
+ */
+router.get('/upnp/status', async (req, res) => {
+  try {
+    const status = await upnpService.getStatus();
+
+    // Log access
+    if (securityService) {
+      await securityService.logAction(req.user.id, 'upnp_status_viewed', {
+        category: 'network',
+        username: req.user.username,
+        enabled: status.enabled,
+        available: status.available,
+      }, req);
+    }
+
+    res.json(status);
+  } catch (error) {
+    console.error('[Admin] UPnP status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/upnp/enable
+ * Active l'UPnP et crée les mappings de ports
+ *
+ * ATTENTION: Cette action expose le serveur VoIP à Internet
+ */
+router.post('/upnp/enable', async (req, res) => {
+  try {
+    // Log the security-sensitive action
+    if (securityService) {
+      await securityService.logAction(req.user.id, 'upnp_enable_requested', {
+        category: 'security',
+        username: req.user.username,
+        action: 'enable',
+      }, req);
+    }
+
+    const result = await upnpService.enable();
+
+    if (result.success) {
+      // Get updated status
+      const status = await upnpService.getStatus(true);
+
+      if (securityService) {
+        await securityService.logAction(req.user.id, 'upnp_enabled', {
+          category: 'security',
+          username: req.user.username,
+          externalIp: status.externalIp,
+          success: true,
+        }, req);
+      }
+
+      res.json({
+        success: true,
+        message: result.message,
+        status,
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message,
+      });
+    }
+  } catch (error) {
+    console.error('[Admin] UPnP enable error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/upnp/disable
+ * Désactive l'UPnP et supprime les mappings de ports
+ */
+router.post('/upnp/disable', async (req, res) => {
+  try {
+    // Log the action
+    if (securityService) {
+      await securityService.logAction(req.user.id, 'upnp_disable_requested', {
+        category: 'security',
+        username: req.user.username,
+        action: 'disable',
+      }, req);
+    }
+
+    const result = await upnpService.disable();
+
+    if (result.success) {
+      if (securityService) {
+        await securityService.logAction(req.user.id, 'upnp_disabled', {
+          category: 'security',
+          username: req.user.username,
+          success: true,
+        }, req);
+      }
+
+      res.json({
+        success: true,
+        message: result.message,
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message,
+      });
+    }
+  } catch (error) {
+    console.error('[Admin] UPnP disable error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/upnp/refresh
+ * Rafraîchit les mappings de ports (utile après redémarrage du routeur)
+ */
+router.post('/upnp/refresh', async (req, res) => {
+  try {
+    const result = await upnpService.refresh();
+
+    if (securityService) {
+      await securityService.logAction(req.user.id, 'upnp_refresh', {
+        category: 'network',
+        username: req.user.username,
+        success: result.success,
+      }, req);
+    }
+
+    if (result.success) {
+      const status = await upnpService.getStatus(true);
+      res.json({
+        success: true,
+        message: result.message,
+        status,
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message,
+      });
+    }
+  } catch (error) {
+    console.error('[Admin] UPnP refresh error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
 // HELPERS
 // =============================================================================
 

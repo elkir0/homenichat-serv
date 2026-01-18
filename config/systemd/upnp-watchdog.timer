@@ -1,0 +1,16 @@
+[Unit]
+Description=Timer pour UPnP Watchdog Homenichat
+Documentation=https://github.com/elkir0/homenichat-serv
+
+[Timer]
+# Démarrer 30 secondes après le boot
+OnBootSec=30
+# Puis toutes les 60 secondes
+OnUnitActiveSec=60
+# Précision de 10 secondes
+AccuracySec=10
+# Persister les timers manqués
+Persistent=true
+
+[Install]
+WantedBy=timers.target

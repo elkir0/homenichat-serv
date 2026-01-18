@@ -1,0 +1,16 @@
+[Unit]
+Description=UPnP Watchdog pour Homenichat-serv
+Documentation=https://github.com/elkir0/homenichat-serv
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/upnp-watchdog.sh check
+StandardOutput=journal
+StandardError=journal
+Environment=UPNP_CONFIG_FILE=/etc/homenichat/upnp.conf
+Environment=UPNP_LOG_FILE=/var/log/homenichat/upnp-watchdog.log
+
+[Install]
+WantedBy=multi-user.target

@@ -217,7 +217,11 @@ router.get('/', async (req, res) => {
 
     // VoIP credentials for 1-click setup
     if (req.user && req.user.id && db) {
-      let userVoip = db.getSetting(`user_${req.user.id}_voip`);
+      // PRIORITY 1: Check user_voip_extensions table (correct source, synced with Asterisk)
+      const userVoipExt = db.getVoIPExtensionByUserId(req.user.id);
+
+      // Fallback: Check old settings table (deprecated, may have stale data)
+      let userVoipSettings = db.getSetting(`user_${req.user.id}_voip`);
 
       // Global VoIP config from environment
       const globalConfig = {
@@ -227,13 +231,33 @@ router.get('/', async (req, res) => {
         password: process.env.VOIP_PASSWORD || '',
       };
 
-      // PRIORITY 1: If user has VoIP config with extension AND password, use it
-      if (userVoip && userVoip.enabled && userVoip.extension && userVoip.password) {
+      // PRIORITY 1: Use user_voip_extensions table (correct credentials matching Asterisk)
+      if (userVoipExt && userVoipExt.enabled && userVoipExt.webrtcEnabled && userVoipExt.extension && userVoipExt.secret) {
         result.voipCredentials = {
-          server: userVoip.wssUrl || globalConfig.server,
-          domain: userVoip.domain || globalConfig.domain,
-          extension: userVoip.extension,
-          password: userVoip.password,
+          server: globalConfig.server,
+          domain: globalConfig.domain,
+          extension: userVoipExt.extension,
+          password: userVoipExt.secret,
+          displayName: userVoipExt.displayName || req.user.username || 'Homenichat User',
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        };
+
+        // Update CDR extensions
+        if (result.cdr && result.cdr.enabled) {
+          result.cdr.extensions = [userVoipExt.extension];
+        }
+        console.log(`[Discovery] Using user_voip_extensions for user ${req.user.id}: ext ${userVoipExt.extension}`);
+      }
+      // PRIORITY 2: Fallback to settings table (deprecated) if user_voip_extensions is empty
+      else if (userVoipSettings && userVoipSettings.enabled && userVoipSettings.extension && userVoipSettings.password) {
+        result.voipCredentials = {
+          server: userVoipSettings.wssUrl || globalConfig.server,
+          domain: userVoipSettings.domain || globalConfig.domain,
+          extension: userVoipSettings.extension,
+          password: userVoipSettings.password,
           displayName: req.user.username || 'Homenichat User',
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -243,14 +267,15 @@ router.get('/', async (req, res) => {
 
         // Update CDR extensions
         if (result.cdr && result.cdr.enabled) {
-          result.cdr.extensions = [userVoip.extension];
+          result.cdr.extensions = [userVoipSettings.extension];
         }
-        console.log(`[Discovery] Using existing VoIP config for user ${req.user.id}: ext ${userVoip.extension}`);
+        console.log(`[Discovery] Using settings table (deprecated) for user ${req.user.id}: ext ${userVoipSettings.extension}`);
       }
-      // PRIORITY 2: Try to auto-create via AMI (FreePBX) or PjsipConfigService (standalone)
+      // PRIORITY 3: Try to auto-create via AMI (FreePBX) or PjsipConfigService (standalone)
       else {
         let extensionCreated = false;
-        const extensionNumber = globalConfig.extension || String(200 + (parseInt(req.user.id, 10) || 1));
+        // Use next available extension from 1000 range (matches Asterisk standard)
+        const extensionNumber = globalConfig.extension || db.getNextAvailableExtension(1000).toString();
         const secret = Math.random().toString(36).substring(2, 18);
 
         // Try AMI first (FreePBX)
@@ -304,16 +329,23 @@ router.get('/', async (req, res) => {
         }
 
         if (extensionCreated) {
-          userVoip = {
-            enabled: true,
-            extension: extensionNumber,
-            password: secret,
-            wssUrl: globalConfig.server,
-            domain: globalConfig.domain,
-            pjsipCreated: true,
-            createdAt: Date.now()
-          };
-          db.setSetting(`user_${req.user.id}_voip`, userVoip);
+          // Save to user_voip_extensions table (correct source of truth)
+          try {
+            db.createVoIPExtension({
+              userId: req.user.id,
+              extension: extensionNumber,
+              secret: secret,
+              displayName: req.user.username || `User ${req.user.id}`,
+              context: 'from-internal',
+              transport: 'transport-wss',
+              codecs: 'opus,ulaw,alaw',
+              enabled: true,
+              webrtcEnabled: true
+            });
+            console.log(`[Discovery] Saved extension ${extensionNumber} to user_voip_extensions for user ${req.user.id}`);
+          } catch (e) {
+            console.log(`[Discovery] Failed to save to user_voip_extensions: ${e.message}`);
+          }
 
           result.voipCredentials = {
             server: globalConfig.server,
@@ -333,7 +365,7 @@ router.get('/', async (req, res) => {
           }
         }
 
-        // PRIORITY 3: Fallback to global config if extension creation failed
+        // PRIORITY 4: Fallback to global config if extension creation failed
         if (!extensionCreated) {
           if (globalConfig.extension && globalConfig.password) {
             // Global config has complete credentials
@@ -506,7 +538,12 @@ async function getDiscoveryData(req) {
 
   // VoIP credentials for 1-click setup
   if (req && req.user && db) {
-    let userVoip = db.getSetting(`user_${req.user.id}_voip`);
+    // PRIORITY 1: Check user_voip_extensions table (correct source, synced with Asterisk)
+    const userVoipExt = db.getVoIPExtensionByUserId(req.user.id);
+
+    // Fallback: Check old settings table (deprecated)
+    const userVoipSettings = db.getSetting(`user_${req.user.id}_voip`);
+
     const globalConfig = {
       server: process.env.VOIP_WSS_URL || `wss://${process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost'}:8089/ws`,
       domain: process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost',
@@ -514,13 +551,31 @@ async function getDiscoveryData(req) {
       password: process.env.VOIP_PASSWORD || '',
     };
 
-    // PRIORITY 1: If user has VoIP config with extension AND password, use it
-    if (userVoip && userVoip.enabled && userVoip.extension && userVoip.password) {
+    // PRIORITY 1: Use user_voip_extensions table (correct credentials matching Asterisk)
+    if (userVoipExt && userVoipExt.enabled && userVoipExt.webrtcEnabled && userVoipExt.extension && userVoipExt.secret) {
       result.voipCredentials = {
-        server: userVoip.wssUrl || globalConfig.server,
-        domain: userVoip.domain || globalConfig.domain,
-        extension: userVoip.extension,
-        password: userVoip.password,
+        server: globalConfig.server,
+        domain: globalConfig.domain,
+        extension: userVoipExt.extension,
+        password: userVoipExt.secret,
+        displayName: userVoipExt.displayName || req.user.username || 'Homenichat User',
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      };
+
+      if (result.cdr && result.cdr.enabled) {
+        result.cdr.extensions = [userVoipExt.extension];
+      }
+    }
+    // PRIORITY 2: Fallback to settings table (deprecated)
+    else if (userVoipSettings && userVoipSettings.enabled && userVoipSettings.extension && userVoipSettings.password) {
+      result.voipCredentials = {
+        server: userVoipSettings.wssUrl || globalConfig.server,
+        domain: userVoipSettings.domain || globalConfig.domain,
+        extension: userVoipSettings.extension,
+        password: userVoipSettings.password,
         displayName: req.user.username || 'Homenichat User',
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -529,13 +584,13 @@ async function getDiscoveryData(req) {
       };
 
       if (result.cdr && result.cdr.enabled) {
-        result.cdr.extensions = [userVoip.extension];
+        result.cdr.extensions = [userVoipSettings.extension];
       }
     }
-    // PRIORITY 2: Try AMI auto-creation or PjsipConfigService
+    // PRIORITY 3: Try AMI auto-creation or PjsipConfigService
     else {
       let extensionCreated = false;
-      const extensionNumber = globalConfig.extension || String(200 + (parseInt(req.user.id, 10) || 1));
+      const extensionNumber = globalConfig.extension || db.getNextAvailableExtension(1000).toString();
       const secret = Math.random().toString(36).substring(2, 18);
 
       // Try AMI first (FreePBX)
@@ -587,16 +642,22 @@ async function getDiscoveryData(req) {
       }
 
       if (extensionCreated) {
-        userVoip = {
-          enabled: true,
-          extension: extensionNumber,
-          password: secret,
-          wssUrl: globalConfig.server,
-          domain: globalConfig.domain,
-          pjsipCreated: true,
-          createdAt: Date.now()
-        };
-        db.setSetting(`user_${req.user.id}_voip`, userVoip);
+        // Save to user_voip_extensions table (correct source of truth)
+        try {
+          db.createVoIPExtension({
+            userId: req.user.id,
+            extension: extensionNumber,
+            secret: secret,
+            displayName: req.user.username || `User ${req.user.id}`,
+            context: 'from-internal',
+            transport: 'transport-wss',
+            codecs: 'opus,ulaw,alaw',
+            enabled: true,
+            webrtcEnabled: true
+          });
+        } catch (e) {
+          // Ignore save errors
+        }
 
         result.voipCredentials = {
           server: globalConfig.server,
