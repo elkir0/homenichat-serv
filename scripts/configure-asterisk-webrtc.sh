@@ -73,13 +73,16 @@ type=transport
 protocol=ws
 bind=0.0.0.0:8088
 
+; Template for WebRTC extensions
+; NOTE: Using G.711 (ulaw/alaw) instead of opus for better compatibility
+; with GSM modems (chan_quectel). Opus requires additional codec modules.
 [webrtc-endpoint](!)
 type=endpoint
 context=from-internal
 disallow=all
-allow=opus
 allow=ulaw
 allow=alaw
+allow=g722
 transport=transport-ws
 webrtc=yes
 dtls_auto_generate_cert=yes
