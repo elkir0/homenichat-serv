@@ -948,6 +948,18 @@ FREEPBX_EXAMPLE
 
     chmod +x freepbx_install.sh
 
+    # Patch: If npm is already installed (via nodesource), remove it from Sangoma's package list
+    # to avoid conflicts with Debian's npm package
+    if command -v npm &> /dev/null; then
+        info "npm already installed ($(npm --version)), patching FreePBX installer to avoid conflicts..."
+        # Remove 'npm' from the package installation list in the script
+        sed -i 's/\bnpm\b//g' freepbx_install.sh
+        # Also remove nodejs if already installed to avoid conflicts
+        if command -v node &> /dev/null; then
+            sed -i 's/\bnodejs\b//g' freepbx_install.sh
+        fi
+    fi
+
     info "Running FreePBX installer (this takes 20-30 minutes)..."
     # Run with yes to auto-accept prompts
     yes | ./freepbx_install.sh >> "$LOG_FILE" 2>&1 || {
