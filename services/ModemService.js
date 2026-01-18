@@ -1322,12 +1322,45 @@ ${mergedConfig.phoneNumber ? `exten=+${mergedConfig.phoneNumber.replace(/^\+/, '
         }
       }
 
+      // Auto-créer les trunks FreePBX si connecté
+      const trunksCreated = [];
+      try {
+        const amiService = require('./FreePBXAmiService');
+        if (amiService.connected && amiService.authenticated) {
+          const modemsToProcess = configWithImsi.modems || [{
+            id: configWithImsi.modemName || 'hni-modem',
+            phoneNumber: configWithImsi.phoneNumber
+          }];
+
+          for (const modem of modemsToProcess) {
+            const modemId = modem.id || modem.name || 'hni-modem';
+            const trunkStatus = await amiService.getModemTrunkStatus(modemId);
+
+            if (!trunkStatus.exists) {
+              const result = await amiService.createModemTrunk(modemId, {
+                phoneNumber: modem.phoneNumber || '',
+                context: 'from-gsm',
+              });
+              if (result.success) {
+                trunksCreated.push(modemId);
+                this.logger.info(`[ModemService] Auto-created FreePBX trunk for ${modemId}`);
+              }
+            } else {
+              this.logger.info(`[ModemService] Trunk already exists for ${modemId}`);
+            }
+          }
+        }
+      } catch (amiError) {
+        this.logger.warn('[ModemService] Could not auto-create trunks:', amiError.message);
+      }
+
       return {
         success: true,
         message: 'Configuration appliquée',
         confPath: QUECTEL_CONF_PATH,
         imsi: configWithImsi.imsi,
         reloadResult,
+        trunksCreated: trunksCreated.length > 0 ? trunksCreated : undefined,
       };
     } catch (error) {
       this.logger.error('[ModemService] Failed to apply quectel.conf:', error);
