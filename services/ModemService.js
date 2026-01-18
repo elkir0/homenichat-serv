@@ -104,8 +104,8 @@ class ModemService {
       modemName: 'hni-modem',
       phoneNumber: '',
       pinCode: '',
-      dataPort: detectedType === 'ec25' ? '/dev/ttyUSB2' : '/dev/ttyUSB2',
-      audioPort: detectedType === 'ec25' ? '/dev/ttyUSB1' : '/dev/ttyUSB1',
+      dataPort: '/dev/ttyUSB2',
+      audioPort: detectedType === 'ec25' ? '/dev/ttyUSB1' : '/dev/ttyUSB4',  // SIM7600: USB4, EC25: USB1
       autoDetect: true,
       // Configuration SMS
       sms: {
@@ -850,12 +850,13 @@ except Exception as e:
         }
 
         // Ajouter les modems détectés
+        // SIM7600: 5 ports par modem, data=USB2, audio=USB4
         if (sim7600Count >= 1) {
           detected.modems.push({
             id: 'modem-1',
             type: 'SIM7600',
             dataPort: '/dev/ttyUSB2',
-            audioPort: '/dev/ttyUSB1',
+            audioPort: '/dev/ttyUSB4',  // SIM7600 audio is USB+4, not USB+1
           });
         }
         if (sim7600Count >= 2) {
@@ -863,7 +864,7 @@ except Exception as e:
             id: 'modem-2',
             type: 'SIM7600',
             dataPort: '/dev/ttyUSB7',
-            audioPort: '/dev/ttyUSB6',
+            audioPort: '/dev/ttyUSB9',  // Second modem: USB7+2=USB9
           });
         }
       }
@@ -894,25 +895,25 @@ except Exception as e:
         if (detected.ports.length >= 5) {
           detected.modemType = 'sim7600';
           detected.suggestedDataPort = '/dev/ttyUSB2';
-          detected.suggestedAudioPort = '/dev/ttyUSB1';
+          detected.suggestedAudioPort = '/dev/ttyUSB4';  // SIM7600: audio=USB4
           detected.modems.push({
             id: 'modem-1',
             type: 'SIM7600',
             dataPort: '/dev/ttyUSB2',
-            audioPort: '/dev/ttyUSB1',
+            audioPort: '/dev/ttyUSB4',  // SIM7600: audio=USB4, not USB1
           });
           if (detected.ports.length >= 10) {
             detected.modems.push({
               id: 'modem-2',
               type: 'SIM7600',
               dataPort: '/dev/ttyUSB7',
-              audioPort: '/dev/ttyUSB6',
+              audioPort: '/dev/ttyUSB9',  // Second modem: USB9, not USB6
             });
           }
         } else {
           detected.modemType = 'ec25';
           detected.suggestedDataPort = '/dev/ttyUSB2';
-          detected.suggestedAudioPort = '/dev/ttyUSB1';
+          detected.suggestedAudioPort = '/dev/ttyUSB1';  // EC25: audio=USB1
         }
       }
     } catch (error) {
@@ -1192,7 +1193,9 @@ except Exception as e:
 
     const modemName = mergedConfig.modemName || 'hni-modem';
     const dataPort = mergedConfig.dataPort || '/dev/ttyUSB2';
-    const audioPort = mergedConfig.audioPort || '/dev/ttyUSB1';
+    // Default audio port depends on modem type: SIM7600=USB4, EC25=USB1
+    const defaultAudioPort = profile.name === 'SIM7600' ? '/dev/ttyUSB4' : '/dev/ttyUSB1';
+    const audioPort = mergedConfig.audioPort || defaultAudioPort;
 
     // Mapping stockage SMS: sqlite/modem -> 'me', sim -> 'sm'
     const msgStorage = smsConfig.storage === 'sim' ? 'sm' : 'me';
@@ -1220,6 +1223,7 @@ msg_storage=${msgStorage}
 msg_direct=off
 usecallingpres=yes
 callingpres=allowed_passed_screen
+dtmf=relaxed
 
 [${modemName}]
 data=${dataPort}

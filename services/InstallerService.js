@@ -218,6 +218,7 @@ class InstallerService {
       const ec25Count = ec25Matches.length;
 
       // Pour chaque SIM7600 détecté (5 ports par modem)
+      // SIM7600 ports: USB0-4, data=USB2, audio=USB4
       for (let i = 0; i < sim7600Count; i++) {
         const basePort = i * 5;
         const ports = ttyPorts.slice(basePort, basePort + 5);
@@ -228,7 +229,7 @@ class InstallerService {
           product: '9001',
           ports: ports,
           dataPort: ports[2] || `/dev/ttyUSB${basePort + 2}`,
-          audioPort: ports[1] || `/dev/ttyUSB${basePort + 1}`,
+          audioPort: ports[4] || `/dev/ttyUSB${basePort + 4}`,  // SIM7600: audio=USB4, not USB1
         });
       }
 
@@ -259,7 +260,7 @@ class InstallerService {
             vendor: 'unknown',
             ports: ttyPorts.slice(basePort, basePort + 5),
             dataPort: ttyPorts[basePort + 2],
-            audioPort: ttyPorts[basePort + 1],
+            audioPort: ttyPorts[basePort + 4],  // SIM7600: audio=USB4, not USB1
           });
         }
       }
