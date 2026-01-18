@@ -97,6 +97,109 @@ router.post('/sms/send', verifyToken, async (req, res) => {
 // ==================== VoIP ====================
 
 /**
+ * POST /api/voip/my-credentials
+ * Auto-generate or retrieve user VoIP credentials for 1-click setup
+ * Creates PJSIP extension in Asterisk if not exists
+ */
+router.post('/voip/my-credentials', verifyToken, async (req, res) => {
+  try {
+    const db = require('../services/DatabaseService');
+    const freepbxAmi = require('../services/FreePBXAmiService');
+
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
+    }
+
+    const userId = req.user.id;
+    const userKey = `user_${userId}_voip`;
+
+    // Check if user already has VoIP config
+    let userVoip = db.getSetting(userKey);
+
+    // Get global config for defaults
+    const globalConfig = {
+      server: process.env.VOIP_WSS_URL || `wss://${process.env.VOIP_DOMAIN || 'localhost'}:8089/ws`,
+      domain: process.env.VOIP_DOMAIN || 'localhost',
+    };
+
+    if (!userVoip || !userVoip.extension) {
+      // Generate new extension for user
+      // Use userId + 200 as base (e.g., user 1 = 201, user 2 = 202)
+      const baseExtension = 200;
+      const extensionNumber = String(baseExtension + parseInt(userId, 10) || 1);
+
+      // Generate random secret
+      const secret = freepbxAmi.generateSecret ? freepbxAmi.generateSecret(16) :
+        Math.random().toString(36).substring(2, 18);
+
+      // Create PJSIP extension in Asterisk if AMI connected
+      let pjsipCreated = false;
+      if (freepbxAmi.connected && freepbxAmi.authenticated) {
+        try {
+          const extResult = await freepbxAmi.createPjsipExtension({
+            extension: extensionNumber,
+            secret: secret,
+            displayName: req.user.username || `User ${userId}`,
+            context: 'from-internal',
+            transport: 'transport-wss',
+            codecs: 'opus,ulaw,alaw'
+          });
+          pjsipCreated = extResult.success;
+          if (!pjsipCreated) {
+            logger.warn(`[VoIP] Could not create PJSIP extension: ${extResult.message}`);
+          }
+        } catch (e) {
+          logger.warn(`[VoIP] PJSIP creation error: ${e.message}`);
+        }
+      }
+
+      // Save to DB
+      userVoip = {
+        enabled: true,
+        extension: extensionNumber,
+        password: secret,
+        wssUrl: globalConfig.server,
+        domain: globalConfig.domain,
+        pjsipCreated,
+        createdAt: Date.now()
+      };
+      db.setSetting(userKey, userVoip);
+
+      logger.info(`[VoIP] Created VoIP config for user ${userId}: ext ${extensionNumber}`);
+    }
+
+    // Format for mobile app
+    res.json({
+      success: true,
+      sipConfig: {
+        domain: userVoip.domain || globalConfig.domain,
+        proxy: userVoip.wssUrl || globalConfig.server,
+        extension: userVoip.extension,
+        password: userVoip.password,
+      },
+      server: userVoip.wssUrl || globalConfig.server,
+      domain: userVoip.domain || globalConfig.domain,
+      extension: userVoip.extension,
+      displayName: req.user.username || 'Homenichat User',
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ],
+      isNew: !userVoip.createdAt || (Date.now() - userVoip.createdAt) < 5000
+    });
+  } catch (error) {
+    logger.error('[VoIP] My credentials error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
  * GET /api/voip/credentials
  * Mobile app expects: { sipConfig: { domain, proxy, extension, password } }
  */

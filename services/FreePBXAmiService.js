@@ -1332,17 +1332,61 @@ class FreePBXAmiService extends EventEmitter {
       await this.sendCommand('dialplan reload');
 
       logger.info(`[AMI] GSM trunk ${trunkName} created for modem ${modemId}`);
+
+      // Auto-create WebRTC extension if requested
+      let webrtcExtension = null;
+      if (modemData.createWebRtcExtension !== false) {
+        try {
+          // Create a WebRTC extension for this trunk (e.g., 200 for mobile app)
+          const extensionNumber = modemData.webrtcExtension || '200';
+          const extensionSecret = modemData.webrtcSecret || this.generateSecret();
+
+          const extResult = await this.createPjsipExtension({
+            extension: extensionNumber,
+            secret: extensionSecret,
+            displayName: `WebRTC ${modemName || modemId}`,
+            context: 'from-internal',
+            transport: 'transport-wss',
+            codecs: 'opus,ulaw,alaw'
+          });
+
+          if (extResult.success) {
+            webrtcExtension = {
+              extension: extensionNumber,
+              secret: extensionSecret,
+              created: true
+            };
+            logger.info(`[AMI] WebRTC extension ${extensionNumber} auto-created for trunk ${trunkName}`);
+          }
+        } catch (extError) {
+          logger.warn(`[AMI] Could not auto-create WebRTC extension: ${extError.message}`);
+        }
+      }
+
       return {
         success: true,
         message: `Trunk ${trunkName} créé avec succès. Utilisez "Quectel/${modemId}/$OUTNUM$" pour les appels sortants.`,
         trunkName,
         dialString: `Quectel/${modemId}/$OUTNUM$`,
+        webrtcExtension,
       };
 
     } catch (error) {
       logger.error(`[AMI] Error creating modem trunk ${trunkName}:`, error);
       return { success: false, message: error.message };
     }
+  }
+
+  /**
+   * Generate a random secret for SIP authentication
+   */
+  generateSecret(length = 16) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
   }
 
   /**
