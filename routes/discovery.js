@@ -128,6 +128,7 @@ router.get('/', async (req, res) => {
     }
 
     // Get modems via ModemService (if available)
+    // Modems provide both SMS and VoIP (GSM calls) capabilities
     try {
       const ModemService = require('../services/ModemService');
       const modemService = new ModemService({});
@@ -135,13 +136,38 @@ router.get('/', async (req, res) => {
 
       for (const modemId of modemIds) {
         const modemStatus = await modemService.collectModemStatus(modemId);
+        const isConnected = modemStatus.state === 'Free';
+
+        // Add to modems array
         result.modems.push({
           id: modemId,
           name: modemStatus.name || modemId,
           number: modemStatus.number,
-          status: modemStatus.state === 'Free' ? 'connected' : modemStatus.state,
+          status: isConnected ? 'connected' : modemStatus.state,
           signal: modemStatus.rssiPercent,
           operator: modemStatus.operator,
+        });
+
+        // Add modem as SMS provider for 1-click config
+        result.sms.push({
+          id: `modem-sms-${modemId}`,
+          name: `SMS via ${modemStatus.name || modemId}`,
+          type: 'gsm_modem',
+          status: isConnected ? 'connected' : 'disconnected',
+          phone: modemStatus.number,
+          modemId: modemId,
+        });
+
+        // Add modem as VoIP provider for 1-click config (GSM calls)
+        result.voip.push({
+          id: `modem-voip-${modemId}`,
+          name: `Appels via ${modemStatus.name || modemId}`,
+          type: 'gsm_trunk',
+          status: isConnected ? 'connected' : 'disconnected',
+          phone: modemStatus.number,
+          modemId: modemId,
+          dialString: `Quectel/${modemId}/$OUTNUM$`,
+          extensions: [],
         });
       }
     } catch (e) {
