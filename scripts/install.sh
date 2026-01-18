@@ -1062,6 +1062,80 @@ MODEM_SERVICE
     success "chan_quectel installed"
 }
 
+configure_asterisk_audio() {
+    [ "$INSTALL_ASTERISK" != true ] && return
+
+    info "Configuring Asterisk audio for WebRTC ↔ GSM bridge..."
+
+    # Copy optimized Homenichat Asterisk configs
+    if [ -f "$INSTALL_DIR/config/asterisk/extensions_homenichat.conf" ]; then
+        cp "$INSTALL_DIR/config/asterisk/extensions_homenichat.conf" /etc/asterisk/
+        info "Installed extensions_homenichat.conf (with VOLUME(TX)=-20)"
+    fi
+
+    if [ -f "$INSTALL_DIR/config/asterisk/pjsip_homenichat.conf" ]; then
+        cp "$INSTALL_DIR/config/asterisk/pjsip_homenichat.conf" /etc/asterisk/
+        info "Installed pjsip_homenichat.conf (g722,ulaw,alaw,opus codecs)"
+    fi
+
+    # Update quectel.conf with optimized audio settings if modems installed
+    if [ "$INSTALL_MODEMS" = true ] && [ -f "$INSTALL_DIR/config/asterisk/quectel.conf" ]; then
+        # Backup existing config
+        [ -f /etc/asterisk/quectel.conf ] && cp /etc/asterisk/quectel.conf /etc/asterisk/quectel.conf.bak
+        cp "$INSTALL_DIR/config/asterisk/quectel.conf" /etc/asterisk/
+        info "Installed quectel.conf (txgain=-18, rxgain=-5)"
+    fi
+
+    # Include Homenichat configs in main Asterisk configs
+    if [ -f /etc/asterisk/extensions.conf ]; then
+        if ! grep -q "extensions_homenichat.conf" /etc/asterisk/extensions.conf 2>/dev/null; then
+            echo "" >> /etc/asterisk/extensions.conf
+            echo "; Homenichat dialplan" >> /etc/asterisk/extensions.conf
+            echo "#include extensions_homenichat.conf" >> /etc/asterisk/extensions.conf
+            info "Added extensions_homenichat.conf include"
+        fi
+    fi
+
+    if [ -f /etc/asterisk/pjsip.conf ]; then
+        if ! grep -q "pjsip_homenichat.conf" /etc/asterisk/pjsip.conf 2>/dev/null; then
+            echo "" >> /etc/asterisk/pjsip.conf
+            echo "; Homenichat PJSIP config" >> /etc/asterisk/pjsip.conf
+            echo "#include pjsip_homenichat.conf" >> /etc/asterisk/pjsip.conf
+            info "Added pjsip_homenichat.conf include"
+        fi
+    fi
+
+    # Install audio initialization script for SIM7600 modems
+    if [ "$INSTALL_MODEMS" = true ] && [ -f "$INSTALL_DIR/scripts/init-quectel-audio.sh" ]; then
+        cp "$INSTALL_DIR/scripts/init-quectel-audio.sh" /usr/local/bin/
+        chmod +x /usr/local/bin/init-quectel-audio.sh
+        info "Installed init-quectel-audio.sh"
+
+        # Create systemd service to run audio init after Asterisk starts
+        cat > /etc/systemd/system/homenichat-audio-init.service << 'AUDIO_SERVICE'
+[Unit]
+Description=Homenichat Quectel Audio Initialization
+After=asterisk.service
+Requires=asterisk.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/local/bin/init-quectel-audio.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+AUDIO_SERVICE
+
+        systemctl daemon-reload
+        systemctl enable homenichat-audio-init.service >> "$LOG_FILE" 2>&1 || true
+        info "Enabled homenichat-audio-init.service"
+    fi
+
+    success "Asterisk audio configuration complete"
+}
+
 install_freepbx() {
     [ "$INSTALL_FREEPBX" != true ] && return
 
@@ -1219,7 +1293,7 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # WebSocket
+    # WebSocket (Homenichat)
     location /ws {
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
@@ -1227,6 +1301,18 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # WebSocket (Asterisk WebRTC) - proxied through nginx for SSL termination
+    # External clients use wss://domain/wss instead of direct :8089
+    location /wss {
+        proxy_pass http://127.0.0.1:8088/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 86400;
     }
 
     # PWA frontend (optional - if installed in /opt/homenichat/public)
@@ -1493,6 +1579,7 @@ main() {
     install_asterisk
     install_chan_quectel
     install_freepbx
+    configure_asterisk_audio
 
     print_banner
     echo -e "${BOLD}Configuring Homenichat...${NC}"
