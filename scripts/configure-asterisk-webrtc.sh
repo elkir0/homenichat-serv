@@ -90,9 +90,14 @@ bind=0.0.0.0:8088
 type=endpoint
 context=from-internal
 disallow=all
-allow=opus
+; Codec priority for GSM modem compatibility:
+; g722 (16kHz) first - compatible with slin16 modem
+; ulaw/alaw (8kHz) fallback
+; opus (48kHz) last - may cause bridge issues with modems
+allow=g722
 allow=ulaw
 allow=alaw
+allow=opus
 transport=transport-ws
 webrtc=yes
 auth=1001-auth

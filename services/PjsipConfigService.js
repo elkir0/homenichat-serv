@@ -106,7 +106,11 @@ class PjsipConfigService {
       password,
       displayName,
       context = 'from-internal',
-      codecs = ['opus', 'ulaw', 'alaw'],
+      // Codec priority for GSM modem compatibility:
+      // g722 (16kHz) compatible with slin16 modem
+      // ulaw/alaw (8kHz) fallback
+      // opus (48kHz) last - causes bridge issues with modems
+      codecs = ['g722', 'ulaw', 'alaw', 'opus'],
     } = config;
 
     if (!extension || !password) {
@@ -214,7 +218,7 @@ class PjsipConfigService {
     ];
 
     for (const [ext, config] of this.extensions) {
-      const codecsStr = config.codecs ? config.codecs.join(',') : 'opus,ulaw,alaw';
+      const codecsStr = config.codecs ? config.codecs.join(',') : 'g722,ulaw,alaw,opus';
       const callerid = config.displayName
         ? `"${config.displayName}" <${ext}>`
         : ext;

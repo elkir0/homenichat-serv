@@ -288,7 +288,7 @@ router.get('/', async (req, res) => {
               displayName: req.user.username || `User ${req.user.id}`,
               context: 'from-internal',
               transport: 'transport-wss',
-              codecs: 'opus,ulaw,alaw'
+              codecs: 'g722,ulaw,alaw,opus'
             });
 
             if (extResult.success) {
@@ -315,7 +315,7 @@ router.get('/', async (req, res) => {
                 password: secret,
                 displayName: req.user.username || `User ${req.user.id}`,
                 context: 'from-internal',
-                codecs: ['opus', 'ulaw', 'alaw'],
+                codecs: ['g722', 'ulaw', 'alaw', 'opus'],
               });
 
               if (extResult.success) {
@@ -338,7 +338,7 @@ router.get('/', async (req, res) => {
               displayName: req.user.username || `User ${req.user.id}`,
               context: 'from-internal',
               transport: 'transport-wss',
-              codecs: 'opus,ulaw,alaw',
+              codecs: 'g722,ulaw,alaw,opus',
               enabled: true,
               webrtcEnabled: true
             });
@@ -603,7 +603,7 @@ async function getDiscoveryData(req) {
             displayName: req.user.username || `User ${req.user.id}`,
             context: 'from-internal',
             transport: 'transport-wss',
-            codecs: 'opus,ulaw,alaw'
+            codecs: 'g722,ulaw,alaw,opus'
           });
 
           if (extResult.success) {
@@ -629,7 +629,7 @@ async function getDiscoveryData(req) {
               password: secret,
               displayName: req.user.username || `User ${req.user.id}`,
               context: 'from-internal',
-              codecs: ['opus', 'ulaw', 'alaw'],
+              codecs: ['g722', 'ulaw', 'alaw', 'opus'],
             });
 
             if (extResult.success) {
@@ -651,7 +651,7 @@ async function getDiscoveryData(req) {
             displayName: req.user.username || `User ${req.user.id}`,
             context: 'from-internal',
             transport: 'transport-wss',
-            codecs: 'opus,ulaw,alaw',
+            codecs: 'g722,ulaw,alaw,opus',
             enabled: true,
             webrtcEnabled: true
           });

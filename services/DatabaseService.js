@@ -230,7 +230,7 @@ class DatabaseService {
                     display_name TEXT,
                     context TEXT DEFAULT 'from-internal',
                     transport TEXT DEFAULT 'wss',
-                    codecs TEXT DEFAULT 'opus,ulaw,alaw',
+                    codecs TEXT DEFAULT 'g722,ulaw,alaw,opus',
                     enabled BOOLEAN DEFAULT 1,
                     webrtc_enabled BOOLEAN DEFAULT 1,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -681,7 +681,8 @@ class DatabaseService {
             displayName,
             context = 'from-internal',
             transport = 'wss',
-            codecs = 'opus,ulaw,alaw',
+            // Codec priority for GSM modem compatibility
+            codecs = 'g722,ulaw,alaw,opus',
             enabled = true,
             webrtcEnabled = true
         } = extensionData;

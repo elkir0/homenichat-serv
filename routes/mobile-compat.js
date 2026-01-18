@@ -145,7 +145,7 @@ router.post('/voip/my-credentials', verifyToken, async (req, res) => {
             displayName: req.user.username || `User ${userId}`,
             context: 'from-internal',
             transport: 'transport-wss',
-            codecs: 'opus,ulaw,alaw'
+            codecs: 'g722,ulaw,alaw,opus'
           });
           pjsipCreated = extResult.success;
           if (!pjsipCreated) {

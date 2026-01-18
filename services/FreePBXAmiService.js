@@ -991,7 +991,8 @@ class FreePBXAmiService extends EventEmitter {
       displayName,
       context = 'from-internal',
       transport = 'transport-wss',
-      codecs = 'opus,ulaw,alaw'
+      // Codec priority for GSM modem compatibility
+      codecs = 'g722,ulaw,alaw,opus'
     } = extensionData;
 
     if (!this.connected || !this.authenticated) {
@@ -1347,7 +1348,7 @@ class FreePBXAmiService extends EventEmitter {
             displayName: `WebRTC ${modemName || modemId}`,
             context: 'from-internal',
             transport: 'transport-wss',
-            codecs: 'opus,ulaw,alaw'
+            codecs: 'g722,ulaw,alaw,opus'
           });
 
           if (extResult.success) {
