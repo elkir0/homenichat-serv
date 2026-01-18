@@ -215,16 +215,55 @@ router.get('/', async (req, res) => {
       };
     }
 
-    // VoIP credentials for 1-click setup (auto-generate if needed)
+    // VoIP credentials for 1-click setup
     if (req.user && req.user.id && db) {
       let userVoip = db.getSetting(`user_${req.user.id}_voip`);
+
+      // Check if external FreePBX is configured via environment
+      const hasExternalPbx = !!process.env.VOIP_WSS_URL;
       const globalConfig = {
         server: process.env.VOIP_WSS_URL || `wss://${host}:8089/ws`,
         domain: process.env.VOIP_DOMAIN || host?.split(':')[0] || 'localhost',
+        extension: process.env.VOIP_EXTENSION || '',
+        password: process.env.VOIP_PASSWORD || '',
       };
 
-      // Auto-generate VoIP credentials if user doesn't have them
-      if (!userVoip || !userVoip.extension) {
+      // If user has specific VoIP config, use it
+      if (userVoip && userVoip.enabled && userVoip.extension) {
+        result.voipCredentials = {
+          server: userVoip.wssUrl || globalConfig.server,
+          domain: userVoip.domain || globalConfig.domain,
+          extension: userVoip.extension,
+          password: userVoip.password || '',
+          displayName: req.user.username || 'Homenichat User',
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        };
+
+        // Update CDR extensions
+        if (result.cdr && result.cdr.enabled) {
+          result.cdr.extensions = [userVoip.extension];
+        }
+      }
+      // If external PBX configured with default extension, use global config
+      else if (hasExternalPbx && globalConfig.extension) {
+        result.voipCredentials = {
+          server: globalConfig.server,
+          domain: globalConfig.domain,
+          extension: globalConfig.extension,
+          password: globalConfig.password,
+          displayName: req.user.username || 'Homenichat User',
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ],
+          needsPassword: !globalConfig.password, // Flag if password needs to be set in app
+        };
+      }
+      // No external PBX, try auto-generation on local Asterisk
+      else if (!hasExternalPbx) {
         try {
           const freepbxAmi = require('../services/FreePBXAmiService');
           if (freepbxAmi.connected && freepbxAmi.authenticated) {
@@ -254,31 +293,26 @@ router.get('/', async (req, res) => {
               };
               db.setSetting(`user_${req.user.id}_voip`, userVoip);
               console.log(`[Discovery] Auto-created VoIP extension ${extensionNumber} for user ${req.user.id}`);
+
+              result.voipCredentials = {
+                server: globalConfig.server,
+                domain: globalConfig.domain,
+                extension: extensionNumber,
+                password: secret,
+                displayName: req.user.username || 'Homenichat User',
+                iceServers: [
+                  { urls: 'stun:stun.l.google.com:19302' },
+                  { urls: 'stun:stun1.l.google.com:19302' }
+                ]
+              };
             }
           }
         } catch (e) {
           // AMI not available
         }
       }
-
-      if (userVoip && userVoip.enabled && userVoip.extension) {
-        result.voipCredentials = {
-          server: userVoip.wssUrl || globalConfig.server,
-          domain: userVoip.domain || globalConfig.domain,
-          extension: userVoip.extension,
-          password: userVoip.password, // Include password for 1-click
-          displayName: req.user.username || 'Homenichat User',
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
-        };
-
-        // Update CDR extensions
-        if (result.cdr && result.cdr.enabled) {
-          result.cdr.extensions = [userVoip.extension];
-        }
-      } else if (globalConfig.server) {
+      // Fallback: server configured but no extension
+      else {
         result.voipCredentials = {
           server: globalConfig.server,
           domain: globalConfig.domain,
