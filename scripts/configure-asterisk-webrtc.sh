@@ -74,15 +74,16 @@ protocol=ws
 bind=0.0.0.0:8088
 
 ; Template for WebRTC extensions
-; NOTE: Using G.711 (ulaw/alaw) instead of opus for better compatibility
-; with GSM modems (chan_quectel). Opus requires additional codec modules.
+; Codec priority: opus (WebRTC) > g722 (HD) > ulaw/alaw (G.711)
+; Run install-asterisk-codecs.sh to add opus support
 [webrtc-endpoint](!)
 type=endpoint
 context=from-internal
 disallow=all
+allow=opus
+allow=g722
 allow=ulaw
 allow=alaw
-allow=g722
 transport=transport-ws
 webrtc=yes
 dtls_auto_generate_cert=yes
@@ -147,13 +148,24 @@ if ! grep -q "extensions_homenichat.conf" "$ASTERISK_CONFIG/extensions.conf" 2>/
 fi
 echo "  extensions_homenichat.conf configured"
 
-# 5. Reload Asterisk
+# 5. Install additional codecs (opus, etc.)
+echo "Installing audio codecs..."
+SCRIPT_DIR="$(dirname "$0")"
+if [ -f "$SCRIPT_DIR/install-asterisk-codecs.sh" ]; then
+    bash "$SCRIPT_DIR/install-asterisk-codecs.sh" || echo "  Codec installation skipped (non-fatal)"
+elif [ -f "$HOMENICHAT_DIR/scripts/install-asterisk-codecs.sh" ]; then
+    bash "$HOMENICHAT_DIR/scripts/install-asterisk-codecs.sh" || echo "  Codec installation skipped (non-fatal)"
+else
+    echo "  Codec installation script not found, skipping"
+fi
+
+# 6. Reload Asterisk
 echo "Reloading Asterisk configuration..."
 asterisk -rx "module reload res_pjsip.so" 2>/dev/null || true
 asterisk -rx "dialplan reload" 2>/dev/null || true
 asterisk -rx "core reload" 2>/dev/null || true
 
-# 6. Verify configuration
+# 7. Verify configuration
 echo ""
 echo "=== Verification ==="
 HTTP_STATUS=$(asterisk -rx "http show status" 2>/dev/null | grep -c "Server Enabled" || echo "0")
@@ -171,8 +183,18 @@ else
     echo "✗ WebSocket transport not found"
 fi
 
+OPUS_STATUS=$(asterisk -rx "core show codecs audio" 2>/dev/null | grep -c "opus" || echo "0")
+if [ "$OPUS_STATUS" -gt 0 ]; then
+    echo "✓ Opus codec available"
+else
+    echo "⚠ Opus codec not available (will use G.711 fallback)"
+fi
+
 echo ""
 echo "=== Asterisk WebRTC Configuration Complete ==="
 echo "WebSocket endpoints:"
 echo "  ws://$(hostname -I | awk '{print $1}'):8088/ws   (non-SSL)"
 echo "  wss://$(hostname -I | awk '{print $1}'):8089/ws  (SSL)"
+echo ""
+echo "Supported codecs for WebRTC:"
+asterisk -rx "core show codecs audio" 2>/dev/null | grep -E "opus|g722|ulaw|alaw" | head -5
