@@ -586,7 +586,14 @@ UPNP_CONF
 install_asterisk() {
     [ "$INSTALL_ASTERISK" != true ] && return
 
-    info "Installing Asterisk..."
+    # If FreePBX will be installed, skip standalone Asterisk installation
+    # FreePBX installs its own Asterisk from Sangoma packages
+    if [ "$INSTALL_FREEPBX" = true ]; then
+        info "Skipping standalone Asterisk - FreePBX will install Asterisk 22"
+        return
+    fi
+
+    info "Installing Asterisk (standalone mode)..."
 
     # Try to install from repos first (may not be available in Bookworm/Trixie)
     # Use apt-get install with || to handle failure gracefully
@@ -661,7 +668,18 @@ install_asterisk_from_source() {
 
 install_chan_quectel() {
     [ "$INSTALL_MODEMS" != true ] && return
-    [ "$INSTALL_ASTERISK" != true ] && return
+
+    # chan_quectel requires Asterisk - either standalone or via FreePBX
+    if [ "$INSTALL_ASTERISK" != true ] && [ "$INSTALL_FREEPBX" != true ]; then
+        warning "Skipping chan_quectel - no Asterisk installation selected"
+        return
+    fi
+
+    # Wait for Asterisk to be available (FreePBX installs it)
+    if ! command -v asterisk &>/dev/null; then
+        warning "Asterisk not found - chan_quectel requires Asterisk"
+        return
+    fi
 
     info "Installing chan_quectel for Quectel/SIM7600 modems..."
 
@@ -670,12 +688,22 @@ install_chan_quectel() {
 
     cd /usr/src
 
-    # Install Asterisk headers if built from source
-    ASTERISK_SRC=$(find /usr/src -maxdepth 1 -type d -name "asterisk-*" 2>/dev/null | head -1)
-    if [ -n "$ASTERISK_SRC" ] && [ -d "$ASTERISK_SRC" ]; then
-        info "Installing Asterisk development headers..."
-        cd "$ASTERISK_SRC"
-        make install-headers >> "$LOG_FILE" 2>&1 || true
+    # Install Asterisk development headers
+    if [ "$INSTALL_FREEPBX" = true ]; then
+        # FreePBX uses packaged Asterisk - install dev headers from package
+        info "Installing Asterisk development headers (from packages)..."
+        apt-get install -y asterisk-dev >> "$LOG_FILE" 2>&1 || {
+            # If asterisk-dev package doesn't exist, try to find headers
+            warning "asterisk-dev package not found, checking for existing headers..."
+        }
+    else
+        # Standalone Asterisk built from source - install headers from source
+        ASTERISK_SRC=$(find /usr/src -maxdepth 1 -type d -name "asterisk-*" 2>/dev/null | head -1)
+        if [ -n "$ASTERISK_SRC" ] && [ -d "$ASTERISK_SRC" ]; then
+            info "Installing Asterisk development headers (from source)..."
+            cd "$ASTERISK_SRC"
+            make install-headers >> "$LOG_FILE" 2>&1 || true
+        fi
     fi
 
     cd /usr/src
@@ -701,10 +729,10 @@ install_chan_quectel() {
     info "Building chan_quectel with CMake (Release mode)..."
     mkdir -p build && cd build
     cmake -DCMAKE_BUILD_TYPE=Release .. >> "$LOG_FILE" 2>&1
-    make >> "$LOG_FILE" 2>&1
+    make -j$(nproc) >> "$LOG_FILE" 2>&1
     make install >> "$LOG_FILE" 2>&1
 
-    # CMake installs to /usr/local/lib/*/asterisk/modules/ - copy to standard location
+    # CMake installs to /usr/local/lib/*/asterisk/modules/ - copy to correct location
     ARCH=$(uname -m)
     if [ "$ARCH" = "aarch64" ]; then
         LIB_ARCH="aarch64-linux-gnu"
@@ -714,8 +742,24 @@ install_chan_quectel() {
         LIB_ARCH="$ARCH-linux-gnu"
     fi
 
-    if [ -f "/usr/local/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so" ]; then
-        cp /usr/local/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so /usr/lib/asterisk/modules/ 2>/dev/null || true
+    # Find the compiled module
+    CHAN_QUECTEL_SO="/usr/local/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so"
+
+    # Copy to all possible Asterisk module locations
+    # FreePBX uses /lib/x86_64-linux-gnu/asterisk/modules/
+    # Standalone uses /usr/lib/asterisk/modules/
+    if [ -f "$CHAN_QUECTEL_SO" ]; then
+        # FreePBX location (Debian packages)
+        mkdir -p "/lib/${LIB_ARCH}/asterisk/modules" 2>/dev/null || true
+        cp "$CHAN_QUECTEL_SO" "/lib/${LIB_ARCH}/asterisk/modules/" 2>/dev/null || true
+
+        # Standard location
+        mkdir -p /usr/lib/asterisk/modules 2>/dev/null || true
+        cp "$CHAN_QUECTEL_SO" /usr/lib/asterisk/modules/ 2>/dev/null || true
+
+        info "chan_quectel.so copied to Asterisk module directories"
+    else
+        warning "chan_quectel.so not found at expected location"
     fi
 
     cd /usr/src
@@ -753,34 +797,43 @@ MODULES_CONF
         info "Created modules.conf with chan_quectel"
     fi
 
-    # Detect modem type for proper configuration
+    # Add asterisk user to dialout group for serial port access
+    info "Adding asterisk user to dialout group..."
+    usermod -aG dialout asterisk 2>/dev/null || true
+
+    # Detect modem type and count
     # SIM7600: vendor 1e0e, uses slin16=yes, data=ttyUSB2, audio=ttyUSB4
     # EC25: vendor 2c7c, uses slin16=no, data=ttyUSB2, audio=ttyUSB1
     local MODEM_TYPE="unknown"
     local SLIN16="no"
-    local DATA_PORT="/dev/ttyUSB2"
-    local AUDIO_PORT="/dev/ttyUSB1"
+    local TXGAIN="-15"
+    local MODEM_COUNT=0
 
-    if lsusb 2>/dev/null | grep -q "1e0e:9001"; then
+    # Count SIM7600 modems
+    SIM7600_COUNT=$(lsusb 2>/dev/null | grep -c "1e0e:9001" || echo "0")
+    # Count EC25 modems
+    EC25_COUNT=$(lsusb 2>/dev/null | grep -c "2c7c:" || echo "0")
+
+    if [ "$SIM7600_COUNT" -gt 0 ]; then
         MODEM_TYPE="SIM7600"
         SLIN16="yes"
-        DATA_PORT="/dev/ttyUSB2"
-        AUDIO_PORT="/dev/ttyUSB4"
-        info "Detected SIM7600 modem - using 16kHz audio (slin16=yes)"
-    elif lsusb 2>/dev/null | grep -q "2c7c:"; then
+        TXGAIN="-18"
+        MODEM_COUNT=$SIM7600_COUNT
+        info "Detected $SIM7600_COUNT SIM7600 modem(s) - using 16kHz audio (slin16=yes)"
+    elif [ "$EC25_COUNT" -gt 0 ]; then
         MODEM_TYPE="EC25"
         SLIN16="no"
-        DATA_PORT="/dev/ttyUSB2"
-        AUDIO_PORT="/dev/ttyUSB1"
-        info "Detected Quectel EC25 modem - using 8kHz audio (slin16=no)"
+        TXGAIN="-15"
+        MODEM_COUNT=$EC25_COUNT
+        info "Detected $EC25_COUNT EC25 modem(s) - using 8kHz audio (slin16=no)"
     else
-        warning "No known modem detected - using default EC25 configuration"
+        warning "No known modem detected - creating template config"
     fi
 
     # Create quectel config (based on VM500 production config)
     cat > /etc/asterisk/quectel.conf << QUECTEL_CONF
 ; Homenichat - chan_quectel configuration
-; Generated for: ${MODEM_TYPE} modem
+; Generated for: ${MODEM_TYPE} modem(s)
 ; Based on VM500 production config
 
 [general]
@@ -791,11 +844,11 @@ csmsttl=600
 [defaults]
 context=from-gsm
 group=0
-; Audio gains tuned for production (VM500 tested values)
+; Audio gains tuned for WebRTC ↔ GSM bridge (prevents TX saturation)
 ; rxgain: GSM network → Asterisk (speaker/incoming audio)
 ; txgain: Asterisk → GSM network (microphone/outgoing audio)
 rxgain=-5
-txgain=-15
+txgain=${TXGAIN}
 autodeletesms=yes
 resetquectel=yes
 msg_storage=me
@@ -804,17 +857,63 @@ usecallingpres=yes
 callingpres=allowed_passed_screen
 ; Audio format: SIM7600 requires 16kHz (slin16=yes), EC25 uses 8kHz (slin16=no)
 slin16=${SLIN16}
+QUECTEL_CONF
 
-; Auto-configured modem (Homenichat installation)
-; Detected modem type: ${MODEM_TYPE}
-; Modem will be auto-detected and configured by Homenichat admin UI
-; Or you can manually configure below
+    # Auto-detect and configure modems based on ttyUSB ports
+    if [ "$MODEM_TYPE" = "SIM7600" ]; then
+        # SIM7600 uses: ttyUSB2 (AT), ttyUSB4 (audio) per modem
+        # Multiple modems: 0-4, 5-9, etc.
+        local MODEM_NUM=1
+        for BASE in 0 5 10 15; do
+            DATA_PORT="/dev/ttyUSB$((BASE + 2))"
+            AUDIO_PORT="/dev/ttyUSB$((BASE + 4))"
+            if [ -e "$DATA_PORT" ] && [ -e "$AUDIO_PORT" ]; then
+                cat >> /etc/asterisk/quectel.conf << MODEM_CONF
 
-[hni-modem]
+[modem-${MODEM_NUM}]
 data=${DATA_PORT}
 audio=${AUDIO_PORT}
-; imsi will be auto-detected
-QUECTEL_CONF
+context=from-gsm
+slin16=yes
+txgain=-18
+MODEM_CONF
+                info "Configured modem-${MODEM_NUM}: data=$DATA_PORT, audio=$AUDIO_PORT"
+                MODEM_NUM=$((MODEM_NUM + 1))
+            fi
+        done
+    elif [ "$MODEM_TYPE" = "EC25" ]; then
+        # EC25 uses: ttyUSB2 (AT), ttyUSB1 (audio) per modem
+        local MODEM_NUM=1
+        for BASE in 0 5 10 15; do
+            DATA_PORT="/dev/ttyUSB$((BASE + 2))"
+            AUDIO_PORT="/dev/ttyUSB$((BASE + 1))"
+            if [ -e "$DATA_PORT" ] && [ -e "$AUDIO_PORT" ]; then
+                cat >> /etc/asterisk/quectel.conf << MODEM_CONF
+
+[modem-${MODEM_NUM}]
+data=${DATA_PORT}
+audio=${AUDIO_PORT}
+context=from-gsm
+slin16=no
+MODEM_CONF
+                info "Configured modem-${MODEM_NUM}: data=$DATA_PORT, audio=$AUDIO_PORT"
+                MODEM_NUM=$((MODEM_NUM + 1))
+            fi
+        done
+    else
+        # No modem detected - add template
+        cat >> /etc/asterisk/quectel.conf << 'MODEM_TEMPLATE'
+
+; No modems detected during installation
+; Uncomment and configure when modem is connected:
+;[modem-1]
+;data=/dev/ttyUSB2
+;audio=/dev/ttyUSB4
+;context=from-gsm
+;slin16=yes
+;txgain=-18
+MODEM_TEMPLATE
+    fi
 
     # Create symlink for /usr/local/etc/asterisk compatibility
     mkdir -p /usr/local/etc/asterisk
@@ -833,21 +932,32 @@ QUECTEL_CONF
         IN_LXC=true
     fi
 
-    # Create udev rules for consistent device naming
+    # Create udev rules for consistent device naming AND permissions
+    # MODE="0666" ensures asterisk (and any user) can access the ports
+    # GROUP="dialout" allows dialout group members access
     cat > /etc/udev/rules.d/99-quectel.rules << 'UDEV_RULES'
-# Quectel EC25/SIM7600 modems - create consistent symlinks
-# AT command port (interface 2)
-SUBSYSTEM=="tty", ATTRS{idVendor}=="2c7c", ATTRS{bInterfaceNumber}=="02", SYMLINK+="quectel-at"
-# Audio port (interface 4)
-SUBSYSTEM=="tty", ATTRS{idVendor}=="2c7c", ATTRS{bInterfaceNumber}=="04", SYMLINK+="quectel-audio"
+# Quectel EC25/SIM7600 modems - permissions and symlinks
+# MODE="0666" allows Asterisk to access ports without root
+# GROUP="dialout" for serial port access
 
-# SIMCom SIM7600
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{bInterfaceNumber}=="02", SYMLINK+="sim7600-at"
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{bInterfaceNumber}=="04", SYMLINK+="sim7600-audio"
+# Quectel EC25 modems (vendor 2c7c)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2c7c", MODE="0666", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2c7c", ATTRS{bInterfaceNumber}=="02", SYMLINK+="quectel-at", MODE="0666"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2c7c", ATTRS{bInterfaceNumber}=="04", SYMLINK+="quectel-audio", MODE="0666"
+
+# SIMCom SIM7600 modems (vendor 1e0e)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", MODE="0666", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{bInterfaceNumber}=="02", SYMLINK+="sim7600-at", MODE="0666"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{bInterfaceNumber}=="04", SYMLINK+="sim7600-audio", MODE="0666"
 UDEV_RULES
 
     udevadm control --reload-rules 2>/dev/null || true
     udevadm trigger 2>/dev/null || true
+
+    # Also set permissions on existing ttyUSB devices immediately
+    chmod 666 /dev/ttyUSB* 2>/dev/null || true
+
+    info "Udev rules installed with proper permissions"
 
     # If in LXC container, show important message about host configuration
     if [ "$IN_LXC" = true ]; then
@@ -1243,6 +1353,18 @@ FREEPBX_EXAMPLE
 
     rm -f freepbx_install.sh
 
+    # Fix Apache/Nginx port conflict: Move Apache to port 8080
+    # Nginx uses port 80 for Homenichat, Apache/FreePBX uses 8080
+    if [ -f /etc/apache2/ports.conf ]; then
+        info "Reconfiguring Apache to use port 8080 (Nginx uses 80)..."
+        sed -i 's/Listen 80$/Listen 8080/' /etc/apache2/ports.conf
+        sed -i 's/<VirtualHost \*:80>/<VirtualHost *:8080>/g' /etc/apache2/sites-available/*.conf 2>/dev/null || true
+
+        # Restart Apache to apply changes
+        systemctl restart apache2 >> "$LOG_FILE" 2>&1 || true
+        success "Apache reconfigured to port 8080"
+    fi
+
     # Verify
     if [ -d "/var/www/html/admin" ]; then
         success "FreePBX installed"
@@ -1578,8 +1700,8 @@ main() {
     install_gammu
     install_upnp
     install_asterisk
-    install_chan_quectel
     install_freepbx
+    install_chan_quectel
     configure_asterisk_audio
 
     print_banner
