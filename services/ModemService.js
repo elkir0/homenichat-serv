@@ -1277,6 +1277,15 @@ ${mergedConfig.phoneNumber ? `exten=+${mergedConfig.phoneNumber.replace(/^\+/, '
    */
   async applyQuectelConf(config = {}) {
     try {
+      // Si pas de modems dans config, auto-détecter
+      if (!config.modems || config.modems.length === 0) {
+        const detected = await this.detectUsbPorts();
+        if (detected.modems && detected.modems.length > 0) {
+          this.logger.info(`[ModemService] Auto-detected ${detected.modems.length} modem(s) for config`);
+          config.modems = detected.modems;
+        }
+      }
+
       // Créer le dossier smsdb si nécessaire
       const smsdbPath = '/var/lib/asterisk/smsdb';
       await this.runCmd(`mkdir -p ${smsdbPath} && chown asterisk:asterisk ${smsdbPath} 2>/dev/null || true`);
