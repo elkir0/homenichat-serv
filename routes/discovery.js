@@ -225,7 +225,7 @@ router.get('/', async (req, res) => {
 
       // Global VoIP config from environment
       const globalConfig = {
-        server: process.env.VOIP_WSS_URL || `wss://${host}:8089/ws`,
+        server: process.env.VOIP_WSS_URL || `wss://${host?.split(':')[0]}/wss`,
         domain: process.env.VOIP_DOMAIN || host?.split(':')[0] || 'localhost',
         extension: process.env.VOIP_EXTENSION || '',
         password: process.env.VOIP_PASSWORD || '',
@@ -545,7 +545,7 @@ async function getDiscoveryData(req) {
     const userVoipSettings = db.getSetting(`user_${req.user.id}_voip`);
 
     const globalConfig = {
-      server: process.env.VOIP_WSS_URL || `wss://${process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost'}:8089/ws`,
+      server: process.env.VOIP_WSS_URL || `wss://${process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost'}/wss`,
       domain: process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost',
       extension: process.env.VOIP_EXTENSION || '',
       password: process.env.VOIP_PASSWORD || '',
