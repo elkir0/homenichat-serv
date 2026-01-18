@@ -59,7 +59,12 @@ if [ -f "$HOMENICHAT_DIR/config/asterisk/pjsip_homenichat.conf" ]; then
 else
     cat > "$ASTERISK_CONFIG/pjsip_homenichat.conf" << 'EOF'
 ; Homenichat PJSIP WebRTC Configuration
+; IMPORTANT: AOR section name MUST match the endpoint/username!
+; See docs/WEBRTC-VOIP-CONFIG.md for detailed configuration guide.
 
+; =============================================================================
+; TRANSPORTS
+; =============================================================================
 [transport-wss]
 type=transport
 protocol=wss
@@ -73,25 +78,73 @@ type=transport
 protocol=ws
 bind=0.0.0.0:8088
 
-; Template for WebRTC extensions
-; Codec priority: opus (WebRTC) > g722 (HD) > ulaw/alaw (G.711)
-; Run install-asterisk-codecs.sh to add opus support
-[webrtc-endpoint](!)
+; =============================================================================
+; DEFAULT EXTENSION: 1001 (Homenichat WebRTC)
+; =============================================================================
+; Each extension needs 3 sections:
+; - endpoint: [XXXX] type=endpoint
+; - auth: [XXXX-auth] type=auth
+; - aor: [XXXX] type=aor (CRITICAL: SAME NAME as endpoint!)
+
+[1001]
 type=endpoint
 context=from-internal
 disallow=all
 allow=opus
-allow=g722
 allow=ulaw
 allow=alaw
 transport=transport-ws
 webrtc=yes
-dtls_auto_generate_cert=yes
-ice_support=yes
-media_encryption=dtls
-media_use_received_transport=yes
-rtcp_mux=yes
+auth=1001-auth
+aors=1001
 direct_media=no
+dtmf_mode=rfc4733
+identify_by=username
+callerid="Homenichat" <1001>
+
+[1001-auth]
+type=auth
+auth_type=userpass
+username=1001
+password=homenichat1001
+
+[1001]
+type=aor
+max_contacts=5
+remove_existing=yes
+
+; =============================================================================
+; ADDITIONAL EXTENSIONS (uncomment and customize as needed)
+; =============================================================================
+; To add more extensions, copy the 3-section pattern above.
+; Remember: AOR section name MUST match the extension number!
+
+;[1002]
+;type=endpoint
+;context=from-internal
+;disallow=all
+;allow=opus,ulaw,alaw
+;transport=transport-ws
+;webrtc=yes
+;auth=1002-auth
+;aors=1002
+;direct_media=no
+;dtmf_mode=rfc4733
+;identify_by=username
+
+;[1002-auth]
+;type=auth
+;auth_type=userpass
+;username=1002
+;password=changeme
+
+;[1002]
+;type=aor
+;max_contacts=5
+;remove_existing=yes
+
+; Include dynamically generated extensions (managed by Homenichat)
+#tryinclude pjsip_extensions_dynamic.conf
 EOF
 fi
 
