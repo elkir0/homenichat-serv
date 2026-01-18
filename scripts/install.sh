@@ -835,6 +835,44 @@ EXTENSIONS_SMS
         info "Added SMS handler to extensions.conf"
     fi
 
+    # Configure AMI (Asterisk Manager Interface) for Homenichat
+    info "Configuring AMI for Homenichat..."
+    AMI_PASSWORD=$(openssl rand -hex 12)
+
+    cat > /etc/asterisk/manager.conf << MANAGER_CONF
+[general]
+enabled = yes
+port = 5038
+bindaddr = 127.0.0.1
+
+[homenichat]
+secret = ${AMI_PASSWORD}
+read = all
+write = all
+deny = 0.0.0.0/0.0.0.0
+permit = 127.0.0.1/255.255.255.255
+MANAGER_CONF
+
+    # Add AMI credentials to .env
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        # Remove old AMI config if exists
+        sed -i '/^AMI_/d' "$INSTALL_DIR/.env"
+    fi
+
+    cat >> "$INSTALL_DIR/.env" << AMI_ENV
+
+# AMI Configuration (auto-generated)
+AMI_HOST=127.0.0.1
+AMI_PORT=5038
+AMI_USERNAME=homenichat
+AMI_PASSWORD=${AMI_PASSWORD}
+AMI_ENV
+
+    # Reload Asterisk manager
+    asterisk -rx "manager reload" 2>/dev/null || true
+
+    success "AMI configured for Homenichat"
+
     # Cleanup source directories
     cd /usr/src
     rm -rf asterisk-chan-quectel
