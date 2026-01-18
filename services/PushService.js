@@ -1,12 +1,22 @@
 const logger = require('../utils/logger');
 
-// Lazy load FCMPushService to avoid circular dependencies
+// Lazy load services to avoid circular dependencies
 let fcmPushService = null;
+let pushRelayService = null;
+
 const getFCMService = () => {
   if (!fcmPushService) {
     fcmPushService = require('./FCMPushService');
   }
   return fcmPushService;
+};
+
+const getPushRelayService = () => {
+  if (!pushRelayService) {
+    pushRelayService = require('./PushRelayService');
+    pushRelayService.initialize();
+  }
+  return pushRelayService;
 };
 
 /**
@@ -100,9 +110,38 @@ class PushService {
   /**
    * Send FCM push notification for incoming call
    * This wakes up mobile apps even when they are killed
+   * Uses Push Relay if configured, otherwise falls back to local FCM
    */
   async sendIncomingCallFCM(callData) {
     try {
+      const callId = callData.callId || `call-${Date.now()}`;
+      const callerName = callData.callerName || callData.callerIdName || 'Appel entrant';
+      const callerNumber = callData.callerNumber || callData.callerIdNum || '';
+      const lineName = callData.lineName || '';
+      const extension = callData.extension || '';
+
+      logger.info(`[Push] 📱 Sending incoming call push: ${callerName} (${callerNumber})`);
+
+      // Try Push Relay first (preferred method)
+      const relay = getPushRelayService();
+      if (relay.isConfigured()) {
+        // Send to all users (broadcast) since we don't know which user is the target
+        // In a multi-user setup, you'd filter by extension/user mapping
+        const result = await relay.broadcast('incoming_call', {
+          callId,
+          callerName,
+          callerNumber,
+          lineName,
+          extension
+        });
+
+        if (result.sent > 0) {
+          logger.info(`[Push] 📱 Incoming call sent via relay to ${result.sent} devices`);
+        }
+        return result.sent || 0;
+      }
+
+      // Fallback to local FCM
       const fcm = getFCMService();
 
       if (!fcm.initialized) {
@@ -114,21 +153,11 @@ class PushService {
         return 0;
       }
 
-      const callId = callData.callId || `call-${Date.now()}`;
-      const callerName = callData.callerName || callData.callerIdName || 'Appel entrant';
-      const callerNumber = callData.callerNumber || callData.callerIdNum || '';
-      const lineName = callData.lineName || '';
-
-      logger.info(`[Push] 📱 Sending FCM incoming call: ${callerName} (${callerNumber})`);
-
       const sentCount = await fcm.sendIncomingCallNotification(
         callId,
         callerName,
         callerNumber,
-        {
-          lineName,
-          extension: callData.extension || ''
-        }
+        { lineName, extension }
       );
 
       if (sentCount > 0) {
@@ -231,11 +260,10 @@ class PushService {
 
   /**
    * Send FCM push notification for a new message
+   * Uses Push Relay if configured, otherwise falls back to local FCM
    */
   async sendFCMNotification(messageData) {
     try {
-      const fcm = getFCMService();
-
       // Get sender name
       const senderName = messageData.pushName ||
                          messageData.senderName ||
@@ -247,6 +275,32 @@ class PushService {
                              messageData.body ||
                              messageData.text ||
                              'Nouveau message';
+
+      // Try Push Relay first
+      const relay = getPushRelayService();
+      if (relay.isConfigured()) {
+        const result = await relay.broadcast(
+          'new_message',
+          {
+            chatId: messageData.chatId,
+            messageId: messageData.id,
+            senderName,
+            provider: messageData.provider || 'unknown'
+          },
+          {
+            title: senderName,
+            body: messagePreview.length > 100 ? messagePreview.substring(0, 100) + '...' : messagePreview
+          }
+        );
+
+        if (result.sent > 0) {
+          logger.info(`📱 Push notification sent via relay to ${result.sent} devices`);
+        }
+        return;
+      }
+
+      // Fallback to local FCM
+      const fcm = getFCMService();
 
       const sentCount = await fcm.sendMessageNotification(
         messageData.chatId,

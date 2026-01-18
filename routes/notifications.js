@@ -3,7 +3,11 @@ const router = express.Router();
 const webPushService = require('../services/WebPushService');
 const voipPushService = require('../services/VoIPPushService');
 const fcmPushService = require('../services/FCMPushService');
+const pushRelayService = require('../services/PushRelayService');
 const { verifyToken } = require('../middleware/auth');
+
+// Initialize push relay on module load
+pushRelayService.initialize();
 
 /**
  * GET /api/notifications/vapid-public-key
@@ -198,6 +202,7 @@ router.post('/voip-test', verifyToken, async (req, res) => {
 /**
  * POST /api/notifications/fcm-token
  * Enregistre un token FCM pour l'utilisateur (Android app)
+ * Uses Push Relay if configured, otherwise falls back to local FCM
  */
 router.post('/fcm-token', verifyToken, async (req, res) => {
     console.log('[FCM] Token registration request from user:', req.user?.id, req.user?.username);
@@ -208,16 +213,35 @@ router.post('/fcm-token', verifyToken, async (req, res) => {
             return res.status(400).json({ error: 'Token required' });
         }
 
+        const actualDeviceId = deviceId || `device-${Date.now()}`;
+        const actualPlatform = platform || 'android';
+
+        // Use Push Relay if configured
+        if (pushRelayService.isConfigured()) {
+            const result = await pushRelayService.registerDevice(
+                req.user.id,
+                actualDeviceId,
+                actualPlatform,
+                token
+            );
+            return res.json({
+                success: true,
+                message: 'FCM token registered via relay',
+                relay: true
+            });
+        }
+
+        // Fallback to local FCM service
         fcmPushService.registerDevice(
             req.user.id,
             token,
-            deviceId || `device-${Date.now()}`,
-            platform || 'android'
+            actualDeviceId,
+            actualPlatform
         );
 
         res.json({
             success: true,
-            message: 'FCM token registered'
+            message: 'FCM token registered locally'
         });
 
     } catch (error) {
@@ -238,6 +262,13 @@ router.delete('/fcm-token', verifyToken, async (req, res) => {
             return res.status(400).json({ error: 'Device ID required' });
         }
 
+        // Use Push Relay if configured
+        if (pushRelayService.isConfigured()) {
+            await pushRelayService.unregisterDevice(req.user.id, deviceId);
+            return res.json({ success: true, message: 'FCM token unregistered via relay' });
+        }
+
+        // Fallback to local FCM service
         fcmPushService.unregisterDevice(req.user.id, deviceId);
         res.json({ success: true, message: 'FCM token unregistered' });
 
@@ -251,10 +282,25 @@ router.delete('/fcm-token', verifyToken, async (req, res) => {
  * GET /api/notifications/fcm-status
  * Retourne l'etat du service FCM Push
  */
-router.get('/fcm-status', verifyToken, (req, res) => {
+router.get('/fcm-status', verifyToken, async (req, res) => {
     try {
+        // Check Push Relay first
+        if (pushRelayService.isConfigured()) {
+            const relayStatus = pushRelayService.getStatus();
+            const stats = await pushRelayService.getStats();
+            return res.json({
+                mode: 'relay',
+                ...relayStatus,
+                stats
+            });
+        }
+
+        // Fallback to local FCM status
         const status = fcmPushService.getStatus();
-        res.json(status);
+        res.json({
+            mode: 'local',
+            ...status
+        });
     } catch (error) {
         console.error('[FCM] Status error:', error);
         res.status(500).json({ error: 'Failed to get FCM status' });
@@ -267,6 +313,17 @@ router.get('/fcm-status', verifyToken, (req, res) => {
  */
 router.post('/fcm-test', verifyToken, async (req, res) => {
     try {
+        // Use Push Relay if configured
+        if (pushRelayService.isConfigured()) {
+            const result = await pushRelayService.sendTest(req.user.id);
+            return res.json({
+                success: result.success,
+                devicesSent: result.sent || 0,
+                mode: 'relay'
+            });
+        }
+
+        // Fallback to local FCM
         const result = await fcmPushService.sendToUser(req.user.id, {
             title: 'Test Homenichat',
             body: 'Les notifications FCM fonctionnent !'
@@ -277,7 +334,8 @@ router.post('/fcm-test', verifyToken, async (req, res) => {
 
         res.json({
             success: true,
-            devicesSent: result
+            devicesSent: result,
+            mode: 'local'
         });
 
     } catch (error) {

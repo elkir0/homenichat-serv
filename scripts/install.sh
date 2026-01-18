@@ -683,18 +683,21 @@ install_chan_quectel() {
 
     info "Installing chan_quectel for Quectel/SIM7600 modems..."
 
-    # Install dependencies (cmake is required - RoEdAl fork uses CMake, not autoconf)
-    apt-get install -y cmake libasound2-dev >> "$LOG_FILE" 2>&1
+    # Install ALL dependencies required for chan_quectel compilation
+    info "Installing chan_quectel build dependencies..."
+    apt-get install -y cmake libasound2-dev libsqlite3-dev >> "$LOG_FILE" 2>&1
 
     cd /usr/src
 
     # Install Asterisk development headers
     if [ "$INSTALL_FREEPBX" = true ]; then
-        # FreePBX uses packaged Asterisk - install dev headers from package
-        info "Installing Asterisk development headers (from packages)..."
+        # FreePBX 17 uses Asterisk 22 - need asterisk22-devel package
+        info "Installing Asterisk 22 development headers (FreePBX)..."
+        # Try multiple package names (varies by FreePBX version)
+        apt-get install -y asterisk22-devel >> "$LOG_FILE" 2>&1 || \
+        apt-get install -y asterisk-devel >> "$LOG_FILE" 2>&1 || \
         apt-get install -y asterisk-dev >> "$LOG_FILE" 2>&1 || {
-            # If asterisk-dev package doesn't exist, try to find headers
-            warning "asterisk-dev package not found, checking for existing headers..."
+            warning "Could not install Asterisk dev headers - chan_quectel may fail to compile"
         }
     else
         # Standalone Asterisk built from source - install headers from source
@@ -728,8 +731,29 @@ install_chan_quectel() {
 
     info "Building chan_quectel with CMake (Release mode)..."
     mkdir -p build && cd build
-    cmake -DCMAKE_BUILD_TYPE=Release .. >> "$LOG_FILE" 2>&1
-    make -j$(nproc) >> "$LOG_FILE" 2>&1
+
+    # Run cmake with error checking
+    info "Running cmake..."
+    if ! cmake -DCMAKE_BUILD_TYPE=Release .. >> "$LOG_FILE" 2>&1; then
+        error "cmake failed! Check $LOG_FILE for details"
+        echo "=== CMAKE ERROR ===" >> "$LOG_FILE"
+        cmake -DCMAKE_BUILD_TYPE=Release .. >> "$LOG_FILE" 2>&1 || true
+        warning "chan_quectel compilation failed at cmake stage"
+        cd /usr/src
+        return 1
+    fi
+
+    # Run make with error checking
+    info "Running make..."
+    if ! make -j$(nproc) >> "$LOG_FILE" 2>&1; then
+        error "make failed! Check $LOG_FILE for details"
+        warning "chan_quectel compilation failed at make stage"
+        cd /usr/src
+        return 1
+    fi
+
+    # Install
+    info "Installing chan_quectel module..."
     make install >> "$LOG_FILE" 2>&1
 
     # CMake installs to /usr/local/lib/*/asterisk/modules/ - copy to correct location
