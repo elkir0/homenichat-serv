@@ -1236,7 +1236,8 @@ FREEPBX_EXAMPLE
 
     info "Running FreePBX installer (this takes 20-30 minutes)..."
     # Run with yes to auto-accept prompts
-    yes | ./freepbx_install.sh >> "$LOG_FILE" 2>&1 || {
+    # --skipversion bypasses the GitHub version check that blocks installation
+    yes | ./freepbx_install.sh --skipversion >> "$LOG_FILE" 2>&1 || {
         warning "FreePBX installation had some issues - check log"
     }
 

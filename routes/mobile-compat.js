@@ -710,6 +710,149 @@ router.get('/voip/status', verifyToken, async (req, res) => {
 });
 
 /**
+ * POST /api/voip/answer
+ * Answer an incoming call by redirecting it to the user's WebRTC extension
+ * Called by ConnectionService when user taps Answer on native UI
+ */
+router.post('/voip/answer', verifyToken, async (req, res) => {
+  try {
+    const { callId, extension } = req.body;
+
+    if (!callId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: callId'
+      });
+    }
+
+    // Get user's extension if not provided
+    let targetExtension = extension;
+    if (!targetExtension && req.user) {
+      const db = require('../services/DatabaseService');
+      const userVoip = db.getSetting(`user_${req.user.id}_voip`);
+      targetExtension = userVoip?.extension || process.env.VOIP_EXTENSION || '2001';
+    }
+
+    logger.info(`[VoIP Answer] Answering call ${callId} -> extension ${targetExtension}`);
+
+    // Use AMI service to redirect the call to the user's extension
+    try {
+      const freepbxAmi = require('../services/FreePBXAmiService');
+
+      if (!freepbxAmi.connected || !freepbxAmi.authenticated) {
+        return res.status(503).json({
+          success: false,
+          error: 'PBX AMI not connected'
+        });
+      }
+
+      const result = await freepbxAmi.answerCall(callId, targetExtension);
+
+      return res.json({
+        success: result.success,
+        message: result.message,
+        extension: targetExtension
+      });
+    } catch (amiError) {
+      logger.error('[VoIP Answer] AMI error:', amiError);
+      return res.status(500).json({
+        success: false,
+        error: amiError.message
+      });
+    }
+  } catch (error) {
+    logger.error('[VoIP Answer] Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/voip/reject
+ * Reject an incoming call (hang up the channel)
+ * Called by ConnectionService when user taps Decline on native UI
+ */
+router.post('/voip/reject', verifyToken, async (req, res) => {
+  try {
+    const { callId } = req.body;
+
+    if (!callId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: callId'
+      });
+    }
+
+    logger.info(`[VoIP Reject] Rejecting call ${callId}`);
+
+    // Use AMI service to hang up the call
+    try {
+      const freepbxAmi = require('../services/FreePBXAmiService');
+
+      if (!freepbxAmi.connected || !freepbxAmi.authenticated) {
+        return res.status(503).json({
+          success: false,
+          error: 'PBX AMI not connected'
+        });
+      }
+
+      const result = await freepbxAmi.rejectCall(callId);
+
+      return res.json({
+        success: result.success,
+        message: result.message
+      });
+    } catch (amiError) {
+      logger.error('[VoIP Reject] AMI error:', amiError);
+      return res.status(500).json({
+        success: false,
+        error: amiError.message
+      });
+    }
+  } catch (error) {
+    logger.error('[VoIP Reject] Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/voip/ringing
+ * Get list of currently ringing calls
+ * Useful for app to sync state after wake
+ */
+router.get('/voip/ringing', verifyToken, async (req, res) => {
+  try {
+    const freepbxAmi = require('../services/FreePBXAmiService');
+
+    if (!freepbxAmi.connected) {
+      return res.json({
+        success: true,
+        calls: []
+      });
+    }
+
+    const ringingCalls = freepbxAmi.getRingingCalls();
+
+    res.json({
+      success: true,
+      calls: ringingCalls
+    });
+  } catch (error) {
+    logger.error('[VoIP Ringing] Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      calls: []
+    });
+  }
+});
+
+/**
  * POST /api/calls/originate
  * NativePhoneScreen expects: { destination }
  * Alias for /api/voip/originate

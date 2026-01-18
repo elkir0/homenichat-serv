@@ -160,7 +160,7 @@ class FCMPushService {
       }
     }
 
-    userTokens.add({ token, deviceId, platform });
+    userTokens.add({ token, deviceId, platform, registeredAt: Date.now() });
     logger.info(`[FCM] Device registered: userId=${userId} deviceId=${deviceId}`);
   }
 
@@ -389,6 +389,42 @@ class FCMPushService {
       usersRegistered: this.deviceTokens.size,
       totalDevices: totalDevices,
     };
+  }
+
+  /**
+   * Reinitialize the service (used after config upload)
+   */
+  async reinitialize() {
+    logger.info('[FCM] Reinitializing service...');
+    this.initialized = false;
+    this.projectId = null;
+    this.accessToken = null;
+    this.tokenExpiry = 0;
+    this.serviceAccount = null;
+    // Note: Keep device tokens - they're still valid
+
+    return await this.initialize();
+  }
+
+  /**
+   * Get list of registered devices (for admin panel)
+   */
+  getRegisteredDevices() {
+    const devices = [];
+
+    for (const [userId, userTokens] of this.deviceTokens) {
+      for (const entry of userTokens) {
+        devices.push({
+          userId,
+          deviceId: entry.deviceId,
+          platform: entry.platform,
+          token: entry.token,
+          registeredAt: entry.registeredAt || null,
+        });
+      }
+    }
+
+    return devices;
   }
 }
 

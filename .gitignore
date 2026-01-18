@@ -48,4 +48,9 @@ uploads/
 *.crt
 credentials.json
 service-account.json
+
+# Firebase - CRITICAL: These contain private keys!
 firebase-*.json
+*-firebase-adminsdk-*.json
+google-services.json
+config/firebase-service-account.json

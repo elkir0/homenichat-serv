@@ -36,7 +36,16 @@ import {
   Router as RouterIcon,
   Warning as WarningIcon,
 } from '@mui/icons-material';
-import { configApi, tunnelApi, upnpApi } from '../services/api';
+import { configApi, tunnelApi, upnpApi, firebaseApi } from '../services/api';
+import {
+  CloudUpload as CloudUploadIcon,
+  Delete as DeleteIcon,
+  Android as AndroidIcon,
+  CheckCircle as CheckCircleIcon,
+  Error as ErrorIcon,
+  Send as SendIcon,
+  PhoneAndroid as PhoneAndroidIcon,
+} from '@mui/icons-material';
 
 interface TunnelStatus {
   available: boolean;
@@ -86,6 +95,15 @@ interface ServerConfig {
   };
 }
 
+interface FirebaseStatus {
+  configured: boolean;
+  configPath: string | null;
+  initialized: boolean;
+  projectId: string | null;
+  registeredDevices: number;
+  registeredUsers: number;
+}
+
 export default function SettingsPage() {
   const theme = useTheme();
   const queryClient = useQueryClient();
@@ -96,6 +114,75 @@ export default function SettingsPage() {
     queryKey: ['config'],
     queryFn: configApi.get,
   });
+
+  // Firebase status query
+  const { data: firebaseStatus, refetch: refetchFirebase } = useQuery<FirebaseStatus>({
+    queryKey: ['firebaseStatus'],
+    queryFn: firebaseApi.getStatus,
+  });
+
+  // Firebase state
+  const [firebaseFile, setFirebaseFile] = useState<File | null>(null);
+  const [firebaseUploadError, setFirebaseUploadError] = useState<string | null>(null);
+  const [firebaseTestResult, setFirebaseTestResult] = useState<string | null>(null);
+
+  // Firebase upload mutation
+  const firebaseUploadMutation = useMutation({
+    mutationFn: async (fileContent: string) => {
+      return firebaseApi.upload(fileContent);
+    },
+    onSuccess: (data) => {
+      refetchFirebase();
+      setFirebaseFile(null);
+      setFirebaseUploadError(null);
+      setFirebaseTestResult(`Configuration sauvegardee! Projet: ${data.projectId}`);
+    },
+    onError: (error: Error & { response?: { data?: { error?: string; hint?: string } } }) => {
+      setFirebaseUploadError(error.response?.data?.error || error.message);
+    },
+  });
+
+  // Firebase delete mutation
+  const firebaseDeleteMutation = useMutation({
+    mutationFn: firebaseApi.delete,
+    onSuccess: () => {
+      refetchFirebase();
+      setFirebaseTestResult('Configuration Firebase supprimee');
+    },
+  });
+
+  // Firebase test mutation
+  const firebaseTestMutation = useMutation({
+    mutationFn: firebaseApi.test,
+    onSuccess: (data) => {
+      setFirebaseTestResult(data.message);
+    },
+    onError: (error: Error & { response?: { data?: { error?: string; hint?: string } } }) => {
+      setFirebaseTestResult(error.response?.data?.error || error.message);
+    },
+  });
+
+  const handleFirebaseFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setFirebaseFile(file);
+      setFirebaseUploadError(null);
+      setFirebaseTestResult(null);
+    }
+  };
+
+  const handleFirebaseUpload = async () => {
+    if (!firebaseFile) return;
+
+    try {
+      const content = await firebaseFile.text();
+      // Validate JSON
+      JSON.parse(content);
+      firebaseUploadMutation.mutate(content);
+    } catch {
+      setFirebaseUploadError('Fichier JSON invalide');
+    }
+  };
 
   // Tunnel status query
   const { data: tunnelStatus } = useQuery<TunnelStatus>({
@@ -803,6 +890,203 @@ export default function SettingsPage() {
                 UPnP (Universal Plug and Play) permet l'ouverture automatique des ports sur les routeurs compatibles.
                 Le bail est renouvele automatiquement toutes les heures.
               </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Firebase Push Notifications */}
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+                <AndroidIcon sx={{ mr: 1, color: '#34A853' }} />
+                <Typography variant="h6" fontWeight={600}>
+                  Push Notifications (Firebase)
+                </Typography>
+                {firebaseStatus?.configured ? (
+                  <Chip
+                    icon={<CheckCircleIcon />}
+                    label="Configure"
+                    color="success"
+                    size="small"
+                    sx={{ ml: 2 }}
+                  />
+                ) : (
+                  <Chip
+                    icon={<ErrorIcon />}
+                    label="Non configure"
+                    color="error"
+                    size="small"
+                    sx={{ ml: 2 }}
+                  />
+                )}
+              </Box>
+
+              <Alert severity="info" sx={{ mb: 3 }}>
+                <Typography variant="body2" fontWeight={500}>
+                  Firebase Cloud Messaging permet d'envoyer des push notifications aux applications mobiles.
+                </Typography>
+                <Typography variant="caption">
+                  Requis pour les appels entrants quand l'app est fermee/en arriere-plan.
+                  Chaque utilisateur doit creer son propre projet Firebase.
+                </Typography>
+              </Alert>
+
+              <Grid container spacing={3}>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                    Configuration du Service Account
+                  </Typography>
+
+                  {firebaseStatus?.configured ? (
+                    <Box
+                      sx={{
+                        p: 2,
+                        borderRadius: 2,
+                        backgroundColor: alpha(theme.palette.success.main, 0.08),
+                        border: '1px solid',
+                        borderColor: alpha(theme.palette.success.main, 0.3),
+                        mb: 2,
+                      }}
+                    >
+                      <Typography variant="body2">
+                        <strong>Projet:</strong> {firebaseStatus.projectId}
+                      </Typography>
+                      <Typography variant="body2">
+                        <strong>Fichier:</strong> {firebaseStatus.configPath}
+                      </Typography>
+                      <Typography variant="body2">
+                        <strong>Appareils enregistres:</strong> {firebaseStatus.registeredDevices}
+                      </Typography>
+                      <Typography variant="body2">
+                        <strong>Utilisateurs:</strong> {firebaseStatus.registeredUsers}
+                      </Typography>
+                    </Box>
+                  ) : (
+                    <Alert severity="warning" sx={{ mb: 2 }}>
+                      Aucun fichier firebase-service-account.json configure.
+                      Les push notifications ne fonctionneront pas.
+                    </Alert>
+                  )}
+
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Button
+                        variant="outlined"
+                        component="label"
+                        startIcon={<CloudUploadIcon />}
+                      >
+                        Choisir fichier
+                        <input
+                          type="file"
+                          hidden
+                          accept=".json"
+                          onChange={handleFirebaseFileChange}
+                        />
+                      </Button>
+                      {firebaseFile && (
+                        <Typography variant="body2" color="text.secondary">
+                          {firebaseFile.name}
+                        </Typography>
+                      )}
+                    </Box>
+
+                    {firebaseFile && (
+                      <Button
+                        variant="contained"
+                        color="primary"
+                        startIcon={<CloudUploadIcon />}
+                        onClick={handleFirebaseUpload}
+                        disabled={firebaseUploadMutation.isPending}
+                      >
+                        {firebaseUploadMutation.isPending ? 'Upload...' : 'Uploader la configuration'}
+                      </Button>
+                    )}
+
+                    {firebaseUploadError && (
+                      <Alert severity="error">
+                        {firebaseUploadError}
+                      </Alert>
+                    )}
+
+                    {firebaseTestResult && (
+                      <Alert severity={firebaseTestResult.includes('erreur') || firebaseTestResult.includes('Error') ? 'error' : 'success'}>
+                        {firebaseTestResult}
+                      </Alert>
+                    )}
+
+                    {firebaseStatus?.configured && (
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <Button
+                          variant="outlined"
+                          color="primary"
+                          startIcon={<SendIcon />}
+                          onClick={() => firebaseTestMutation.mutate()}
+                          disabled={firebaseTestMutation.isPending}
+                        >
+                          Tester
+                        </Button>
+                        <Button
+                          variant="outlined"
+                          color="error"
+                          startIcon={<DeleteIcon />}
+                          onClick={() => firebaseDeleteMutation.mutate()}
+                          disabled={firebaseDeleteMutation.isPending}
+                        >
+                          Supprimer
+                        </Button>
+                      </Box>
+                    )}
+                  </Box>
+                </Grid>
+
+                <Grid item xs={12} md={6}>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                    Comment obtenir le fichier
+                  </Typography>
+
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <Typography variant="body2">
+                      1. Aller sur{' '}
+                      <Link
+                        href="https://console.firebase.google.com/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Firebase Console <OpenInNewIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} />
+                      </Link>
+                    </Typography>
+                    <Typography variant="body2">
+                      2. Creer un nouveau projet ou selectionner un existant
+                    </Typography>
+                    <Typography variant="body2">
+                      3. Aller dans <strong>Project Settings</strong> → <strong>Service Accounts</strong>
+                    </Typography>
+                    <Typography variant="body2">
+                      4. Cliquer <strong>Generate new private key</strong>
+                    </Typography>
+                    <Typography variant="body2">
+                      5. Sauvegarder le fichier JSON et l'uploader ici
+                    </Typography>
+
+                    <Divider sx={{ my: 2 }} />
+
+                    <Alert severity="warning" icon={<WarningIcon />}>
+                      <Typography variant="caption">
+                        <strong>Important:</strong> Ce fichier contient des cles privees.
+                        Ne le partagez jamais et ne le commitez pas dans un repo public!
+                      </Typography>
+                    </Alert>
+
+                    <Alert severity="info" icon={<PhoneAndroidIcon />} sx={{ mt: 1 }}>
+                      <Typography variant="caption">
+                        <strong>App Mobile:</strong> Vous devez aussi configurer l'app Android
+                        avec le fichier <code>google-services.json</code> du meme projet Firebase.
+                      </Typography>
+                    </Alert>
+                  </Box>
+                </Grid>
+              </Grid>
             </CardContent>
           </Card>
         </Grid>

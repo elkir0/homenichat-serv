@@ -87,8 +87,59 @@ class PushService {
       }
     });
 
-    logger.info(`Event ${eventType} envoyé à ${sentCount} clients`);
+    logger.info(`Event ${eventType} envoyé à ${sentCount} clients WebSocket`);
+
+    // For incoming calls, also send FCM push to wake up mobile apps
+    if (eventType === this.eventTypes.INCOMING_CALL) {
+      this.sendIncomingCallFCM(data);
+    }
+
     return sentCount;
+  }
+
+  /**
+   * Send FCM push notification for incoming call
+   * This wakes up mobile apps even when they are killed
+   */
+  async sendIncomingCallFCM(callData) {
+    try {
+      const fcm = getFCMService();
+
+      if (!fcm.initialized) {
+        await fcm.initialize();
+      }
+
+      if (!fcm.projectId) {
+        logger.debug('[Push] FCM not configured, skipping incoming call push');
+        return 0;
+      }
+
+      const callId = callData.callId || `call-${Date.now()}`;
+      const callerName = callData.callerName || callData.callerIdName || 'Appel entrant';
+      const callerNumber = callData.callerNumber || callData.callerIdNum || '';
+      const lineName = callData.lineName || '';
+
+      logger.info(`[Push] 📱 Sending FCM incoming call: ${callerName} (${callerNumber})`);
+
+      const sentCount = await fcm.sendIncomingCallNotification(
+        callId,
+        callerName,
+        callerNumber,
+        {
+          lineName,
+          extension: callData.extension || ''
+        }
+      );
+
+      if (sentCount > 0) {
+        logger.info(`[Push] 📱 FCM incoming call sent to ${sentCount} devices`);
+      }
+
+      return sentCount;
+    } catch (error) {
+      logger.error('[Push] FCM incoming call error:', error.message);
+      return 0;
+    }
   }
 
   /**

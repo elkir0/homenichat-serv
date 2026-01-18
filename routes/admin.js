@@ -2509,6 +2509,234 @@ router.post('/config/reload', async (req, res) => {
 });
 
 // =============================================================================
+// FIREBASE PUSH NOTIFICATIONS CONFIGURATION
+// =============================================================================
+
+/**
+ * GET /api/admin/firebase/status
+ * État de la configuration Firebase
+ */
+router.get('/firebase/status', async (req, res) => {
+  try {
+    const fcmService = require('../services/FCMPushService');
+    const fs = require('fs');
+    const path = require('path');
+
+    // Check if config file exists
+    const configPaths = [
+      path.join(__dirname, '../config/firebase-service-account.json'),
+      path.join(__dirname, '../firebase-service-account.json'),
+      path.join(process.env.DATA_DIR || '/var/lib/homenichat', 'firebase-service-account.json'),
+    ];
+
+    let configPath = null;
+    let configExists = false;
+    for (const p of configPaths) {
+      if (fs.existsSync(p)) {
+        configPath = p;
+        configExists = true;
+        break;
+      }
+    }
+
+    const status = fcmService.getStatus();
+
+    res.json({
+      configured: configExists,
+      configPath: configPath ? path.basename(path.dirname(configPath)) + '/' + path.basename(configPath) : null,
+      initialized: status.initialized,
+      projectId: status.projectId || null,
+      registeredDevices: status.totalDevices || 0,
+      registeredUsers: status.usersRegistered || 0,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Firebase status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/firebase/upload
+ * Upload du fichier firebase-service-account.json
+ */
+router.post('/firebase/upload', async (req, res) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+
+    const { serviceAccount } = req.body;
+
+    if (!serviceAccount) {
+      return res.status(400).json({ error: 'Missing serviceAccount in request body' });
+    }
+
+    // Validate it's a valid Firebase service account
+    let parsed;
+    try {
+      parsed = typeof serviceAccount === 'string' ? JSON.parse(serviceAccount) : serviceAccount;
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid JSON format' });
+    }
+
+    // Check required fields
+    const requiredFields = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email'];
+    const missingFields = requiredFields.filter(f => !parsed[f]);
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        error: 'Invalid Firebase service account',
+        missingFields,
+        hint: 'Download the service account JSON from Firebase Console > Project Settings > Service Accounts'
+      });
+    }
+
+    if (parsed.type !== 'service_account') {
+      return res.status(400).json({
+        error: 'Invalid file type',
+        hint: 'This should be a service account key, not a client configuration'
+      });
+    }
+
+    // Save to config directory
+    const configDir = path.join(__dirname, '../config');
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+
+    const configPath = path.join(configDir, 'firebase-service-account.json');
+    fs.writeFileSync(configPath, JSON.stringify(parsed, null, 2), 'utf8');
+
+    console.log(`[Admin] Firebase service account saved: ${configPath}`);
+
+    // Reinitialize FCM service
+    const fcmService = require('../services/FCMPushService');
+    await fcmService.reinitialize();
+
+    await securityService?.logAction(req.user.id, 'firebase_config_uploaded', {
+      category: 'admin',
+      projectId: parsed.project_id,
+      username: req.user.username,
+    }, req);
+
+    res.json({
+      success: true,
+      projectId: parsed.project_id,
+      message: 'Firebase configuration saved and service reinitialized'
+    });
+
+  } catch (error) {
+    console.error('[Admin] Firebase upload error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/admin/firebase/config
+ * Supprimer la configuration Firebase
+ */
+router.delete('/firebase/config', async (req, res) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+
+    const configPath = path.join(__dirname, '../config/firebase-service-account.json');
+
+    if (fs.existsSync(configPath)) {
+      fs.unlinkSync(configPath);
+      console.log('[Admin] Firebase service account deleted');
+    }
+
+    // Reinitialize (will be in unconfigured state)
+    const fcmService = require('../services/FCMPushService');
+    fcmService.initialized = false;
+    fcmService.projectId = null;
+
+    await securityService?.logAction(req.user.id, 'firebase_config_deleted', {
+      category: 'admin',
+      username: req.user.username,
+    }, req);
+
+    res.json({
+      success: true,
+      message: 'Firebase configuration deleted'
+    });
+
+  } catch (error) {
+    console.error('[Admin] Firebase delete error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/firebase/test
+ * Envoyer une notification de test
+ */
+router.post('/firebase/test', async (req, res) => {
+  try {
+    const fcmService = require('../services/FCMPushService');
+
+    if (!fcmService.initialized) {
+      return res.status(400).json({
+        error: 'Firebase not configured',
+        hint: 'Upload a firebase-service-account.json first'
+      });
+    }
+
+    const status = fcmService.getStatus();
+    if (status.totalDevices === 0) {
+      return res.status(400).json({
+        error: 'No devices registered',
+        hint: 'Connect your mobile app and login to register for push notifications'
+      });
+    }
+
+    // Send test notification to the requesting user
+    const result = await fcmService.sendToUser(req.user.id, {
+      title: 'Test Homenichat',
+      body: 'Push notifications are working!'
+    }, {
+      type: 'test',
+      timestamp: Date.now().toString()
+    });
+
+    res.json({
+      success: true,
+      devicesSent: result,
+      message: result > 0 ? 'Test notification sent' : 'No devices found for this user'
+    });
+
+  } catch (error) {
+    console.error('[Admin] Firebase test error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/firebase/devices
+ * Liste des appareils enregistrés
+ */
+router.get('/firebase/devices', async (req, res) => {
+  try {
+    const fcmService = require('../services/FCMPushService');
+    const devices = fcmService.getRegisteredDevices();
+
+    res.json({
+      devices: devices.map(d => ({
+        userId: d.userId,
+        deviceId: d.deviceId,
+        platform: d.platform,
+        registeredAt: d.registeredAt,
+        tokenPreview: d.token ? d.token.substring(0, 20) + '...' : null
+      }))
+    });
+
+  } catch (error) {
+    console.error('[Admin] Firebase devices error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
 // LOGS (temps réel via WebSocket, fallback HTTP)
 // =============================================================================
 

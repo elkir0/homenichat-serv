@@ -607,4 +607,32 @@ export const upnpApi = {
   },
 };
 
+// API Admin - Firebase Push Notifications
+export const firebaseApi = {
+  getStatus: async () => {
+    const response = await api.get('/api/admin/firebase/status');
+    return response.data;
+  },
+
+  upload: async (serviceAccount: string) => {
+    const response = await api.post('/api/admin/firebase/upload', { serviceAccount });
+    return response.data;
+  },
+
+  delete: async () => {
+    const response = await api.delete('/api/admin/firebase/config');
+    return response.data;
+  },
+
+  test: async () => {
+    const response = await api.post('/api/admin/firebase/test');
+    return response.data;
+  },
+
+  getDevices: async () => {
+    const response = await api.get('/api/admin/firebase/devices');
+    return response.data;
+  },
+};
+
 export default api;
