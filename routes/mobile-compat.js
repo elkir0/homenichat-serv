@@ -200,6 +200,63 @@ router.post('/voip/my-credentials', verifyToken, async (req, res) => {
 });
 
 /**
+ * PUT /api/voip/my-config
+ * User self-service to set their VoIP credentials
+ */
+router.put('/voip/my-config', verifyToken, async (req, res) => {
+  try {
+    const db = require('../services/DatabaseService');
+    const userId = req.user.id;
+    const { extension, password, server, domain } = req.body;
+
+    if (!extension) {
+      return res.status(400).json({
+        success: false,
+        error: 'Extension is required'
+      });
+    }
+
+    // Get global config for defaults
+    const globalConfig = {
+      server: process.env.VOIP_WSS_URL || '',
+      domain: process.env.VOIP_DOMAIN || '',
+    };
+
+    // Save user VoIP config
+    const voipConfig = {
+      enabled: true,
+      wssUrl: server || globalConfig.server,
+      domain: domain || globalConfig.domain,
+      extension: extension,
+      password: password || '',
+      displayName: req.user.username || '',
+      updatedAt: Date.now()
+    };
+
+    db.setSetting(`user_${userId}_voip`, voipConfig);
+
+    logger.info(`[VoIP] User ${userId} configured VoIP: ext ${extension}`);
+
+    res.json({
+      success: true,
+      message: 'Configuration VoIP sauvegardée',
+      sipConfig: {
+        domain: voipConfig.domain,
+        proxy: voipConfig.wssUrl,
+        extension: voipConfig.extension,
+        password: voipConfig.password,
+      }
+    });
+  } catch (error) {
+    logger.error('[VoIP] My config error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
  * GET /api/voip/credentials
  * Mobile app expects: { sipConfig: { domain, proxy, extension, password } }
  */

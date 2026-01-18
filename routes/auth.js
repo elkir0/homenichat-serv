@@ -265,6 +265,75 @@ router.get('/users/:id/voip', verifyToken, async (req, res) => {
   }
 });
 
+// User: Configurer son propre VoIP (self-service)
+router.put('/me/voip', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { enabled, wssUrl, domain, extension, password, displayName } = req.body;
+
+    // Get global config for defaults
+    const globalConfig = {
+      server: process.env.VOIP_WSS_URL || '',
+      domain: process.env.VOIP_DOMAIN || '',
+    };
+
+    // Save user VoIP config
+    const voipConfig = {
+      enabled: enabled !== false, // Default to true
+      wssUrl: wssUrl || globalConfig.server,
+      domain: domain || globalConfig.domain,
+      extension: extension || '',
+      password: password || '',
+      displayName: displayName || req.user.username || '',
+      updatedAt: Date.now()
+    };
+
+    db.setSetting(`user_${userId}_voip`, voipConfig);
+
+    console.log(`[Auth] User ${userId} updated their VoIP config: ext ${extension}`);
+
+    res.json({
+      success: true,
+      message: 'Configuration VoIP sauvegardée',
+      config: {
+        ...voipConfig,
+        password: voipConfig.password ? '[SET]' : '' // Don't return actual password
+      }
+    });
+  } catch (error) {
+    console.error('Erreur set user voip:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// User: Get my VoIP config
+router.get('/me/voip', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const config = db.getSetting(`user_${userId}_voip`);
+
+    // Get global config for reference
+    const globalConfig = {
+      server: process.env.VOIP_WSS_URL || '',
+      domain: process.env.VOIP_DOMAIN || '',
+      defaultExtension: process.env.VOIP_EXTENSION || '',
+    };
+
+    res.json({
+      success: true,
+      config: config ? {
+        ...config,
+        password: config.password ? '[SET]' : '' // Don't return actual password
+      } : null,
+      globalConfig,
+      hasConfig: !!(config && config.extension)
+    });
+  } catch (error) {
+    console.error('Erreur get user voip:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // Admin: Configurer VoIP d'un utilisateur
 router.put('/users/:id/voip', verifyToken, isAdmin, async (req, res) => {
   try {
