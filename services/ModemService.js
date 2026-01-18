@@ -1232,7 +1232,7 @@ msg_storage=${msgStorage}
 msg_direct=off
 usecallingpres=yes
 callingpres=allowed_passed_screen
-dtmf=relaxed
+dtmf=relax
 `;
 
     // Si modems multiples fournis dans config
