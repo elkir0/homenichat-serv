@@ -333,8 +333,8 @@ router.get('/', async (req, res) => {
           }
         }
 
-        // PRIORITY 3: Fallback to global config if AMI failed
-        if (!amiCreated) {
+        // PRIORITY 3: Fallback to global config if extension creation failed
+        if (!extensionCreated) {
           if (globalConfig.extension && globalConfig.password) {
             // Global config has complete credentials
             result.voipCredentials = {
