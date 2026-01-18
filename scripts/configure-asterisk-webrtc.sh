@@ -78,6 +78,12 @@ type=transport
 protocol=ws
 bind=0.0.0.0:8088
 
+; Transport UDP (for classic SIP clients like Groundwire, Zoiper)
+[transport-udp]
+type=transport
+protocol=udp
+bind=0.0.0.0:5060
+
 ; =============================================================================
 ; DEFAULT EXTENSION: 1001 (Homenichat WebRTC)
 ; =============================================================================
