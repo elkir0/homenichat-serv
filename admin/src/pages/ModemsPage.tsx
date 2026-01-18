@@ -955,7 +955,59 @@ export default function ModemsPage() {
 
       {isLoading && <LinearProgress sx={{ mb: 2 }} />}
 
-      {/* Configuration Panel */}
+      {/* Modem Selector Tabs - MUST BE FIRST */}
+      {modemsList.length > 0 && (
+        <Paper sx={{ mb: 3 }}>
+          <Tabs
+            value={selectedTab}
+            onChange={(_, newValue) => setSelectedTab(newValue)}
+            variant="fullWidth"
+          >
+            {modemsList.map(([modemId, data], idx) => (
+              <Tab
+                key={modemId}
+                label={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <SimCardIcon />
+                    <Box sx={{ textAlign: 'left' }}>
+                      <Typography variant="body2" fontWeight={600}>
+                        {data.status.name || modemId}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {data.status.number || 'Non configuré'}
+                      </Typography>
+                    </Box>
+                    <Box
+                      sx={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: '50%',
+                        ml: 1,
+                        backgroundColor:
+                          data.status.state === 'Free'
+                            ? theme.palette.success.main
+                            : data.status.needsPin || data.status.state?.toLowerCase().includes('pin')
+                            ? theme.palette.warning.main
+                            : data.status.state === 'Unknown' || data.status.state?.toLowerCase().includes('not init')
+                            ? theme.palette.error.main
+                            : theme.palette.warning.main,
+                      }}
+                    />
+                  </Box>
+                }
+              />
+            ))}
+          </Tabs>
+        </Paper>
+      )}
+
+      {modemsList.length === 0 && !isLoading && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          Aucun modem détecté. Vérifiez la connexion USB et la configuration chan_quectel.
+        </Alert>
+      )}
+
+      {/* Configuration Panel - For selected modem */}
       <Card sx={{ mb: 3 }}>
         <CardContent sx={{ pb: configExpanded ? 2 : '16px !important' }}>
           <Box
@@ -970,7 +1022,7 @@ export default function ModemsPage() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <SettingsIcon sx={{ color: 'primary.main' }} />
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                Configuration Modem
+                Configuration {modemsList.length > 0 && modemsList[selectedTab] ? `- ${modemsList[selectedTab][1].status.name || modemsList[selectedTab][0]}` : 'Modem'}
               </Typography>
               {modemConfigData?.config?.modemType && (
                 <Chip
@@ -1178,7 +1230,7 @@ export default function ModemsPage() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <SendIcon color="primary" />
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                Configuration SMS
+                Configuration SMS {modemsList.length > 0 && modemsList[selectedTab] ? `- ${modemsList[selectedTab][1].status.name || modemsList[selectedTab][0]}` : ''}
               </Typography>
             </Box>
             <FormControlLabel
@@ -1323,50 +1375,6 @@ export default function ModemsPage() {
           </Collapse>
         </CardContent>
       </Card>
-
-      {/* Tabs for each modem */}
-      {modemsList.length > 0 && (
-        <Paper sx={{ mb: 3 }}>
-          <Tabs
-            value={selectedTab}
-            onChange={(_, newValue) => setSelectedTab(newValue)}
-            variant="fullWidth"
-          >
-            {modemsList.map(([modemId, data]) => (
-              <Tab
-                key={modemId}
-                label={
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <SimCardIcon />
-                    {data.status.name || modemId}
-                    <Box
-                      sx={{
-                        width: 10,
-                        height: 10,
-                        borderRadius: '50%',
-                        backgroundColor:
-                          data.status.state === 'Free'
-                            ? theme.palette.success.main
-                            : data.status.needsPin || data.status.state?.toLowerCase().includes('pin')
-                            ? theme.palette.warning.main
-                            : data.status.state === 'Unknown' || data.status.state?.toLowerCase().includes('not init')
-                            ? theme.palette.error.main
-                            : theme.palette.warning.main,
-                      }}
-                    />
-                  </Box>
-                }
-              />
-            ))}
-          </Tabs>
-        </Paper>
-      )}
-
-      {modemsList.length === 0 && !isLoading && (
-        <Alert severity="info" sx={{ mb: 3 }}>
-          Aucun modem détecté. Vérifiez la connexion USB et la configuration chan_quectel.
-        </Alert>
-      )}
 
       {/* Modem Content */}
       {modemsList.map(([modemId, data], idx) => (
