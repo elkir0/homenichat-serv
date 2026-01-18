@@ -711,119 +711,17 @@ install_chan_quectel() {
 
     cd /usr/src
 
-    # Clone chan_quectel (RoEdAl fork - the one that works)
-    if [ -d "asterisk-chan-quectel" ]; then
-        rm -rf asterisk-chan-quectel
-    fi
-
-    info "Cloning chan_quectel (RoEdAl fork)..."
-    git clone https://github.com/RoEdAl/asterisk-chan-quectel.git >> "$LOG_FILE" 2>&1 || {
-        warning "Could not clone chan_quectel"
-        return 1
-    }
-
-    cd asterisk-chan-quectel
-
-    # Use specific commit that works (from user's VM500 setup)
-    git checkout 37b566f >> "$LOG_FILE" 2>&1 || {
-        warning "Could not checkout known working commit, using latest"
-    }
-
-    info "Building chan_quectel with CMake (Release mode)..."
-    mkdir -p build && cd build
-
-    # Run cmake with error checking
-    info "Running cmake..."
-    if ! cmake -DCMAKE_BUILD_TYPE=Release .. >> "$LOG_FILE" 2>&1; then
-        error "cmake failed! Check $LOG_FILE for details"
-        echo "=== CMAKE ERROR ===" >> "$LOG_FILE"
-        cmake -DCMAKE_BUILD_TYPE=Release .. >> "$LOG_FILE" 2>&1 || true
-        warning "chan_quectel compilation failed at cmake stage"
-        cd /usr/src
-        return 1
-    fi
-
-    # Run make with error checking
-    info "Running make..."
-    if ! make -j$(nproc) >> "$LOG_FILE" 2>&1; then
-        error "make failed! Check $LOG_FILE for details"
-        warning "chan_quectel compilation failed at make stage"
-        cd /usr/src
-        return 1
-    fi
-
-    # Install
-    info "Installing chan_quectel module..."
-    make install >> "$LOG_FILE" 2>&1
-
-    # CMake installs to /usr/local/lib/*/asterisk/modules/ - copy to correct location
-    ARCH=$(uname -m)
-    if [ "$ARCH" = "aarch64" ]; then
-        LIB_ARCH="aarch64-linux-gnu"
-    elif [ "$ARCH" = "x86_64" ]; then
-        LIB_ARCH="x86_64-linux-gnu"
-    else
-        LIB_ARCH="$ARCH-linux-gnu"
-    fi
-
-    # Find the compiled module
-    CHAN_QUECTEL_SO="/usr/local/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so"
-
-    # Copy to all possible Asterisk module locations
-    # FreePBX uses /lib/x86_64-linux-gnu/asterisk/modules/
-    # Standalone uses /usr/lib/asterisk/modules/
-    if [ -f "$CHAN_QUECTEL_SO" ]; then
-        # FreePBX location (Debian packages)
-        mkdir -p "/lib/${LIB_ARCH}/asterisk/modules" 2>/dev/null || true
-        cp "$CHAN_QUECTEL_SO" "/lib/${LIB_ARCH}/asterisk/modules/" 2>/dev/null || true
-
-        # Standard location
-        mkdir -p /usr/lib/asterisk/modules 2>/dev/null || true
-        cp "$CHAN_QUECTEL_SO" /usr/lib/asterisk/modules/ 2>/dev/null || true
-
-        info "chan_quectel.so copied to Asterisk module directories"
-    else
-        warning "chan_quectel.so not found at expected location"
-    fi
-
-    cd /usr/src
-
-    # Create SMS database directories
-    mkdir -p /var/lib/asterisk/smsdb
-    chown asterisk:asterisk /var/lib/asterisk/smsdb 2>/dev/null || true
-
-    # Ensure chan_quectel is loaded at startup
-    # The load directive MUST be under [modules] section to work
-    if [ -f /etc/asterisk/modules.conf ]; then
-        if ! grep -q "chan_quectel.so" /etc/asterisk/modules.conf 2>/dev/null; then
-            # Check if [modules] section exists
-            if grep -q "^\[modules\]" /etc/asterisk/modules.conf 2>/dev/null; then
-                # Insert load directive right after [modules] section
-                sed -i '/^\[modules\]/a \; Homenichat - Load chan_quectel for GSM modems\nload => chan_quectel.so' /etc/asterisk/modules.conf
-                info "Added chan_quectel.so to modules.conf [modules] section"
-            else
-                # No [modules] section - add it at the beginning of the file
-                sed -i '1i [modules]\nautoload=yes\n\n; Homenichat - Load chan_quectel for GSM modems\nload => chan_quectel.so\n' /etc/asterisk/modules.conf
-                info "Added [modules] section with chan_quectel.so to modules.conf"
-            fi
-        else
-            info "chan_quectel.so already in modules.conf"
-        fi
-    else
-        # Create modules.conf if it doesn't exist
-        cat > /etc/asterisk/modules.conf << 'MODULES_CONF'
-[modules]
-autoload=yes
-
-; Homenichat - Load chan_quectel for GSM modems
-load => chan_quectel.so
-MODULES_CONF
-        info "Created modules.conf with chan_quectel"
-    fi
+    # =========================================================================
+    # CONFIGURATION SECTION - Always runs (even if compilation fails later)
+    # =========================================================================
 
     # Add asterisk user to dialout group for serial port access
     info "Adding asterisk user to dialout group..."
     usermod -aG dialout asterisk 2>/dev/null || true
+
+    # Create SMS database directories
+    mkdir -p /var/lib/asterisk/smsdb
+    chown asterisk:asterisk /var/lib/asterisk/smsdb 2>/dev/null || true
 
     # Detect modem type and count
     # SIM7600: vendor 1e0e, uses slin16=yes, data=ttyUSB2, audio=ttyUSB4
@@ -939,26 +837,17 @@ MODEM_CONF
 MODEM_TEMPLATE
     fi
 
+    info "Created /etc/asterisk/quectel.conf"
+
     # Create symlink for /usr/local/etc/asterisk compatibility
     mkdir -p /usr/local/etc/asterisk
     if [ ! -L /usr/local/etc/asterisk/quectel.conf ]; then
         ln -sf /etc/asterisk/quectel.conf /usr/local/etc/asterisk/quectel.conf
-        info "Created symlink /usr/local/etc/asterisk/quectel.conf -> /etc/asterisk/quectel.conf"
-    fi
-
-    # Detect if running in LXC container
-    local IN_LXC=false
-    if [ -f /proc/1/environ ] && grep -qa "container=lxc" /proc/1/environ 2>/dev/null; then
-        IN_LXC=true
-    elif [ -d /proc/vz ] && [ ! -d /proc/bc ]; then
-        IN_LXC=true
-    elif grep -qa "lxc" /proc/1/cgroup 2>/dev/null; then
-        IN_LXC=true
+        info "Created symlink /usr/local/etc/asterisk/quectel.conf"
     fi
 
     # Create udev rules for consistent device naming AND permissions
     # MODE="0666" ensures asterisk (and any user) can access the ports
-    # GROUP="dialout" allows dialout group members access
     cat > /etc/udev/rules.d/99-quectel.rules << 'UDEV_RULES'
 # Quectel EC25/SIM7600 modems - permissions and symlinks
 # MODE="0666" allows Asterisk to access ports without root
@@ -978,10 +867,138 @@ UDEV_RULES
     udevadm control --reload-rules 2>/dev/null || true
     udevadm trigger 2>/dev/null || true
 
-    # Also set permissions on existing ttyUSB devices immediately
+    # Set permissions on existing ttyUSB devices immediately
     chmod 666 /dev/ttyUSB* 2>/dev/null || true
 
     info "Udev rules installed with proper permissions"
+
+    # =========================================================================
+    # COMPILATION SECTION - May fail, but configuration is already done
+    # =========================================================================
+
+    # Clone chan_quectel (RoEdAl fork - the one that works)
+    if [ -d "asterisk-chan-quectel" ]; then
+        rm -rf asterisk-chan-quectel
+    fi
+
+    # Track if compilation succeeds
+    local CHAN_QUECTEL_COMPILED=false
+
+    info "Cloning chan_quectel (RoEdAl fork)..."
+    if git clone https://github.com/RoEdAl/asterisk-chan-quectel.git >> "$LOG_FILE" 2>&1; then
+        cd asterisk-chan-quectel
+
+        # Use specific commit that works (from user's VM500 setup)
+        git checkout 37b566f >> "$LOG_FILE" 2>&1 || {
+            warning "Could not checkout known working commit, using latest"
+        }
+
+        info "Building chan_quectel with CMake (Release mode)..."
+        mkdir -p build && cd build
+
+        # Run cmake with error checking
+        info "Running cmake..."
+        if cmake -DCMAKE_BUILD_TYPE=Release .. >> "$LOG_FILE" 2>&1; then
+            # Run make with error checking
+            info "Running make..."
+            if make -j$(nproc) >> "$LOG_FILE" 2>&1; then
+                # Install
+                info "Installing chan_quectel module..."
+                if make install >> "$LOG_FILE" 2>&1; then
+                    CHAN_QUECTEL_COMPILED=true
+                    success "chan_quectel compiled and installed successfully"
+                else
+                    warning "make install failed"
+                fi
+            else
+                error "make failed! Check $LOG_FILE for details"
+                warning "chan_quectel compilation failed at make stage"
+            fi
+        else
+            error "cmake failed! Check $LOG_FILE for details"
+            echo "=== CMAKE ERROR ===" >> "$LOG_FILE"
+            cmake -DCMAKE_BUILD_TYPE=Release .. >> "$LOG_FILE" 2>&1 || true
+            warning "chan_quectel compilation failed at cmake stage"
+        fi
+
+        cd /usr/src
+    else
+        warning "Could not clone chan_quectel - check network connectivity"
+    fi
+
+    # Continue with module installation even if compilation failed
+    # (user can manually compile later)
+
+    # CMake installs to /usr/local/lib/*/asterisk/modules/ - copy to correct location
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "aarch64" ]; then
+        LIB_ARCH="aarch64-linux-gnu"
+    elif [ "$ARCH" = "x86_64" ]; then
+        LIB_ARCH="x86_64-linux-gnu"
+    else
+        LIB_ARCH="$ARCH-linux-gnu"
+    fi
+
+    # Find the compiled module
+    CHAN_QUECTEL_SO="/usr/local/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so"
+
+    # Copy to all possible Asterisk module locations
+    # FreePBX uses /lib/x86_64-linux-gnu/asterisk/modules/
+    # Standalone uses /usr/lib/asterisk/modules/
+    if [ -f "$CHAN_QUECTEL_SO" ]; then
+        # FreePBX location (Debian packages)
+        mkdir -p "/lib/${LIB_ARCH}/asterisk/modules" 2>/dev/null || true
+        cp "$CHAN_QUECTEL_SO" "/lib/${LIB_ARCH}/asterisk/modules/" 2>/dev/null || true
+
+        # Standard location
+        mkdir -p /usr/lib/asterisk/modules 2>/dev/null || true
+        cp "$CHAN_QUECTEL_SO" /usr/lib/asterisk/modules/ 2>/dev/null || true
+
+        info "chan_quectel.so copied to Asterisk module directories"
+    else
+        warning "chan_quectel.so not found at expected location"
+    fi
+
+    cd /usr/src
+
+    # Ensure chan_quectel is loaded at startup
+    # The load directive MUST be under [modules] section to work
+    if [ -f /etc/asterisk/modules.conf ]; then
+        if ! grep -q "chan_quectel.so" /etc/asterisk/modules.conf 2>/dev/null; then
+            # Check if [modules] section exists
+            if grep -q "^\[modules\]" /etc/asterisk/modules.conf 2>/dev/null; then
+                # Insert load directive right after [modules] section
+                sed -i '/^\[modules\]/a \; Homenichat - Load chan_quectel for GSM modems\nload => chan_quectel.so' /etc/asterisk/modules.conf
+                info "Added chan_quectel.so to modules.conf [modules] section"
+            else
+                # No [modules] section - add it at the beginning of the file
+                sed -i '1i [modules]\nautoload=yes\n\n; Homenichat - Load chan_quectel for GSM modems\nload => chan_quectel.so\n' /etc/asterisk/modules.conf
+                info "Added [modules] section with chan_quectel.so to modules.conf"
+            fi
+        else
+            info "chan_quectel.so already in modules.conf"
+        fi
+    else
+        # Create modules.conf if it doesn't exist
+        cat > /etc/asterisk/modules.conf << 'MODULES_CONF'
+[modules]
+autoload=yes
+
+; Homenichat - Load chan_quectel for GSM modems
+load => chan_quectel.so
+MODULES_CONF
+        info "Created modules.conf with chan_quectel"
+    fi
+
+    # Detect if running in LXC container
+    local IN_LXC=false
+    if [ -f /proc/1/environ ] && grep -qa "container=lxc" /proc/1/environ 2>/dev/null; then
+        IN_LXC=true
+    elif [ -d /proc/vz ] && [ ! -d /proc/bc ]; then
+        IN_LXC=true
+    elif grep -qa "lxc" /proc/1/cgroup 2>/dev/null; then
+        IN_LXC=true
+    fi
 
     # If in LXC container, show important message about host configuration
     if [ "$IN_LXC" = true ]; then
