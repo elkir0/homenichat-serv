@@ -1184,27 +1184,36 @@ except Exception as e:
   }
 
   /**
+   * Calcule le port audio à partir du port data selon le type de modem
+   * SIM7600: audio = data + 2 (5 ports par modem: 0=diag, 1=gps, 2=AT, 3=ppp, 4=audio)
+   * EC25: audio = data - 1 (4 ports par modem: 0=diag, 1=audio, 2=AT, 3=ppp)
+   */
+  calculateAudioPort(dataPort, modemType) {
+    const match = dataPort.match(/(\d+)$/);
+    if (!match) return dataPort;
+
+    const portNum = parseInt(match[1], 10);
+    const offset = modemType === 'sim7600' ? 2 : -1;
+    const audioNum = portNum + offset;
+
+    return dataPort.replace(/\d+$/, audioNum.toString());
+  }
+
+  /**
    * Génère le fichier quectel.conf pour Asterisk
+   * Supporte plusieurs modems avec détection automatique
    */
   generateQuectelConf(config = {}) {
     const mergedConfig = { ...this.modemConfig, ...config };
-    const profile = MODEM_PROFILES[mergedConfig.modemType] || MODEM_PROFILES.ec25;
     const smsConfig = mergedConfig.sms || {};
-
-    const modemName = mergedConfig.modemName || 'hni-modem';
-    const dataPort = mergedConfig.dataPort || '/dev/ttyUSB2';
-    // Default audio port depends on modem type: SIM7600=USB4, EC25=USB1
-    const defaultAudioPort = profile.name === 'SIM7600' ? '/dev/ttyUSB4' : '/dev/ttyUSB1';
-    const audioPort = mergedConfig.audioPort || defaultAudioPort;
 
     // Mapping stockage SMS: sqlite/modem -> 'me', sim -> 'sm'
     const msgStorage = smsConfig.storage === 'sim' ? 'sm' : 'me';
     const autoDeleteSms = smsConfig.autoDelete !== false ? 'yes' : 'no';
 
     // Configuration basée sur VM500 (production fonctionnelle)
-    const confContent = `; Homenichat - Configuration chan_quectel
+    let confContent = `; Homenichat - Configuration chan_quectel
 ; Généré automatiquement - ${new Date().toISOString()}
-; Type de modem: ${profile.name}
 ; Basé sur config VM500 production
 
 [general]
@@ -1224,7 +1233,33 @@ msg_direct=off
 usecallingpres=yes
 callingpres=allowed_passed_screen
 dtmf=relaxed
+`;
 
+    // Si modems multiples fournis dans config
+    if (config.modems && Array.isArray(config.modems) && config.modems.length > 0) {
+      for (const modem of config.modems) {
+        const profile = MODEM_PROFILES[modem.type?.toLowerCase()] || MODEM_PROFILES.sim7600;
+        const dataPort = modem.dataPort || '/dev/ttyUSB2';
+        const audioPort = modem.audioPort || this.calculateAudioPort(dataPort, modem.type?.toLowerCase() || 'sim7600');
+        const modemName = modem.name || modem.id || 'hni-modem';
+
+        confContent += `
+[${modemName}]
+data=${dataPort}
+audio=${audioPort}
+slin16=${profile.slin16 ? 'yes' : 'no'}
+${modem.imsi ? `imsi=${modem.imsi}` : '; imsi sera détecté automatiquement'}
+${modem.phoneNumber ? `exten=+${modem.phoneNumber.replace(/^\+/, '')}` : ''}
+`;
+      }
+    } else {
+      // Mode single modem (compatibilité)
+      const profile = MODEM_PROFILES[mergedConfig.modemType] || MODEM_PROFILES.sim7600;
+      const modemName = mergedConfig.modemName || 'hni-modem';
+      const dataPort = mergedConfig.dataPort || '/dev/ttyUSB2';
+      const audioPort = mergedConfig.audioPort || this.calculateAudioPort(dataPort, mergedConfig.modemType || 'sim7600');
+
+      confContent += `
 [${modemName}]
 data=${dataPort}
 audio=${audioPort}
@@ -1232,6 +1267,7 @@ slin16=${profile.slin16 ? 'yes' : 'no'}
 ${mergedConfig.imsi ? `imsi=${mergedConfig.imsi}` : '; imsi sera détecté automatiquement'}
 ${mergedConfig.phoneNumber ? `exten=+${mergedConfig.phoneNumber.replace(/^\+/, '')}` : ''}
 `;
+    }
 
     return confContent;
   }
@@ -1302,6 +1338,79 @@ ${mergedConfig.phoneNumber ? `exten=+${mergedConfig.phoneNumber.replace(/^\+/, '
     } catch (error) {
       this.logger.error('[ModemService] Error reading quectel.conf:', error);
       return null;
+    }
+  }
+
+  /**
+   * Auto-détecte tous les modems et génère quectel.conf
+   * Ne remplace pas si une config valide avec modems existe déjà
+   */
+  async autoGenerateQuectelConf(forceRegenerate = false) {
+    try {
+      // Vérifier si config existante est valide
+      if (!forceRegenerate) {
+        const existingConf = this.readQuectelConf();
+        if (existingConf) {
+          // Compter les sections modem (lignes commençant par [xxx] sauf general/defaults)
+          const modemSections = existingConf.match(/^\[(?!general|defaults)[a-zA-Z0-9_-]+\]/gm) || [];
+          if (modemSections.length > 0) {
+            this.logger.info(`[ModemService] Existing quectel.conf has ${modemSections.length} modem(s), skipping auto-generation`);
+            return {
+              success: true,
+              skipped: true,
+              message: `Config existante avec ${modemSections.length} modem(s) - non modifiée`,
+              modems: modemSections.map(s => s.replace(/[\[\]]/g, '')),
+            };
+          }
+        }
+      }
+
+      // Détecter les modems connectés
+      const detected = await this.detectUsbPorts();
+
+      if (!detected.modems || detected.modems.length === 0) {
+        this.logger.warn('[ModemService] No modems detected for auto-config');
+        return {
+          success: false,
+          message: 'Aucun modem détecté',
+        };
+      }
+
+      this.logger.info(`[ModemService] Auto-generating config for ${detected.modems.length} modem(s)`);
+
+      // Générer la config avec tous les modems détectés
+      const confContent = this.generateQuectelConf({ modems: detected.modems });
+
+      // Écrire le fichier
+      fs.writeFileSync(QUECTEL_CONF_PATH, confContent);
+      this.logger.info('[ModemService] quectel.conf auto-generated');
+
+      // Créer le symlink si nécessaire
+      const symlinkPath = '/usr/local/etc/asterisk/quectel.conf';
+      try {
+        if (!fs.existsSync('/usr/local/etc/asterisk')) {
+          fs.mkdirSync('/usr/local/etc/asterisk', { recursive: true });
+        }
+        if (!fs.existsSync(symlinkPath)) {
+          fs.symlinkSync(QUECTEL_CONF_PATH, symlinkPath);
+          this.logger.info('[ModemService] Created symlink for quectel.conf');
+        }
+      } catch (e) {
+        // Symlink creation is optional
+      }
+
+      // Recharger Asterisk
+      await this.asteriskCmd('module reload chan_quectel');
+
+      return {
+        success: true,
+        message: `Configuration générée pour ${detected.modems.length} modem(s)`,
+        modems: detected.modems,
+        confPath: QUECTEL_CONF_PATH,
+      };
+    } catch (error) {
+      this.logger.error('[ModemService] Auto-generate quectel.conf failed:', error);
+      throw error;
     }
   }
 
