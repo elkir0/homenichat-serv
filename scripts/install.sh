@@ -849,7 +849,8 @@ EXTENSIONS_SMS
 
     # Configure AMI (Asterisk Manager Interface) for Homenichat
     info "Configuring AMI for Homenichat..."
-    AMI_PASSWORD=$(openssl rand -hex 12)
+    # Use global variable so configure_env can include it in .env
+    export AMI_PASSWORD=$(openssl rand -hex 12)
 
     cat > /etc/asterisk/manager.conf << MANAGER_CONF
 [general]
@@ -865,20 +866,8 @@ deny = 0.0.0.0/0.0.0.0
 permit = 127.0.0.1/255.255.255.255
 MANAGER_CONF
 
-    # Add AMI credentials to .env
-    if [ -f "$INSTALL_DIR/.env" ]; then
-        # Remove old AMI config if exists
-        sed -i '/^AMI_/d' "$INSTALL_DIR/.env"
-    fi
-
-    cat >> "$INSTALL_DIR/.env" << AMI_ENV
-
-# AMI Configuration (auto-generated)
-AMI_HOST=127.0.0.1
-AMI_PORT=5038
-AMI_USERNAME=homenichat
-AMI_PASSWORD=${AMI_PASSWORD}
-AMI_ENV
+    # AMI credentials will be added to .env by configure_env function
+    # (stored in global AMI_PASSWORD variable)
 
     # Reload Asterisk manager
     asterisk -rx "manager reload" 2>/dev/null || true
@@ -1269,6 +1258,19 @@ DB_PATH=$DATA_DIR/homenichat.db
 JWT_SECRET=$JWT_SECRET_VAL
 SESSION_SECRET=$SESSION_SECRET_VAL
 ENV_FILE
+
+    # Add AMI configuration if Asterisk was installed
+    if [ "$INSTALL_ASTERISK" = true ] && [ -n "$AMI_PASSWORD" ]; then
+        cat >> "$CONFIG_DIR/.env" << AMI_ENV
+
+# AMI Configuration (auto-generated)
+AMI_HOST=127.0.0.1
+AMI_PORT=5038
+AMI_USERNAME=homenichat
+AMI_PASSWORD=${AMI_PASSWORD}
+AMI_ENV
+        info "AMI credentials added to .env"
+    fi
 
     chmod 600 "$CONFIG_DIR/.env"
 
