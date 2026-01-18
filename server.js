@@ -18,7 +18,9 @@ const chatsRoutes = require('./routes/chats');
 const mediaRoutes = require('./routes/media');
 const sessionsRoutes = require('./routes/sessions');
 const callHistoryRoutes = require('./routes/call-history');
+const cdrRoutes = require('./routes/cdr');
 const configRoutes = require('./routes/config');
+const mobileCompatRoutes = require('./routes/mobile-compat');
 const { router: adminRouter, initAdminRoutes } = require('./routes/admin');
 const { router: discoveryRouter, initDiscoveryRoutes } = require('./routes/discovery');
 // const MessagePoller = require('./messagePoller');
@@ -196,7 +198,8 @@ app.use('/api/sessions', sessionsRoutes);
 app.use('/api/chats', chatsRoutes);
 app.use('/api/contacts', require('./routes/contacts')); // Ajout de la route contacts
 app.use('/api/notifications', require('./routes/notifications')); // Push notifications
-app.use('/api/calls', callHistoryRoutes); // Historique d'appels partagé
+app.use('/api/calls', callHistoryRoutes); // Historique d'appels partagé (local)
+app.use('/api/cdr', cdrRoutes); // CDR API - Asterisk/FreePBX MySQL
 app.use('/api/config', configRoutes); // Configuration YAML multi-provider
 
 // Routes Admin (protégées par auth + admin only)
@@ -208,6 +211,10 @@ app.get('/api/discovery/health', (req, res) => {
   res.json({ status: 'ok', server: 'Homenichat-serv', timestamp: Date.now() });
 });
 app.use('/api/discovery', verifyToken, discoveryRouter);
+
+// Routes de compatibilité pour les apps mobiles (iOS/Android)
+// Ces routes fournissent des alias vers les endpoints v2 avec le format attendu par les apps
+app.use('/api', mobileCompatRoutes);
 
 // Endpoint configuration VoIP (protégé par token)
 app.get('/api/config/voip', verifyToken, (req, res) => {
@@ -736,6 +743,24 @@ async function startServer() {
     const voipPushService = require('./services/VoIPPushService');
     logger.info(`[VoIPPush] Service status: ${voipPushService.isConfigured ? 'CONFIGURED' : 'NOT CONFIGURED (simulation mode)'}`);
 
+    // Initialiser AsteriskCDRService (optionnel - nécessite configuration MySQL)
+    if (process.env.ASTERISK_CDR_HOST || process.env.CDR_ENABLED === 'true') {
+      const asteriskCDRService = require('./services/AsteriskCDRService');
+      try {
+        await asteriskCDRService.configure({
+          host: process.env.ASTERISK_CDR_HOST,
+          port: process.env.ASTERISK_CDR_PORT,
+          user: process.env.ASTERISK_CDR_USER,
+          password: process.env.ASTERISK_CDR_PASSWORD,
+          database: process.env.ASTERISK_CDR_DATABASE
+        });
+        logger.info('AsteriskCDRService initialized successfully');
+      } catch (error) {
+        logger.warn(`AsteriskCDRService initialization failed: ${error.message}`);
+      }
+    } else {
+      logger.info('AsteriskCDRService disabled (set ASTERISK_CDR_HOST or CDR_ENABLED=true to enable)');
+    }
 
     // Démarrage du serveur
     server.listen(PORT, () => {

@@ -40,23 +40,31 @@ function initDiscoveryRoutes(services) {
  */
 router.get('/', async (req, res) => {
   try {
+    // Build base URL from request
+    const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const baseUrl = `${protocol}://${host}`;
+
     const result = {
       server: {
         name: 'Homenichat-serv',
         version: '1.0.0',
         timestamp: Date.now(),
+        baseUrl, // Include server URL for auto-config
         capabilities: {
           whatsapp: true,
           sms: true,
           voip: true,
           modems: true,
           webrtc: true,
+          cdr: true, // CDR API capability
         },
       },
       whatsapp: [],
       sms: [],
       voip: [],
       modems: [],
+      cdr: null, // CDR configuration for mobile app
     };
 
     if (!providerManager) {
@@ -140,6 +148,47 @@ router.get('/', async (req, res) => {
       // ModemService not available or no modems - skip
     }
 
+    // Get CDR API configuration (for 1-click setup)
+    try {
+      const asteriskCDRService = require('../services/AsteriskCDRService');
+      const cdrStatus = await asteriskCDRService.getStatus();
+
+      if (cdrStatus.connected) {
+        // CDR is configured and connected
+        // The mobile app will use the same JWT token for authentication
+        // or can use CDR_API_TOKEN if configured
+        result.cdr = {
+          enabled: true,
+          apiUrl: `${baseUrl}/api/cdr`, // Same server, /api/cdr endpoint
+          // Don't expose the token here - the app should use the same JWT
+          // or the user can configure CDR_API_TOKEN manually
+          useJwtAuth: true, // Indicates to use the same JWT token
+          status: 'connected',
+          host: cdrStatus.host,
+          totalRecords: cdrStatus.totalRecords || 0,
+        };
+
+        // If user has specific extensions configured, include them
+        if (req.user && req.user.id && db) {
+          const userVoip = db.getSetting(`user_${req.user.id}_voip`);
+          if (userVoip && userVoip.extension) {
+            result.cdr.extensions = [userVoip.extension];
+          }
+        }
+      } else {
+        result.cdr = {
+          enabled: false,
+          status: 'not_configured',
+        };
+      }
+    } catch (e) {
+      // CDR service not available
+      result.cdr = {
+        enabled: false,
+        status: 'not_available',
+      };
+    }
+
     // Log discovery access
     if (securityService && req.user) {
       await securityService.logAction(req.user.id, 'discovery_accessed', {
@@ -187,7 +236,7 @@ router.post('/connect', async (req, res) => {
     }
 
     // Return connection confirmation with discovery data
-    const discovery = await getDiscoveryData();
+    const discovery = await getDiscoveryData(req);
 
     res.json({
       success: true,
@@ -221,17 +270,28 @@ router.get('/health', (req, res) => {
 /**
  * Helper function to get discovery data
  */
-async function getDiscoveryData() {
+async function getDiscoveryData(req) {
+  // Build base URL from request if available
+  let baseUrl = '';
+  if (req) {
+    const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    baseUrl = `${protocol}://${host}`;
+  }
+
   const result = {
     server: {
       name: 'Homenichat-serv',
       version: '1.0.0',
       timestamp: Date.now(),
+      baseUrl,
     },
     whatsapp: [],
     sms: [],
     voip: [],
     modems: [],
+    cdr: null,
+    voipCredentials: null, // For 1-click VoIP setup
   };
 
   if (!providerManager) return result;
@@ -249,6 +309,55 @@ async function getDiscoveryData() {
       status: connState.isConnected ? 'connected' : 'disconnected',
       phone: phoneNumber,
     });
+  }
+
+  // CDR configuration
+  try {
+    const asteriskCDRService = require('../services/AsteriskCDRService');
+    const cdrStatus = await asteriskCDRService.getStatus();
+
+    if (cdrStatus.connected) {
+      result.cdr = {
+        enabled: true,
+        apiUrl: `${baseUrl}/api/cdr`,
+        useJwtAuth: true,
+        status: 'connected',
+        totalRecords: cdrStatus.totalRecords || 0,
+      };
+    }
+  } catch (e) {
+    // CDR not available
+  }
+
+  // VoIP credentials for 1-click setup
+  if (req && req.user && db) {
+    const userVoip = db.getSetting(`user_${req.user.id}_voip`);
+    const globalConfig = {
+      server: process.env.VOIP_WSS_URL || '',
+      domain: process.env.VOIP_DOMAIN || '',
+    };
+
+    if (userVoip && userVoip.enabled && userVoip.extension) {
+      result.voipCredentials = {
+        server: userVoip.wssUrl || globalConfig.server,
+        domain: userVoip.domain || globalConfig.domain,
+        extension: userVoip.extension,
+        // Don't expose password in discovery, app should fetch via /api/voip/credentials
+        hasPassword: !!userVoip.password,
+      };
+
+      // Also add extension to CDR filter
+      if (result.cdr && result.cdr.enabled) {
+        result.cdr.extensions = [userVoip.extension];
+      }
+    } else if (globalConfig.server) {
+      result.voipCredentials = {
+        server: globalConfig.server,
+        domain: globalConfig.domain,
+        extension: process.env.VOIP_EXTENSION || '',
+        hasPassword: !!process.env.VOIP_PASSWORD,
+      };
+    }
   }
 
   return result;
