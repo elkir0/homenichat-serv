@@ -271,6 +271,156 @@ sudo systemctl restart asterisk
 
 ---
 
+## 🌐 Network Ports & Firewall Configuration
+
+### Minimal Ports for Internet Exposure
+
+For a **plug-and-play** deployment accessible from internet, open only these ports:
+
+| Port | Protocol | Service | Required For | Priority |
+|------|----------|---------|--------------|----------|
+| **443** | TCP | HTTPS | Web interface + API + WebRTC (via reverse proxy) | **Essential** |
+| **5061** | TCP | SIP TLS | Native SIP clients (Groundwire, Zoiper) | Optional |
+| **10000-10100** | UDP | RTP | Voice media packets | **Essential** |
+
+> 💡 **Recommended Setup:** Use a reverse proxy (Caddy/nginx) on port 443 to handle everything. This minimizes attack surface.
+
+### Complete Port Reference
+
+#### Homenichat Core Services
+
+| Port | Protocol | Service | Description | Expose to Internet? |
+|------|----------|---------|-------------|---------------------|
+| 3001 | TCP | Homenichat API | REST API + WebSocket | Via reverse proxy only |
+| 8080 | TCP | Admin UI | Web administration panel | Via reverse proxy only |
+
+#### VoIP / WebRTC Ports
+
+| Port | Protocol | Service | Description | Expose to Internet? |
+|------|----------|---------|-------------|---------------------|
+| 5060 | UDP | SIP | Standard SIP signaling | ⚠️ Not recommended (unencrypted) |
+| 5061 | TCP | SIP TLS | Secure SIP signaling | ✅ Yes for native SIP clients |
+| 8088 | TCP | WebSocket (WS) | Non-SSL WebRTC | ❌ Local testing only |
+| 8089 | TCP | WebSocket (WSS) | SSL WebRTC signaling | Via reverse proxy (or direct) |
+| 10000-10100 | UDP | RTP | Voice/video media | ✅ Yes (required for audio) |
+
+#### FreePBX Management (Internal Only)
+
+| Port | Protocol | Service | Description | Expose to Internet? |
+|------|----------|---------|-------------|---------------------|
+| 80 | TCP | HTTP | FreePBX web (redirects to 443) | ❌ Internal only |
+| 443 | TCP | HTTPS | FreePBX web interface | ❌ Internal only |
+| 5038 | TCP | AMI | Asterisk Manager Interface | ❌ Never expose |
+
+### Firewall Configuration Examples
+
+#### UFW (Ubuntu/Debian)
+
+```bash
+# Essential ports only (recommended)
+sudo ufw allow 443/tcp        # HTTPS (reverse proxy)
+sudo ufw allow 5061/tcp       # SIP TLS
+sudo ufw allow 10000:10100/udp  # RTP media
+
+# Enable firewall
+sudo ufw enable
+```
+
+#### iptables
+
+```bash
+# Essential ports
+iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+iptables -A INPUT -p tcp --dport 5061 -j ACCEPT
+iptables -A INPUT -p udp --dport 10000:10100 -j ACCEPT
+```
+
+### Reverse Proxy Configuration (Recommended)
+
+Using a single HTTPS port (443) with a reverse proxy provides the best security:
+
+#### Caddy (Automatic HTTPS)
+
+```caddyfile
+homenichat.example.com {
+    # WebRTC WebSocket
+    handle /ws {
+        reverse_proxy localhost:8089
+    }
+
+    # Homenichat API
+    handle /api/* {
+        reverse_proxy localhost:3001
+    }
+
+    # Admin interface
+    handle {
+        reverse_proxy localhost:3001
+    }
+}
+```
+
+#### Nginx
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name homenichat.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/homenichat.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/homenichat.example.com/privkey.pem;
+
+    # WebRTC WebSocket
+    location /ws {
+        proxy_pass http://127.0.0.1:8089;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400;
+    }
+
+    # Homenichat API & UI
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+### Client Connection Matrix
+
+| Client Type | Connection Method | Ports Used |
+|-------------|-------------------|------------|
+| **Homenichat App (WebRTC)** | WSS via HTTPS | 443 + RTP (10000-10100) |
+| **Browser (WebRTC)** | WSS via HTTPS | 443 + RTP (10000-10100) |
+| **Groundwire / Zoiper** | SIP TLS | 5061 + RTP (10000-10100) |
+| **Generic SIP Phone** | SIP UDP | 5060 + RTP (avoid if possible) |
+
+### NAT/Router Configuration
+
+If behind a NAT router, configure port forwarding:
+
+```
+External Port    →    Internal IP:Port
+443/TCP          →    192.168.x.x:443     (Reverse proxy)
+5061/TCP         →    192.168.x.x:5061    (SIP TLS)
+10000-10100/UDP  →    192.168.x.x:10000-10100  (RTP)
+```
+
+### Security Recommendations
+
+1. **Always use TLS** - Never expose plain SIP (5060) or WS (8088) to internet
+2. **Use fail2ban** - Protect against SIP brute force attacks
+3. **Limit RTP range** - 101 ports (10000-10100) is sufficient for 10 concurrent calls
+4. **Use strong passwords** - Change default FreePBX/AMI credentials
+5. **Regular updates** - Keep Asterisk and FreePBX patched
+
+---
+
 ## 🔐 SSL/HTTPS Configuration
 
 ### HTTP Mode (Default)
