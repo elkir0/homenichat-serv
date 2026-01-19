@@ -1,226 +1,136 @@
 /**
- * FreePBX API Service - Full Integration via GraphQL/REST
+ * FreePBX API Service - Full Integration via PHP Scripts
  *
  * This service integrates with FreePBX's native APIs to create
  * extensions and trunks that are visible in the FreePBX GUI.
  *
- * Authentication methods:
- * 1. OAuth2 (recommended for production)
- * 2. Session-based (for local server without OAuth)
- * 3. Direct PHP execution (fallback for trunks)
+ * Implementation uses PHP CLI scripts to avoid escaping issues
+ * and ensure correct FreePBX Core API usage.
  *
- * API Endpoints used:
- * - GraphQL: /admin/api/api/gql (extensions)
- * - REST: /admin/api/rest/core/ (trunks)
- * - PHP CLI: fwconsole (apply changes)
+ * PHP Scripts used:
+ * - freepbx-create-extension.php
+ * - freepbx-delete-extension.php
+ * - freepbx-create-trunk.php
+ * - freepbx-delete-trunk.php
+ * - freepbx-update-secret.php
+ * - freepbx-list-extensions.php
+ * - freepbx-list-trunks.php
+ * - freepbx-extension-exists.php
  */
 
-const axios = require('axios');
 const { execSync, exec } = require('child_process');
-const https = require('https');
+const path = require('path');
+const fs = require('fs');
 const logger = require('../utils/logger');
 
 class FreePBXApiService {
   constructor() {
-    this.baseUrl = process.env.FREEPBX_URL || 'https://localhost';
-    this.apiEndpoint = `${this.baseUrl}/admin/api/api/gql`;
-    this.restEndpoint = `${this.baseUrl}/admin/api/rest`;
-
-    this.token = null;
-    this.tokenExpiry = null;
-    this.sessionCookie = null;
-
-    // Allow self-signed certificates (common for FreePBX)
-    this.httpsAgent = new https.Agent({ rejectUnauthorized: false });
-
-    // Credentials
-    this.clientId = process.env.FREEPBX_CLIENT_ID || null;
-    this.clientSecret = process.env.FREEPBX_CLIENT_SECRET || null;
-    this.adminUser = process.env.FREEPBX_ADMIN_USER || 'admin';
-    this.adminPass = process.env.FREEPBX_ADMIN_PASS || '';
+    // Scripts directory - can be overridden via environment
+    this.scriptsDir = process.env.FREEPBX_SCRIPTS_DIR ||
+                      path.join(__dirname, '../scripts');
 
     this.initialized = false;
-    this.authMethod = null; // 'oauth', 'session', 'php'
+    this._isAvailable = null;
   }
 
   /**
-   * Initialize and test the connection
+   * Check if FreePBX is available on this system
    */
-  async initialize() {
-    if (this.initialized) return true;
-
-    logger.info('[FreePBX API] Initializing connection...');
-
-    // Try OAuth2 first
-    if (this.clientId && this.clientSecret) {
-      try {
-        await this.authenticateOAuth();
-        this.authMethod = 'oauth';
-        this.initialized = true;
-        logger.info('[FreePBX API] Connected via OAuth2');
-        return true;
-      } catch (error) {
-        logger.warn('[FreePBX API] OAuth2 failed, trying session auth...', error.message);
-      }
+  async isAvailable() {
+    // Cache the result
+    if (this._isAvailable !== null) {
+      return this._isAvailable;
     }
 
-    // Try session-based authentication
-    if (this.adminUser && this.adminPass) {
-      try {
-        await this.authenticateSession();
-        this.authMethod = 'session';
-        this.initialized = true;
-        logger.info('[FreePBX API] Connected via session');
-        return true;
-      } catch (error) {
-        logger.warn('[FreePBX API] Session auth failed, using PHP fallback...', error.message);
-      }
-    }
-
-    // Fallback to PHP CLI (works if running on same server)
     try {
-      await this.testPhpAccess();
-      this.authMethod = 'php';
+      // Check if fwconsole exists (FreePBX CLI)
+      execSync('which fwconsole', { encoding: 'utf8', stdio: 'pipe' });
+
+      // Check if FreePBX config exists
+      if (!fs.existsSync('/etc/freepbx.conf')) {
+        this._isAvailable = false;
+        return false;
+      }
+
+      // Check if our PHP scripts exist
+      const requiredScript = path.join(this.scriptsDir, 'freepbx-create-extension.php');
+      if (!fs.existsSync(requiredScript)) {
+        logger.warn('[FreePBX API] PHP scripts not found in ' + this.scriptsDir);
+        this._isAvailable = false;
+        return false;
+      }
+
+      this._isAvailable = true;
       this.initialized = true;
-      logger.info('[FreePBX API] Using PHP CLI fallback');
       return true;
+
     } catch (error) {
-      logger.error('[FreePBX API] All authentication methods failed');
+      this._isAvailable = false;
       return false;
     }
   }
 
   /**
-   * OAuth2 Authentication
+   * Execute a PHP script and parse JSON result
    */
-  async authenticateOAuth() {
-    const response = await axios.post(
-      `${this.baseUrl}/admin/api/api/token`,
-      new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: this.clientId,
-        client_secret: this.clientSecret
-      }),
-      {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        httpsAgent: this.httpsAgent
-      }
-    );
+  async executePhpScript(scriptName, args = []) {
+    const scriptPath = path.join(this.scriptsDir, scriptName);
 
-    this.token = response.data.access_token;
-    this.tokenExpiry = Date.now() + (response.data.expires_in * 1000) - 60000; // 1 min buffer
-    return true;
-  }
-
-  /**
-   * Session-based Authentication (login via form)
-   */
-  async authenticateSession() {
-    // First, get the login page to get CSRF token
-    const loginPageResponse = await axios.get(
-      `${this.baseUrl}/admin/config.php`,
-      { httpsAgent: this.httpsAgent, maxRedirects: 0, validateStatus: () => true }
-    );
-
-    // Extract session cookie
-    const cookies = loginPageResponse.headers['set-cookie'];
-    if (!cookies) throw new Error('No session cookie received');
-
-    const sessionId = cookies.find(c => c.includes('PHPSESSID'));
-    if (!sessionId) throw new Error('No PHPSESSID found');
-
-    this.sessionCookie = sessionId.split(';')[0];
-
-    // Now login
-    const loginResponse = await axios.post(
-      `${this.baseUrl}/admin/config.php`,
-      new URLSearchParams({
-        username: this.adminUser,
-        password: this.adminPass,
-        submit: 'Login'
-      }),
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Cookie': this.sessionCookie
-        },
-        httpsAgent: this.httpsAgent,
-        maxRedirects: 0,
-        validateStatus: () => true
-      }
-    );
-
-    // Check if login successful (should redirect or return 200)
-    if (loginResponse.status === 302 || loginResponse.status === 200) {
-      // Update session cookie if new one provided
-      const newCookies = loginResponse.headers['set-cookie'];
-      if (newCookies) {
-        const newSessionId = newCookies.find(c => c.includes('PHPSESSID'));
-        if (newSessionId) {
-          this.sessionCookie = newSessionId.split(';')[0];
-        }
-      }
-      return true;
+    if (!fs.existsSync(scriptPath)) {
+      throw new Error(`Script not found: ${scriptPath}`);
     }
 
-    throw new Error('Login failed');
-  }
+    // Escape arguments for shell
+    const escapedArgs = args.map(arg => {
+      // Replace single quotes with escaped version for shell
+      const escaped = String(arg).replace(/'/g, "'\\''");
+      return `'${escaped}'`;
+    }).join(' ');
 
-  /**
-   * Test PHP CLI access to FreePBX
-   */
-  async testPhpAccess() {
-    return new Promise((resolve, reject) => {
-      exec('php -r "require_once \'/etc/freepbx.conf\'; echo \'OK\';"', (error, stdout) => {
-        if (error || !stdout.includes('OK')) {
-          reject(new Error('PHP FreePBX access not available'));
-        } else {
-          resolve(true);
-        }
+    const command = `php '${scriptPath}' ${escapedArgs}`;
+
+    try {
+      const result = execSync(command, {
+        encoding: 'utf8',
+        timeout: 30000,
+        stdio: ['pipe', 'pipe', 'pipe']
       });
-    });
-  }
 
-  /**
-   * Get authorization headers
-   */
-  getAuthHeaders() {
-    if (this.authMethod === 'oauth') {
-      return { 'Authorization': `Bearer ${this.token}` };
-    } else if (this.authMethod === 'session') {
-      return { 'Cookie': this.sessionCookie };
-    }
-    return {};
-  }
-
-  /**
-   * Execute GraphQL query/mutation
-   */
-  async graphqlRequest(query, variables = {}) {
-    if (!this.initialized) await this.initialize();
-
-    // Refresh OAuth token if expired
-    if (this.authMethod === 'oauth' && Date.now() > this.tokenExpiry) {
-      await this.authenticateOAuth();
-    }
-
-    const response = await axios.post(
-      this.apiEndpoint,
-      { query, variables },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          ...this.getAuthHeaders()
-        },
-        httpsAgent: this.httpsAgent
+      // Parse JSON response
+      const trimmed = result.trim();
+      if (!trimmed) {
+        return { success: false, error: 'Empty response from PHP script' };
       }
-    );
 
-    if (response.data.errors) {
-      throw new Error(response.data.errors[0].message);
+      try {
+        return JSON.parse(trimmed);
+      } catch (parseError) {
+        logger.error(`[FreePBX API] JSON parse error: ${trimmed}`);
+        return { success: false, error: 'Invalid JSON response' };
+      }
+
+    } catch (error) {
+      // Check if it's a PHP error
+      const stderr = error.stderr ? error.stderr.toString() : '';
+      const stdout = error.stdout ? error.stdout.toString() : '';
+
+      logger.error(`[FreePBX API] Script error: ${scriptName}`, {
+        error: error.message,
+        stderr,
+        stdout
+      });
+
+      // Try to parse stdout even on error (script might return JSON error)
+      if (stdout) {
+        try {
+          return JSON.parse(stdout.trim());
+        } catch {
+          // Ignore parse errors
+        }
+      }
+
+      return { success: false, error: stderr || error.message };
     }
-
-    return response.data;
   }
 
   // =====================================================
@@ -239,195 +149,38 @@ class FreePBXApiService {
       extension,
       secret,
       displayName,
-      webrtc = true,
-      email = null,
-      voicemail = false,
-      vmPassword = null
+      outboundCid = ''
     } = extensionData;
 
-    if (!this.initialized) await this.initialize();
-
-    // Use GraphQL if available
-    if (this.authMethod === 'oauth' || this.authMethod === 'session') {
-      return await this.createExtensionViaGraphQL(extensionData);
+    if (!await this.isAvailable()) {
+      return { success: false, message: 'FreePBX not available' };
     }
 
-    // Fallback to PHP CLI
-    return await this.createExtensionViaPHP(extensionData);
-  }
+    logger.info(`[FreePBX API] Creating extension ${extension}...`);
 
-  /**
-   * Create extension via GraphQL API
-   */
-  async createExtensionViaGraphQL(extensionData) {
-    const {
+    const result = await this.executePhpScript('freepbx-create-extension.php', [
       extension,
+      displayName || `Extension ${extension}`,
       secret,
-      displayName,
-      webrtc = true,
-      context = 'from-internal',
-      email = null,
-      voicemail = false,
-      vmPassword = null
-    } = extensionData;
+      outboundCid
+    ]);
 
-    const mutation = `
-      mutation AddExtension($input: AddExtensionInput!) {
-        addExtension(input: $input) {
-          status
-          message
-          id
-        }
-      }
-    `;
-
-    const variables = {
-      input: {
-        extensionId: extension.toString(),
-        tech: 'pjsip',
-        name: displayName || `Extension ${extension}`,
-        sipSecret: secret,
-        webRtcEnabled: webrtc,
-        transport: webrtc ? 'wss' : 'udp',
-        context: context,
-        dtlsEnable: webrtc,
-        iceSupport: webrtc,
-        directMedia: false,
-        allowedCodecs: ['g722', 'ulaw', 'alaw', 'opus'],
-        clientMutationId: `homenichat-${extension}-${Date.now()}`
-      }
-    };
-
-    // Add voicemail if requested
-    if (voicemail) {
-      variables.input.vmEnabled = true;
-      variables.input.vmPassword = vmPassword || extension.toString();
-      if (email) {
-        variables.input.vmEmail = email;
-      }
-    }
-
-    try {
-      const response = await this.graphqlRequest(mutation, variables);
-      const result = response.data?.addExtension;
-
-      if (result?.status === 'success' || result?.status === true || result?.id) {
-        await this.applyChanges();
-        logger.info(`[FreePBX API] Extension ${extension} created via GraphQL`);
-        return {
-          success: true,
-          message: result.message || `Extension ${extension} créée`,
-          extension,
-          secret,
-          visibleInFreePBX: true
-        };
-      } else {
-        return {
-          success: false,
-          message: result?.message || 'Erreur inconnue lors de la création'
-        };
-      }
-    } catch (error) {
-      logger.error(`[FreePBX API] GraphQL createExtension error:`, error.message);
-
-      // Fallback to PHP if GraphQL fails
-      if (this.authMethod !== 'php') {
-        logger.info('[FreePBX API] Falling back to PHP method...');
-        return await this.createExtensionViaPHP(extensionData);
-      }
-
-      return { success: false, message: error.message };
-    }
-  }
-
-  /**
-   * Create extension via PHP CLI (fallback)
-   */
-  async createExtensionViaPHP(extensionData) {
-    const {
-      extension,
-      secret,
-      displayName,
-      webrtc = true,
-      context = 'from-internal',
-      voicemail = false,
-      vmPassword = null
-    } = extensionData;
-
-    const phpScript = `
-<?php
-require_once '/etc/freepbx.conf';
-$freepbx = \\FreePBX::Create();
-
-// Check if extension exists
-$existing = $freepbx->Core->getUser('${extension}');
-if ($existing) {
-    echo json_encode(['success' => false, 'message' => 'Extension existe déjà']);
-    exit;
-}
-
-// Create PJSIP extension
-$data = [
-    'extension' => '${extension}',
-    'name' => '${(displayName || `Extension ${extension}`).replace(/'/g, "\\'")}',
-    'tech' => 'pjsip',
-    'sipSecret' => '${secret}',
-    'context' => '${context}',
-    'webrtc' => ${webrtc ? 'true' : 'false'},
-    'dtls_enable' => ${webrtc ? 'true' : 'false'},
-    'ice_support' => ${webrtc ? 'true' : 'false'},
-    'transport' => '${webrtc ? 'wss' : 'udp'}',
-    'force_rport' => true,
-    'rewrite_contact' => true,
-    'direct_media' => false,
-    'allow' => 'g722,ulaw,alaw,opus',
-    'disallow' => 'all'
-];
-
-try {
-    $result = $freepbx->Core->addUser($data);
-
-    if (${voicemail ? 'true' : 'false'}) {
-        $vmData = [
-            'extension' => '${extension}',
-            'password' => '${vmPassword || extension}',
-            'email' => '',
-            'name' => '${(displayName || `Extension ${extension}`).replace(/'/g, "\\'")}'
-        ];
-        $freepbx->Voicemail->addVoicemail($vmData);
-    }
-
-    echo json_encode(['success' => true, 'message' => 'Extension créée', 'id' => $result]);
-} catch (Exception $e) {
-    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-}
-`;
-
-    try {
-      const result = execSync(`php -r '${phpScript.replace(/'/g, "'\\''")}'`, {
-        encoding: 'utf8',
-        timeout: 30000
-      });
-
-      const parsed = JSON.parse(result.trim());
-
-      if (parsed.success) {
-        await this.applyChanges();
-        logger.info(`[FreePBX API] Extension ${extension} created via PHP`);
-        return {
-          success: true,
-          message: parsed.message,
-          extension,
-          secret,
-          visibleInFreePBX: true
-        };
-      }
-
-      return parsed;
-
-    } catch (error) {
-      logger.error(`[FreePBX API] PHP createExtension error:`, error.message);
-      return { success: false, message: error.message };
+    if (result.success) {
+      await this.applyChanges();
+      logger.info(`[FreePBX API] Extension ${extension} created successfully`);
+      return {
+        success: true,
+        message: `Extension ${extension} créée dans FreePBX`,
+        extension,
+        secret,
+        visibleInFreePBX: true
+      };
+    } else {
+      logger.error(`[FreePBX API] Failed to create extension ${extension}: ${result.error}`);
+      return {
+        success: false,
+        message: result.error || 'Unknown error'
+      };
     }
   }
 
@@ -435,79 +188,20 @@ try {
    * Delete an extension from FreePBX
    */
   async deleteExtension(extension) {
-    if (!this.initialized) await this.initialize();
-
-    // Try GraphQL first
-    if (this.authMethod === 'oauth' || this.authMethod === 'session') {
-      try {
-        const mutation = `
-          mutation DeleteExtension($input: DeleteExtensionInput!) {
-            deleteExtension(input: $input) {
-              status
-              message
-            }
-          }
-        `;
-
-        const variables = {
-          input: {
-            extensionId: extension.toString(),
-            clientMutationId: `homenichat-delete-${extension}-${Date.now()}`
-          }
-        };
-
-        const response = await this.graphqlRequest(mutation, variables);
-        const result = response.data?.deleteExtension;
-
-        if (result?.status === 'success' || result?.status === true) {
-          await this.applyChanges();
-          logger.info(`[FreePBX API] Extension ${extension} deleted via GraphQL`);
-          return { success: true, message: result.message };
-        }
-      } catch (error) {
-        logger.warn(`[FreePBX API] GraphQL deleteExtension error:`, error.message);
-      }
+    if (!await this.isAvailable()) {
+      return { success: false, message: 'FreePBX not available' };
     }
 
-    // Fallback to PHP
-    return await this.deleteExtensionViaPHP(extension);
-  }
+    logger.info(`[FreePBX API] Deleting extension ${extension}...`);
 
-  /**
-   * Delete extension via PHP CLI
-   */
-  async deleteExtensionViaPHP(extension) {
-    const phpScript = `
-<?php
-require_once '/etc/freepbx.conf';
-$freepbx = \\FreePBX::Create();
+    const result = await this.executePhpScript('freepbx-delete-extension.php', [extension]);
 
-try {
-    $freepbx->Core->delUser('${extension}');
-    echo json_encode(['success' => true, 'message' => 'Extension supprimée']);
-} catch (Exception $e) {
-    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-}
-`;
-
-    try {
-      const result = execSync(`php -r '${phpScript.replace(/'/g, "'\\''")}'`, {
-        encoding: 'utf8',
-        timeout: 30000
-      });
-
-      const parsed = JSON.parse(result.trim());
-
-      if (parsed.success) {
-        await this.applyChanges();
-        logger.info(`[FreePBX API] Extension ${extension} deleted via PHP`);
-      }
-
-      return parsed;
-
-    } catch (error) {
-      logger.error(`[FreePBX API] PHP deleteExtension error:`, error.message);
-      return { success: false, message: error.message };
+    if (result.success) {
+      await this.applyChanges();
+      logger.info(`[FreePBX API] Extension ${extension} deleted`);
+      return { success: true, message: `Extension ${extension} supprimée` };
+    } else {
+      return { success: false, message: result.error || 'Unknown error' };
     }
   }
 
@@ -515,88 +209,23 @@ try {
    * Update extension secret/password
    */
   async updateExtensionSecret(extension, newSecret) {
-    if (!this.initialized) await this.initialize();
-
-    const phpScript = `
-<?php
-require_once '/etc/freepbx.conf';
-$freepbx = \\FreePBX::Create();
-
-try {
-    $user = $freepbx->Core->getUser('${extension}');
-    if (!$user) {
-        echo json_encode(['success' => false, 'message' => 'Extension non trouvée']);
-        exit;
+    if (!await this.isAvailable()) {
+      return { success: false, message: 'FreePBX not available' };
     }
 
-    $user['sipSecret'] = '${newSecret}';
-    $freepbx->Core->editUser($user['extension'], $user);
-    echo json_encode(['success' => true, 'message' => 'Mot de passe mis à jour']);
-} catch (Exception $e) {
-    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-}
-`;
+    logger.info(`[FreePBX API] Updating secret for extension ${extension}...`);
 
-    try {
-      const result = execSync(`php -r '${phpScript.replace(/'/g, "'\\''")}'`, {
-        encoding: 'utf8',
-        timeout: 30000
-      });
+    const result = await this.executePhpScript('freepbx-update-secret.php', [
+      extension,
+      newSecret
+    ]);
 
-      const parsed = JSON.parse(result.trim());
-
-      if (parsed.success) {
-        await this.applyChanges();
-        logger.info(`[FreePBX API] Extension ${extension} password updated`);
-      }
-
-      return parsed;
-
-    } catch (error) {
-      logger.error(`[FreePBX API] updateExtensionSecret error:`, error.message);
-      return { success: false, message: error.message };
-    }
-  }
-
-  /**
-   * List all extensions from FreePBX
-   */
-  async listExtensions() {
-    if (!this.initialized) await this.initialize();
-
-    const phpScript = `
-<?php
-require_once '/etc/freepbx.conf';
-$freepbx = \\FreePBX::Create();
-
-try {
-    $users = $freepbx->Core->getAllUsers();
-    $extensions = [];
-    foreach ($users as $user) {
-        $extensions[] = [
-            'extension' => $user['extension'],
-            'name' => $user['name'],
-            'tech' => $user['tech'] ?? 'pjsip',
-            'context' => $user['context'] ?? 'from-internal'
-        ];
-    }
-    echo json_encode(['success' => true, 'extensions' => $extensions]);
-} catch (Exception $e) {
-    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-}
-`;
-
-    try {
-      const result = execSync(`php -r '${phpScript.replace(/'/g, "'\\''")}'`, {
-        encoding: 'utf8',
-        timeout: 30000
-      });
-
-      return JSON.parse(result.trim());
-
-    } catch (error) {
-      logger.error(`[FreePBX API] listExtensions error:`, error.message);
-      return { success: false, message: error.message, extensions: [] };
+    if (result.success) {
+      await this.applyChanges();
+      logger.info(`[FreePBX API] Extension ${extension} secret updated`);
+      return { success: true, message: `Mot de passe mis à jour pour ${extension}` };
+    } else {
+      return { success: false, message: result.error || 'Unknown error' };
     }
   }
 
@@ -604,27 +233,32 @@ try {
    * Check if extension exists in FreePBX
    */
   async extensionExists(extension) {
-    if (!this.initialized) await this.initialize();
-
-    const phpScript = `
-<?php
-require_once '/etc/freepbx.conf';
-$freepbx = \\FreePBX::Create();
-$user = $freepbx->Core->getUser('${extension}');
-echo json_encode(['exists' => $user !== false && $user !== null]);
-`;
-
-    try {
-      const result = execSync(`php -r '${phpScript.replace(/'/g, "'\\''")}'`, {
-        encoding: 'utf8',
-        timeout: 10000
-      });
-
-      const parsed = JSON.parse(result.trim());
-      return parsed.exists;
-
-    } catch (error) {
+    if (!await this.isAvailable()) {
       return false;
+    }
+
+    const result = await this.executePhpScript('freepbx-extension-exists.php', [extension]);
+    return result.exists === true;
+  }
+
+  /**
+   * List all extensions from FreePBX
+   */
+  async listExtensions() {
+    if (!await this.isAvailable()) {
+      return { success: false, message: 'FreePBX not available', extensions: [] };
+    }
+
+    const result = await this.executePhpScript('freepbx-list-extensions.php', []);
+
+    if (result.success) {
+      return {
+        success: true,
+        extensions: result.extensions || [],
+        count: result.count || 0
+      };
+    } else {
+      return { success: false, message: result.error, extensions: [] };
     }
   }
 
@@ -634,93 +268,46 @@ echo json_encode(['exists' => $user !== false && $user !== null]);
 
   /**
    * Create a Custom trunk for chan_quectel GSM modem
-   * Note: GraphQL doesn't fully support custom trunks, using PHP
+   * Uses correct 3-argument signature: addTrunk($name, $tech, $settings)
    */
   async createTrunk(trunkData) {
     const {
       modemId,
       modemName,
-      phoneNumber,
-      context = 'from-gsm'
+      phoneNumber = ''
     } = trunkData;
 
-    if (!this.initialized) await this.initialize();
+    if (!await this.isAvailable()) {
+      return { success: false, message: 'FreePBX not available' };
+    }
 
     const trunkName = `GSM-${modemId}`.toUpperCase().replace(/[^A-Z0-9-]/g, '');
-    const dialString = `Quectel/${modemId}/$OUTNUM$`;
 
-    const phpScript = `
-<?php
-require_once '/etc/freepbx.conf';
-$freepbx = \\FreePBX::Create();
+    logger.info(`[FreePBX API] Creating trunk ${trunkName}...`);
 
-try {
-    // Check if trunk exists
-    $trunks = $freepbx->Core->getTrunks();
-    foreach ($trunks as $trunk) {
-        if ($trunk['name'] === '${trunkName}') {
-            echo json_encode(['success' => false, 'message' => 'Trunk existe déjà']);
-            exit;
-        }
-    }
+    const result = await this.executePhpScript('freepbx-create-trunk.php', [
+      trunkName,
+      modemId,
+      phoneNumber
+    ]);
 
-    // Create custom trunk
-    $trunkData = [
-        'tech' => 'custom',
-        'name' => '${trunkName}',
-        'outcid' => '${phoneNumber || ''}',
-        'maxchans' => '1',
-        'keepcid' => 'on',
-        'disabled' => 'off',
-        'channelid' => '${modemId}',
-        'dialoutprefix' => '',
-        'custom_dial' => '${dialString}',
-        'description' => 'Modem GSM ${(modemName || modemId).replace(/'/g, "\\'")}'
-    ];
-
-    $trunkId = $freepbx->Core->addTrunk($trunkData);
-
-    if ($trunkId) {
-        echo json_encode([
-            'success' => true,
-            'message' => 'Trunk créé',
-            'trunkId' => $trunkId,
-            'trunkName' => '${trunkName}'
-        ]);
+    if (result.success) {
+      await this.applyChanges();
+      logger.info(`[FreePBX API] Trunk ${trunkName} created successfully`);
+      return {
+        success: true,
+        message: `Trunk ${trunkName} créé dans FreePBX`,
+        trunkId: result.trunkId,
+        trunkName: result.trunkName || trunkName,
+        dialString: result.dialString || `Quectel/${modemId}/$OUTNUM$`,
+        visibleInFreePBX: true
+      };
     } else {
-        echo json_encode(['success' => false, 'message' => 'Erreur lors de la création']);
-    }
-} catch (Exception $e) {
-    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-}
-`;
-
-    try {
-      const result = execSync(`php -r '${phpScript.replace(/'/g, "'\\''")}'`, {
-        encoding: 'utf8',
-        timeout: 30000
-      });
-
-      const parsed = JSON.parse(result.trim());
-
-      if (parsed.success) {
-        await this.applyChanges();
-        logger.info(`[FreePBX API] Trunk ${trunkName} created`);
-        return {
-          success: true,
-          message: parsed.message,
-          trunkId: parsed.trunkId,
-          trunkName,
-          dialString,
-          visibleInFreePBX: true
-        };
-      }
-
-      return parsed;
-
-    } catch (error) {
-      logger.error(`[FreePBX API] createTrunk error:`, error.message);
-      return { success: false, message: error.message };
+      logger.error(`[FreePBX API] Failed to create trunk ${trunkName}: ${result.error}`);
+      return {
+        success: false,
+        message: result.error || 'Unknown error'
+      };
     }
   }
 
@@ -728,54 +315,20 @@ try {
    * Delete a trunk from FreePBX
    */
   async deleteTrunk(trunkNameOrId) {
-    if (!this.initialized) await this.initialize();
-
-    const phpScript = `
-<?php
-require_once '/etc/freepbx.conf';
-$freepbx = \\FreePBX::Create();
-
-try {
-    $trunks = $freepbx->Core->getTrunks();
-    $trunkId = null;
-
-    foreach ($trunks as $trunk) {
-        if ($trunk['name'] === '${trunkNameOrId}' || $trunk['trunkid'] == '${trunkNameOrId}') {
-            $trunkId = $trunk['trunkid'];
-            break;
-        }
+    if (!await this.isAvailable()) {
+      return { success: false, message: 'FreePBX not available' };
     }
 
-    if (!$trunkId) {
-        echo json_encode(['success' => false, 'message' => 'Trunk non trouvé']);
-        exit;
-    }
+    logger.info(`[FreePBX API] Deleting trunk ${trunkNameOrId}...`);
 
-    $freepbx->Core->deleteTrunk($trunkId);
-    echo json_encode(['success' => true, 'message' => 'Trunk supprimé']);
-} catch (Exception $e) {
-    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-}
-`;
+    const result = await this.executePhpScript('freepbx-delete-trunk.php', [trunkNameOrId]);
 
-    try {
-      const result = execSync(`php -r '${phpScript.replace(/'/g, "'\\''")}'`, {
-        encoding: 'utf8',
-        timeout: 30000
-      });
-
-      const parsed = JSON.parse(result.trim());
-
-      if (parsed.success) {
-        await this.applyChanges();
-        logger.info(`[FreePBX API] Trunk ${trunkNameOrId} deleted`);
-      }
-
-      return parsed;
-
-    } catch (error) {
-      logger.error(`[FreePBX API] deleteTrunk error:`, error.message);
-      return { success: false, message: error.message };
+    if (result.success) {
+      await this.applyChanges();
+      logger.info(`[FreePBX API] Trunk ${trunkNameOrId} deleted`);
+      return { success: true, message: `Trunk ${trunkNameOrId} supprimé` };
+    } else {
+      return { success: false, message: result.error || 'Unknown error' };
     }
   }
 
@@ -783,42 +336,20 @@ try {
    * List all trunks from FreePBX
    */
   async listTrunks() {
-    if (!this.initialized) await this.initialize();
-
-    const phpScript = `
-<?php
-require_once '/etc/freepbx.conf';
-$freepbx = \\FreePBX::Create();
-
-try {
-    $trunks = $freepbx->Core->getTrunks();
-    $result = [];
-    foreach ($trunks as $trunk) {
-        $result[] = [
-            'id' => $trunk['trunkid'],
-            'name' => $trunk['name'],
-            'tech' => $trunk['tech'],
-            'outcid' => $trunk['outcid'] ?? '',
-            'disabled' => $trunk['disabled'] ?? 'off'
-        ];
+    if (!await this.isAvailable()) {
+      return { success: false, message: 'FreePBX not available', trunks: [] };
     }
-    echo json_encode(['success' => true, 'trunks' => $result]);
-} catch (Exception $e) {
-    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-}
-`;
 
-    try {
-      const result = execSync(`php -r '${phpScript.replace(/'/g, "'\\''")}'`, {
-        encoding: 'utf8',
-        timeout: 30000
-      });
+    const result = await this.executePhpScript('freepbx-list-trunks.php', []);
 
-      return JSON.parse(result.trim());
-
-    } catch (error) {
-      logger.error(`[FreePBX API] listTrunks error:`, error.message);
-      return { success: false, message: error.message, trunks: [] };
+    if (result.success) {
+      return {
+        success: true,
+        trunks: result.trunks || [],
+        count: result.count || 0
+      };
+    } else {
+      return { success: false, message: result.error, trunks: [] };
     }
   }
 
@@ -831,7 +362,7 @@ try {
    */
   async applyChanges() {
     return new Promise((resolve) => {
-      exec('fwconsole reload --quiet 2>/dev/null || true', { timeout: 60000 }, (error) => {
+      exec('fwconsole reload --quiet 2>/dev/null', { timeout: 60000 }, (error) => {
         if (error) {
           logger.warn('[FreePBX API] fwconsole reload warning:', error.message);
         }
@@ -841,28 +372,14 @@ try {
   }
 
   /**
-   * Check if FreePBX is available
-   */
-  async isAvailable() {
-    try {
-      // Check if fwconsole exists
-      execSync('which fwconsole', { encoding: 'utf8' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
    * Get service status
    */
   getStatus() {
     return {
       initialized: this.initialized,
-      authMethod: this.authMethod,
-      baseUrl: this.baseUrl,
-      hasOAuthCredentials: !!(this.clientId && this.clientSecret),
-      hasAdminCredentials: !!(this.adminUser && this.adminPass)
+      available: this._isAvailable,
+      scriptsDir: this.scriptsDir,
+      hasFreePBXConf: fs.existsSync('/etc/freepbx.conf')
     };
   }
 }
