@@ -44,14 +44,15 @@ require_once '/etc/freepbx.conf';
 
 try {
     $freepbx = FreePBX::Create();
+    $db = $freepbx->Database;
 
-    // Check if trunk already exists
-    $trunks = $freepbx->Core->getTrunks();
-    foreach ($trunks as $trunk) {
-        if (strtolower($trunk['name']) === strtolower($name)) {
-            echo json_encode(["success" => false, "error" => "Trunk '$name' already exists"]);
-            exit(0);
-        }
+    // Check if trunk already exists using MySQL direct query
+    // Note: getTrunks() crashes on FreePBX 17 due to BMO module loading issue
+    $stmt = $db->prepare("SELECT trunkid FROM trunks WHERE LOWER(name) = LOWER(?)");
+    $stmt->execute([$name]);
+    if ($stmt->fetch()) {
+        echo json_encode(["success" => false, "error" => "Trunk '$name' already exists"]);
+        exit(0);
     }
 
     // Create trunk with correct 3-argument signature:
