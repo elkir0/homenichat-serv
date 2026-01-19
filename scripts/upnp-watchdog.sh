@@ -24,8 +24,9 @@ LOCAL_IP="${UPNP_LOCAL_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 # Peut être configuré via /etc/homenichat/upnp.conf: igd_url=http://...
 IGD_URL=""
 
-# Ports à mapper
-SIP_TLS_PORT=5061
+# Ports à mapper (valeurs par défaut, peuvent être surchargées via config)
+# Port SIP alternatif (5160 au lieu de 5060) pour éviter conflits avec box internet
+SIP_PORT=5160
 RTP_START=10000
 RTP_END=10100
 
@@ -55,6 +56,20 @@ load_config() {
             IGD_URL="$url"
             log "Using direct IGD URL: $IGD_URL"
         fi
+
+        # Load custom SIP port if configured
+        local sip_port
+        sip_port=$(grep -E "^sip=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+        if [[ -n "$sip_port" ]]; then
+            SIP_PORT="$sip_port"
+        fi
+
+        # Load custom RTP range if configured
+        local rtp_s rtp_e
+        rtp_s=$(grep -E "^rtp_start=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+        rtp_e=$(grep -E "^rtp_end=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+        if [[ -n "$rtp_s" ]]; then RTP_START="$rtp_s"; fi
+        if [[ -n "$rtp_e" ]]; then RTP_END="$rtp_e"; fi
     fi
 }
 
@@ -89,7 +104,7 @@ enabled=$value
 lease_duration=$LEASE_DURATION
 
 [ports]
-sip_tls=$SIP_TLS_PORT
+sip_tls=$SIP_PORT
 rtp_start=$RTP_START
 rtp_end=$RTP_END
 EOF
@@ -160,8 +175,8 @@ add_all_mappings() {
 
     log "Ajout des mappings UPnP pour ${LOCAL_IP}..."
 
-    # SIP TLS
-    if ! add_port_mapping "$SIP_TLS_PORT" "TCP" "Homenichat SIP TLS"; then
+    # SIP
+    if ! add_port_mapping "$SIP_PORT" "TCP" "Homenichat SIP"; then
         ((errors++)) || true
     fi
 
@@ -184,8 +199,8 @@ add_all_mappings() {
 remove_all_mappings() {
     log "Suppression de tous les mappings UPnP..."
 
-    # SIP TLS
-    remove_port_mapping "$SIP_TLS_PORT" "TCP"
+    # SIP
+    remove_port_mapping "$SIP_PORT" "TCP"
 
     # RTP ports
     for port in $(seq $RTP_START $RTP_END); do
@@ -221,7 +236,7 @@ status_json() {
         external_ip=$(get_external_ip)
         router=$(get_router_info)
 
-        if check_port_mapping "$SIP_TLS_PORT" "TCP"; then
+        if check_port_mapping "$SIP_PORT" "TCP"; then
             sip_ok="true"
         fi
 
@@ -238,9 +253,12 @@ status_json() {
   "router": "$router",
   "localIp": "$LOCAL_IP",
   "mappings": {
-    "sipTls": $sip_ok,
+    "sip": $sip_ok,
+    "sipPort": $SIP_PORT,
     "rtpCount": $rtp_count,
-    "rtpTotal": $((RTP_END - RTP_START + 1))
+    "rtpTotal": $((RTP_END - RTP_START + 1)),
+    "rtpStart": $RTP_START,
+    "rtpEnd": $RTP_END
   },
   "error": $([ -n "$error" ] && echo "\"$error\"" || echo "null")
 }
@@ -268,10 +286,10 @@ status_report() {
     echo ""
     echo "Ports mappés:"
 
-    if check_port_mapping "$SIP_TLS_PORT" "TCP"; then
-        echo "  • ${SIP_TLS_PORT}/TCP (SIP TLS): ✅ OK"
+    if check_port_mapping "$SIP_PORT" "TCP"; then
+        echo "  • ${SIP_PORT}/TCP (SIP): ✅ OK"
     else
-        echo "  • ${SIP_TLS_PORT}/TCP (SIP TLS): ❌ Non mappé"
+        echo "  • ${SIP_PORT}/TCP (SIP): ❌ Non mappé"
     fi
 
     local rtp_count=$(count_rtp_mappings)

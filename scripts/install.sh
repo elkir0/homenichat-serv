@@ -554,7 +554,10 @@ lease_duration=3600
 # igd_url=
 
 [ports]
-sip_tls=5061
+# Port SIP alternatif (5160 au lieu de 5060/5061)
+# Évite les conflits avec les box internet (Livebox, Freebox, etc.)
+# qui utilisent souvent le port 5060 pour leur propre téléphonie
+sip=5160
 rtp_start=10000
 rtp_end=10100
 UPNP_CONF
@@ -1364,15 +1367,22 @@ FREEPBX_EXAMPLE
     rm -f freepbx_install.sh
 
     # Fix Apache/Nginx port conflict: Move Apache to port 8080
-    # Nginx uses port 80 for Homenichat, Apache/FreePBX uses 8080
+    # Nginx uses ports 80 + 443 for Homenichat, Apache/FreePBX uses 8080 only
     if [ -f /etc/apache2/ports.conf ]; then
-        info "Reconfiguring Apache to use port 8080 (Nginx uses 80)..."
+        info "Reconfiguring Apache to use port 8080 only (Nginx uses 80/443)..."
+
+        # Move HTTP from 80 to 8080
         sed -i 's/Listen 80$/Listen 8080/' /etc/apache2/ports.conf
         sed -i 's/<VirtualHost \*:80>/<VirtualHost *:8080>/g' /etc/apache2/sites-available/*.conf 2>/dev/null || true
 
+        # Disable Apache SSL - nginx will handle HTTPS on port 443
+        # This prevents Apache from capturing port 443 with default-ssl.conf
+        a2dissite default-ssl 2>/dev/null || true
+        sed -i 's/Listen 443/#Listen 443/' /etc/apache2/ports.conf
+
         # Restart Apache to apply changes
         systemctl restart apache2 >> "$LOG_FILE" 2>&1 || true
-        success "Apache reconfigured to port 8080"
+        success "Apache reconfigured to port 8080 (SSL disabled, nginx handles 443)"
     fi
 
     # Verify

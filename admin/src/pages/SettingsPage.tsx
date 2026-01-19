@@ -66,9 +66,12 @@ interface UpnpStatus {
   router?: string;
   localIp?: string;
   mappings?: {
-    sipTls: boolean;
+    sip: boolean;
+    sipPort: number;
     rtpCount: number;
     rtpTotal: number;
+    rtpStart: number;
+    rtpEnd: number;
   };
   error?: string | null;
   hint?: string;
@@ -738,7 +741,7 @@ export default function SettingsPage() {
         <Grid item xs={12}>
           <Card
             sx={{
-              border: upnpStatus?.enabled && upnpStatus?.mappings?.sipTls ? '1px solid' : 'none',
+              border: upnpStatus?.enabled && upnpStatus?.mappings?.sip ? '1px solid' : 'none',
               borderColor: 'warning.main',
             }}
           >
@@ -852,15 +855,15 @@ export default function SettingsPage() {
                       </Typography>
                       <Box sx={{ mt: 1 }}>
                         <Typography variant="body2">
-                          <strong>SIP TLS (5061):</strong>{' '}
-                          {upnpStatus.mappings?.sipTls ? (
+                          <strong>SIP ({upnpStatus.mappings?.sipPort || 5160}):</strong>{' '}
+                          {upnpStatus.mappings?.sip ? (
                             <Chip label="OK" size="small" color="success" sx={{ ml: 1 }} />
                           ) : (
                             <Chip label="Non mappe" size="small" color="error" sx={{ ml: 1 }} />
                           )}
                         </Typography>
                         <Typography variant="body2">
-                          <strong>RTP (10000-10100):</strong>{' '}
+                          <strong>RTP ({upnpStatus.mappings?.rtpStart || 10000}-{upnpStatus.mappings?.rtpEnd || 10100}):</strong>{' '}
                           {upnpStatus.mappings?.rtpCount === upnpStatus.mappings?.rtpTotal ? (
                             <Chip label={`OK (${upnpStatus.mappings?.rtpCount}/${upnpStatus.mappings?.rtpTotal})`} size="small" color="success" sx={{ ml: 1 }} />
                           ) : (

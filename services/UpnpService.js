@@ -7,7 +7,7 @@
  * SECURITY: Disabled by default. User must explicitly enable.
  *
  * Ports managed:
- * - 5061/TCP: SIP TLS (signaling)
+ * - 5160/TCP: SIP (signaling) - using alternative port to avoid ISP box conflicts
  * - 10000-10100/UDP: RTP (media)
  */
 
@@ -265,7 +265,7 @@ class UpnpService {
       enabled: false,
       leaseDuration: 3600,
       ports: {
-        sipTls: 5061,
+        sip: 5160,  // Alternative port to avoid ISP box conflicts (Livebox, Freebox)
         rtpStart: 10000,
         rtpEnd: 10100
       }
@@ -277,7 +277,7 @@ class UpnpService {
       }
 
       const content = fs.readFileSync(CONFIG_FILE, 'utf8');
-      const config = { ...defaultConfig };
+      const config = { ...defaultConfig, ports: { ...defaultConfig.ports } };
 
       // Parse INI-like config
       const enabledMatch = content.match(/^enabled=(\w+)/m);
@@ -288,6 +288,22 @@ class UpnpService {
       const leaseMatch = content.match(/^lease_duration=(\d+)/m);
       if (leaseMatch) {
         config.leaseDuration = parseInt(leaseMatch[1], 10);
+      }
+
+      // Parse port configuration
+      const sipMatch = content.match(/^sip=(\d+)/m);
+      if (sipMatch) {
+        config.ports.sip = parseInt(sipMatch[1], 10);
+      }
+
+      const rtpStartMatch = content.match(/^rtp_start=(\d+)/m);
+      if (rtpStartMatch) {
+        config.ports.rtpStart = parseInt(rtpStartMatch[1], 10);
+      }
+
+      const rtpEndMatch = content.match(/^rtp_end=(\d+)/m);
+      if (rtpEndMatch) {
+        config.ports.rtpEnd = parseInt(rtpEndMatch[1], 10);
       }
 
       return config;
