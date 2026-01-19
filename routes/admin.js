@@ -2809,6 +2809,239 @@ router.get('/firebase/devices', async (req, res) => {
 });
 
 // =============================================================================
+// PUSH RELAY CONFIGURATION
+// =============================================================================
+
+/**
+ * GET /api/admin/push-relay/status
+ * Récupère l'état et la configuration du Push Relay
+ */
+router.get('/push-relay/status', async (req, res) => {
+  try {
+    const pushRelayService = require('../services/PushRelayService');
+    const status = pushRelayService.getStatus();
+
+    // Check health if configured
+    let healthy = false;
+    if (status.configured) {
+      try {
+        healthy = await pushRelayService.healthCheck();
+      } catch (e) {
+        // Health check failed
+      }
+    }
+
+    // Get relay stats if available
+    let stats = null;
+    if (status.configured && healthy) {
+      try {
+        stats = await pushRelayService.getStats();
+      } catch (e) {
+        // Stats fetch failed
+      }
+    }
+
+    res.json({
+      configured: status.configured,
+      relayUrl: status.relayUrl,
+      healthy,
+      stats,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Push relay status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * PUT /api/admin/push-relay/config
+ * Met à jour la configuration du Push Relay
+ */
+router.put('/push-relay/config', [
+  body('relayUrl').optional({ nullable: true }).isURL().withMessage('Invalid URL'),
+  body('apiKey').optional({ nullable: true }).isString().isLength({ min: 8, max: 256 }).withMessage('API key must be 8-256 characters'),
+], validate, async (req, res) => {
+  try {
+    const { relayUrl, apiKey } = req.body;
+    const fs = require('fs');
+    const path = require('path');
+
+    // Save to .env file or a dedicated config file
+    const dataDir = process.env.DATA_DIR || '/var/lib/homenichat';
+    const configPath = path.join(dataDir, 'push-relay.json');
+
+    // Ensure data directory exists
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+
+    // Save config
+    const config = {
+      relayUrl: relayUrl || null,
+      apiKey: apiKey || null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    // Update environment variables for current process
+    if (relayUrl) {
+      process.env.PUSH_RELAY_URL = relayUrl;
+    } else {
+      delete process.env.PUSH_RELAY_URL;
+    }
+
+    if (apiKey) {
+      process.env.PUSH_RELAY_API_KEY = apiKey;
+    } else {
+      delete process.env.PUSH_RELAY_API_KEY;
+    }
+
+    // Reinitialize the service
+    const pushRelayService = require('../services/PushRelayService');
+    pushRelayService.relayUrl = relayUrl || null;
+    pushRelayService.apiKey = apiKey || null;
+    pushRelayService.initialized = false;
+
+    if (relayUrl && apiKey) {
+      pushRelayService.initialize();
+    }
+
+    await securityService?.logAction(req.user.id, 'push_relay_config_updated', {
+      category: 'admin',
+      relayUrl: relayUrl ? relayUrl.substring(0, 30) + '...' : null,
+      username: req.user.username,
+    }, req);
+
+    res.json({
+      success: true,
+      message: 'Configuration Push Relay mise à jour',
+      configured: pushRelayService.isConfigured(),
+    });
+
+  } catch (error) {
+    console.error('[Admin] Push relay config error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/push-relay/test
+ * Teste la connexion au Push Relay
+ */
+router.post('/push-relay/test', async (req, res) => {
+  try {
+    const pushRelayService = require('../services/PushRelayService');
+
+    if (!pushRelayService.isConfigured()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Push Relay non configuré. Configurez l\'URL et la clé API d\'abord.',
+      });
+    }
+
+    // Test health check
+    const healthy = await pushRelayService.healthCheck();
+    if (!healthy) {
+      return res.json({
+        success: false,
+        error: 'Impossible de joindre le serveur Push Relay',
+      });
+    }
+
+    // Try to send a test notification to current user
+    const result = await pushRelayService.sendTest(req.user.id);
+
+    await securityService?.logAction(req.user.id, 'push_relay_test', {
+      category: 'admin',
+      success: result.success,
+      username: req.user.username,
+    }, req);
+
+    res.json({
+      success: result.success !== false,
+      message: result.success !== false
+        ? 'Test Push Relay réussi'
+        : `Erreur: ${result.error || 'Unknown'}`,
+      result,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Push relay test error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/push-relay/devices
+ * Liste les appareils enregistrés via le relay
+ */
+router.get('/push-relay/devices', async (req, res) => {
+  try {
+    const pushRelayService = require('../services/PushRelayService');
+
+    if (!pushRelayService.isConfigured()) {
+      return res.json({ devices: [], error: 'Push Relay non configuré' });
+    }
+
+    const result = await pushRelayService.getDevices();
+
+    res.json({
+      devices: result.devices || [],
+      error: result.error || null,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Push relay devices error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/admin/push-relay/config
+ * Supprime la configuration du Push Relay
+ */
+router.delete('/push-relay/config', async (req, res) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+
+    const dataDir = process.env.DATA_DIR || '/var/lib/homenichat';
+    const configPath = path.join(dataDir, 'push-relay.json');
+
+    // Delete config file if exists
+    if (fs.existsSync(configPath)) {
+      fs.unlinkSync(configPath);
+    }
+
+    // Clear environment variables
+    delete process.env.PUSH_RELAY_URL;
+    delete process.env.PUSH_RELAY_API_KEY;
+
+    // Reset service
+    const pushRelayService = require('../services/PushRelayService');
+    pushRelayService.relayUrl = null;
+    pushRelayService.apiKey = null;
+    pushRelayService.initialized = false;
+
+    await securityService?.logAction(req.user.id, 'push_relay_config_deleted', {
+      category: 'admin',
+      username: req.user.username,
+    }, req);
+
+    res.json({
+      success: true,
+      message: 'Configuration Push Relay supprimée',
+    });
+
+  } catch (error) {
+    console.error('[Admin] Push relay delete error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
 // LOGS (temps réel via WebSocket, fallback HTTP)
 // =============================================================================
 

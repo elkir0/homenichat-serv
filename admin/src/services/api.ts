@@ -607,7 +607,7 @@ export const upnpApi = {
   },
 };
 
-// API Admin - Firebase Push Notifications
+// API Admin - Firebase Push Notifications (fallback/legacy)
 export const firebaseApi = {
   getStatus: async () => {
     const response = await api.get('/api/admin/firebase/status');
@@ -631,6 +631,34 @@ export const firebaseApi = {
 
   getDevices: async () => {
     const response = await api.get('/api/admin/firebase/devices');
+    return response.data;
+  },
+};
+
+// API Admin - Push Relay (recommended for iOS/Android push notifications)
+export const pushRelayApi = {
+  getStatus: async () => {
+    const response = await api.get('/api/admin/push-relay/status');
+    return response.data;
+  },
+
+  updateConfig: async (config: { relayUrl: string | null; apiKey: string | null }) => {
+    const response = await api.put('/api/admin/push-relay/config', config);
+    return response.data;
+  },
+
+  delete: async () => {
+    const response = await api.delete('/api/admin/push-relay/config');
+    return response.data;
+  },
+
+  test: async () => {
+    const response = await api.post('/api/admin/push-relay/test');
+    return response.data;
+  },
+
+  getDevices: async () => {
+    const response = await api.get('/api/admin/push-relay/devices');
     return response.data;
   },
 };

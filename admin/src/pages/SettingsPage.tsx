@@ -36,7 +36,7 @@ import {
   Router as RouterIcon,
   Warning as WarningIcon,
 } from '@mui/icons-material';
-import { configApi, tunnelApi, upnpApi, firebaseApi } from '../services/api';
+import { configApi, tunnelApi, upnpApi, firebaseApi, pushRelayApi } from '../services/api';
 import {
   CloudUpload as CloudUploadIcon,
   Delete as DeleteIcon,
@@ -45,6 +45,9 @@ import {
   Error as ErrorIcon,
   Send as SendIcon,
   PhoneAndroid as PhoneAndroidIcon,
+  Cloud as CloudIcon,
+  Visibility as VisibilityIcon,
+  VisibilityOff as VisibilityOffIcon,
 } from '@mui/icons-material';
 
 interface TunnelStatus {
@@ -105,6 +108,16 @@ interface FirebaseStatus {
   projectId: string | null;
   registeredDevices: number;
   registeredUsers: number;
+}
+
+interface PushRelayStatus {
+  configured: boolean;
+  relayUrl: string | null;
+  healthy: boolean;
+  stats: {
+    totalDevices?: number;
+    totalSent?: number;
+  } | null;
 }
 
 export default function SettingsPage() {
@@ -185,6 +198,81 @@ export default function SettingsPage() {
     } catch {
       setFirebaseUploadError('Fichier JSON invalide');
     }
+  };
+
+  // Push Relay status query
+  const { data: pushRelayStatus, refetch: refetchPushRelay } = useQuery<PushRelayStatus>({
+    queryKey: ['pushRelayStatus'],
+    queryFn: pushRelayApi.getStatus,
+  });
+
+  // Push Relay state
+  const [relayUrl, setRelayUrl] = useState('');
+  const [relayApiKey, setRelayApiKey] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [pushRelayResult, setPushRelayResult] = useState<string | null>(null);
+  const [pushRelayError, setPushRelayError] = useState<string | null>(null);
+
+  // Load existing config when status is fetched
+  useEffect(() => {
+    if (pushRelayStatus?.relayUrl) {
+      setRelayUrl(pushRelayStatus.relayUrl);
+    }
+  }, [pushRelayStatus]);
+
+  // Push Relay save config mutation
+  const pushRelaySaveMutation = useMutation({
+    mutationFn: (config: { relayUrl: string | null; apiKey: string | null }) =>
+      pushRelayApi.updateConfig(config),
+    onSuccess: (data) => {
+      refetchPushRelay();
+      setPushRelayResult(data.message || 'Configuration sauvegardee');
+      setPushRelayError(null);
+      setRelayApiKey(''); // Clear API key input after save
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      setPushRelayError(error.response?.data?.error || error.message);
+    },
+  });
+
+  // Push Relay delete mutation
+  const pushRelayDeleteMutation = useMutation({
+    mutationFn: pushRelayApi.delete,
+    onSuccess: () => {
+      refetchPushRelay();
+      setRelayUrl('');
+      setRelayApiKey('');
+      setPushRelayResult('Configuration Push Relay supprimee');
+    },
+  });
+
+  // Push Relay test mutation
+  const pushRelayTestMutation = useMutation({
+    mutationFn: pushRelayApi.test,
+    onSuccess: (data) => {
+      setPushRelayResult(data.message);
+      setPushRelayError(data.success ? null : data.error);
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      setPushRelayError(error.response?.data?.error || error.message);
+    },
+  });
+
+  const handlePushRelaySave = () => {
+    if (!relayUrl) {
+      setPushRelayError('URL du serveur relay requise');
+      return;
+    }
+    if (!relayApiKey && !pushRelayStatus?.configured) {
+      setPushRelayError('Cle API requise');
+      return;
+    }
+    setPushRelayError(null);
+    setPushRelayResult(null);
+    pushRelaySaveMutation.mutate({
+      relayUrl: relayUrl || null,
+      apiKey: relayApiKey || null,
+    });
   };
 
   // Tunnel status query
@@ -897,23 +985,42 @@ export default function SettingsPage() {
           </Card>
         </Grid>
 
-        {/* Firebase Push Notifications */}
+        {/* Push Relay - Recommended method for push notifications */}
         <Grid item xs={12}>
           <Card>
             <CardContent>
               <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-                <AndroidIcon sx={{ mr: 1, color: '#34A853' }} />
+                <CloudIcon sx={{ mr: 1, color: theme.palette.primary.main }} />
                 <Typography variant="h6" fontWeight={600}>
-                  Push Notifications (Firebase)
+                  Push Notifications (Relay)
                 </Typography>
-                {firebaseStatus?.configured ? (
-                  <Chip
-                    icon={<CheckCircleIcon />}
-                    label="Configure"
-                    color="success"
-                    size="small"
-                    sx={{ ml: 2 }}
-                  />
+                {pushRelayStatus?.configured ? (
+                  <>
+                    <Chip
+                      icon={<CheckCircleIcon />}
+                      label="Configure"
+                      color="success"
+                      size="small"
+                      sx={{ ml: 2 }}
+                    />
+                    {pushRelayStatus?.healthy ? (
+                      <Chip
+                        label="Connecte"
+                        color="success"
+                        size="small"
+                        variant="outlined"
+                        sx={{ ml: 1 }}
+                      />
+                    ) : (
+                      <Chip
+                        label="Deconnecte"
+                        color="warning"
+                        size="small"
+                        variant="outlined"
+                        sx={{ ml: 1 }}
+                      />
+                    )}
+                  </>
                 ) : (
                   <Chip
                     icon={<ErrorIcon />}
@@ -927,169 +1034,336 @@ export default function SettingsPage() {
 
               <Alert severity="info" sx={{ mb: 3 }}>
                 <Typography variant="body2" fontWeight={500}>
-                  Firebase Cloud Messaging permet d'envoyer des push notifications aux applications mobiles.
+                  Le serveur Push Relay centralise l'envoi des notifications push vers iOS et Android.
                 </Typography>
                 <Typography variant="caption">
-                  Requis pour les appels entrants quand l'app est fermee/en arriere-plan.
-                  Chaque utilisateur doit creer son propre projet Firebase.
+                  Requis pour les appels entrants et les messages quand l'app est fermee ou en arriere-plan.
+                  Plus simple que Firebase: une seule configuration pour iOS et Android.
                 </Typography>
               </Alert>
 
               <Grid container spacing={3}>
                 <Grid item xs={12} md={6}>
                   <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                    Configuration du Service Account
+                    Configuration du serveur Relay
                   </Typography>
 
-                  {firebaseStatus?.configured ? (
-                    <Box
-                      sx={{
-                        p: 2,
-                        borderRadius: 2,
-                        backgroundColor: alpha(theme.palette.success.main, 0.08),
-                        border: '1px solid',
-                        borderColor: alpha(theme.palette.success.main, 0.3),
-                        mb: 2,
-                      }}
-                    >
-                      <Typography variant="body2">
-                        <strong>Projet:</strong> {firebaseStatus.projectId}
-                      </Typography>
-                      <Typography variant="body2">
-                        <strong>Fichier:</strong> {firebaseStatus.configPath}
-                      </Typography>
-                      <Typography variant="body2">
-                        <strong>Appareils enregistres:</strong> {firebaseStatus.registeredDevices}
-                      </Typography>
-                      <Typography variant="body2">
-                        <strong>Utilisateurs:</strong> {firebaseStatus.registeredUsers}
-                      </Typography>
-                    </Box>
-                  ) : (
-                    <Alert severity="warning" sx={{ mb: 2 }}>
-                      Aucun fichier firebase-service-account.json configure.
-                      Les push notifications ne fonctionneront pas.
-                    </Alert>
-                  )}
-
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Button
-                        variant="outlined"
-                        component="label"
-                        startIcon={<CloudUploadIcon />}
-                      >
-                        Choisir fichier
-                        <input
-                          type="file"
-                          hidden
-                          accept=".json"
-                          onChange={handleFirebaseFileChange}
-                        />
-                      </Button>
-                      {firebaseFile && (
-                        <Typography variant="body2" color="text.secondary">
-                          {firebaseFile.name}
-                        </Typography>
-                      )}
-                    </Box>
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label="URL du serveur Relay"
+                      value={relayUrl}
+                      onChange={(e) => setRelayUrl(e.target.value)}
+                      placeholder="https://push.homenichat.com"
+                      helperText="URL du serveur Push Relay"
+                    />
 
-                    {firebaseFile && (
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label="Cle API"
+                      type={showApiKey ? 'text' : 'password'}
+                      value={relayApiKey}
+                      onChange={(e) => setRelayApiKey(e.target.value)}
+                      placeholder={pushRelayStatus?.configured ? '••••••••' : 'Votre cle API'}
+                      helperText={pushRelayStatus?.configured ? 'Laissez vide pour garder la cle actuelle' : 'Cle API fournie par le service relay'}
+                      InputProps={{
+                        endAdornment: (
+                          <IconButton
+                            size="small"
+                            onClick={() => setShowApiKey(!showApiKey)}
+                            edge="end"
+                          >
+                            {showApiKey ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                          </IconButton>
+                        ),
+                      }}
+                    />
+
+                    {pushRelayStatus?.configured && (
+                      <Box
+                        sx={{
+                          p: 2,
+                          borderRadius: 2,
+                          backgroundColor: alpha(theme.palette.success.main, 0.08),
+                          border: '1px solid',
+                          borderColor: alpha(theme.palette.success.main, 0.3),
+                        }}
+                      >
+                        <Typography variant="body2">
+                          <strong>Serveur:</strong> {pushRelayStatus.relayUrl}
+                        </Typography>
+                        <Typography variant="body2">
+                          <strong>Etat:</strong> {pushRelayStatus.healthy ? 'Connecte' : 'Deconnecte'}
+                        </Typography>
+                        {pushRelayStatus.stats && (
+                          <>
+                            <Typography variant="body2">
+                              <strong>Appareils:</strong> {pushRelayStatus.stats.totalDevices || 0}
+                            </Typography>
+                            <Typography variant="body2">
+                              <strong>Notifications envoyees:</strong> {pushRelayStatus.stats.totalSent || 0}
+                            </Typography>
+                          </>
+                        )}
+                      </Box>
+                    )}
+
+                    {pushRelayError && (
+                      <Alert severity="error" onClose={() => setPushRelayError(null)}>
+                        {pushRelayError}
+                      </Alert>
+                    )}
+
+                    {pushRelayResult && (
+                      <Alert severity="success" onClose={() => setPushRelayResult(null)}>
+                        {pushRelayResult}
+                      </Alert>
+                    )}
+
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                       <Button
                         variant="contained"
                         color="primary"
-                        startIcon={<CloudUploadIcon />}
-                        onClick={handleFirebaseUpload}
-                        disabled={firebaseUploadMutation.isPending}
+                        startIcon={pushRelaySaveMutation.isPending ? <CircularProgress size={20} color="inherit" /> : <SaveIcon />}
+                        onClick={handlePushRelaySave}
+                        disabled={pushRelaySaveMutation.isPending || !relayUrl}
                       >
-                        {firebaseUploadMutation.isPending ? 'Upload...' : 'Uploader la configuration'}
+                        Sauvegarder
                       </Button>
-                    )}
 
-                    {firebaseUploadError && (
-                      <Alert severity="error">
-                        {firebaseUploadError}
-                      </Alert>
-                    )}
-
-                    {firebaseTestResult && (
-                      <Alert severity={firebaseTestResult.includes('erreur') || firebaseTestResult.includes('Error') ? 'error' : 'success'}>
-                        {firebaseTestResult}
-                      </Alert>
-                    )}
-
-                    {firebaseStatus?.configured && (
-                      <Box sx={{ display: 'flex', gap: 1 }}>
-                        <Button
-                          variant="outlined"
-                          color="primary"
-                          startIcon={<SendIcon />}
-                          onClick={() => firebaseTestMutation.mutate()}
-                          disabled={firebaseTestMutation.isPending}
-                        >
-                          Tester
-                        </Button>
-                        <Button
-                          variant="outlined"
-                          color="error"
-                          startIcon={<DeleteIcon />}
-                          onClick={() => firebaseDeleteMutation.mutate()}
-                          disabled={firebaseDeleteMutation.isPending}
-                        >
-                          Supprimer
-                        </Button>
-                      </Box>
-                    )}
+                      {pushRelayStatus?.configured && (
+                        <>
+                          <Button
+                            variant="outlined"
+                            color="primary"
+                            startIcon={pushRelayTestMutation.isPending ? <CircularProgress size={20} /> : <SendIcon />}
+                            onClick={() => pushRelayTestMutation.mutate()}
+                            disabled={pushRelayTestMutation.isPending}
+                          >
+                            Tester
+                          </Button>
+                          <Button
+                            variant="outlined"
+                            color="error"
+                            startIcon={<DeleteIcon />}
+                            onClick={() => pushRelayDeleteMutation.mutate()}
+                            disabled={pushRelayDeleteMutation.isPending}
+                          >
+                            Supprimer
+                          </Button>
+                        </>
+                      )}
+                    </Box>
                   </Box>
                 </Grid>
 
                 <Grid item xs={12} md={6}>
                   <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                    Comment obtenir le fichier
+                    A propos du Push Relay
                   </Typography>
 
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                     <Typography variant="body2">
-                      1. Aller sur{' '}
-                      <Link
-                        href="https://console.firebase.google.com/"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        Firebase Console <OpenInNewIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} />
-                      </Link>
+                      Le serveur Push Relay est un service centralise qui:
                     </Typography>
-                    <Typography variant="body2">
-                      2. Creer un nouveau projet ou selectionner un existant
-                    </Typography>
-                    <Typography variant="body2">
-                      3. Aller dans <strong>Project Settings</strong> → <strong>Service Accounts</strong>
-                    </Typography>
-                    <Typography variant="body2">
-                      4. Cliquer <strong>Generate new private key</strong>
-                    </Typography>
-                    <Typography variant="body2">
-                      5. Sauvegarder le fichier JSON et l'uploader ici
+                    <Typography variant="body2" component="div">
+                      <ul style={{ margin: 0, paddingLeft: 20 }}>
+                        <li>Envoie les notifications push iOS (APNs)</li>
+                        <li>Envoie les notifications push Android (FCM)</li>
+                        <li>Gere les tokens des appareils</li>
+                        <li>Simplifie la configuration (une seule cle API)</li>
+                      </ul>
                     </Typography>
 
-                    <Divider sx={{ my: 2 }} />
+                    <Divider sx={{ my: 1 }} />
 
-                    <Alert severity="warning" icon={<WarningIcon />}>
+                    <Alert severity="info" icon={<PhoneAndroidIcon />}>
                       <Typography variant="caption">
-                        <strong>Important:</strong> Ce fichier contient des cles privees.
-                        Ne le partagez jamais et ne le commitez pas dans un repo public!
+                        <strong>App Mobile:</strong> L'application mobile doit etre configuree pour
+                        utiliser le meme serveur relay. La cle API permet d'authentifier votre serveur.
                       </Typography>
                     </Alert>
 
-                    <Alert severity="info" icon={<PhoneAndroidIcon />} sx={{ mt: 1 }}>
+                    <Alert severity="warning" icon={<WarningIcon />}>
                       <Typography variant="caption">
-                        <strong>App Mobile:</strong> Vous devez aussi configurer l'app Android
-                        avec le fichier <code>google-services.json</code> du meme projet Firebase.
+                        <strong>Important:</strong> La cle API est secrete.
+                        Ne la partagez jamais publiquement.
                       </Typography>
                     </Alert>
                   </Box>
                 </Grid>
               </Grid>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Firebase Push Notifications (Legacy/Fallback) */}
+        <Grid item xs={12}>
+          <Card sx={{ opacity: pushRelayStatus?.configured ? 0.7 : 1 }}>
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                <AndroidIcon sx={{ mr: 1, color: '#34A853' }} />
+                <Typography variant="h6" fontWeight={600}>
+                  Push Notifications (Firebase) - Fallback
+                </Typography>
+                {firebaseStatus?.configured ? (
+                  <Chip
+                    icon={<CheckCircleIcon />}
+                    label="Configure"
+                    color="success"
+                    size="small"
+                    sx={{ ml: 2 }}
+                  />
+                ) : (
+                  <Chip
+                    label="Non configure"
+                    color="default"
+                    size="small"
+                    sx={{ ml: 2 }}
+                  />
+                )}
+                {pushRelayStatus?.configured && (
+                  <Chip
+                    label="Relay actif - Firebase desactive"
+                    color="info"
+                    size="small"
+                    variant="outlined"
+                    sx={{ ml: 1 }}
+                  />
+                )}
+              </Box>
+
+              {!pushRelayStatus?.configured && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  <Typography variant="caption">
+                    Firebase est utilise uniquement si le Push Relay n'est pas configure.
+                    Il est recommande d'utiliser le Push Relay pour une configuration simplifiee.
+                  </Typography>
+                </Alert>
+              )}
+
+              {pushRelayStatus?.configured ? (
+                <Typography variant="body2" color="text.secondary">
+                  Le Push Relay est configure et actif. Firebase n'est pas utilise.
+                  {firebaseStatus?.configured && ' Vous pouvez supprimer la configuration Firebase si vous le souhaitez.'}
+                </Typography>
+              ) : (
+                <Grid container spacing={3}>
+                  <Grid item xs={12} md={6}>
+                    {firebaseStatus?.configured ? (
+                      <Box
+                        sx={{
+                          p: 2,
+                          borderRadius: 2,
+                          backgroundColor: alpha(theme.palette.success.main, 0.08),
+                          border: '1px solid',
+                          borderColor: alpha(theme.palette.success.main, 0.3),
+                          mb: 2,
+                        }}
+                      >
+                        <Typography variant="body2">
+                          <strong>Projet:</strong> {firebaseStatus.projectId}
+                        </Typography>
+                        <Typography variant="body2">
+                          <strong>Appareils:</strong> {firebaseStatus.registeredDevices}
+                        </Typography>
+                      </Box>
+                    ) : (
+                      <Alert severity="warning" sx={{ mb: 2 }}>
+                        Firebase non configure. Configurez le Push Relay ci-dessus (recommande)
+                        ou uploadez un fichier firebase-service-account.json.
+                      </Alert>
+                    )}
+
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Button
+                          variant="outlined"
+                          component="label"
+                          startIcon={<CloudUploadIcon />}
+                          size="small"
+                        >
+                          Choisir fichier
+                          <input
+                            type="file"
+                            hidden
+                            accept=".json"
+                            onChange={handleFirebaseFileChange}
+                          />
+                        </Button>
+                        {firebaseFile && (
+                          <Typography variant="body2" color="text.secondary">
+                            {firebaseFile.name}
+                          </Typography>
+                        )}
+                      </Box>
+
+                      {firebaseFile && (
+                        <Button
+                          variant="contained"
+                          color="primary"
+                          size="small"
+                          startIcon={<CloudUploadIcon />}
+                          onClick={handleFirebaseUpload}
+                          disabled={firebaseUploadMutation.isPending}
+                        >
+                          Uploader
+                        </Button>
+                      )}
+
+                      {firebaseUploadError && (
+                        <Alert severity="error" sx={{ py: 0 }}>
+                          {firebaseUploadError}
+                        </Alert>
+                      )}
+
+                      {firebaseTestResult && (
+                        <Alert severity={firebaseTestResult.includes('erreur') || firebaseTestResult.includes('Error') ? 'error' : 'success'} sx={{ py: 0 }}>
+                          {firebaseTestResult}
+                        </Alert>
+                      )}
+
+                      {firebaseStatus?.configured && (
+                        <Box sx={{ display: 'flex', gap: 1 }}>
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            startIcon={<SendIcon />}
+                            onClick={() => firebaseTestMutation.mutate()}
+                            disabled={firebaseTestMutation.isPending}
+                          >
+                            Tester
+                          </Button>
+                          <Button
+                            variant="outlined"
+                            color="error"
+                            size="small"
+                            startIcon={<DeleteIcon />}
+                            onClick={() => firebaseDeleteMutation.mutate()}
+                            disabled={firebaseDeleteMutation.isPending}
+                          >
+                            Supprimer
+                          </Button>
+                        </Box>
+                      )}
+                    </Box>
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Pour configurer Firebase manuellement:
+                      <ol style={{ margin: '8px 0', paddingLeft: 20 }}>
+                        <li>Aller sur Firebase Console</li>
+                        <li>Project Settings → Service Accounts</li>
+                        <li>Generate new private key</li>
+                        <li>Uploader le fichier JSON ici</li>
+                      </ol>
+                    </Typography>
+                  </Grid>
+                </Grid>
+              )}
             </CardContent>
           </Card>
         </Grid>

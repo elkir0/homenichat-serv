@@ -3,24 +3,64 @@
  *
  * Sends push notifications via the centralized relay server
  * instead of directly to FCM/APNs.
+ *
+ * Configuration can come from:
+ * 1. Config file: DATA_DIR/push-relay.json (priority)
+ * 2. Environment variables: PUSH_RELAY_URL, PUSH_RELAY_API_KEY (fallback)
  */
 
 const logger = require('../utils/logger');
+const fs = require('fs');
+const path = require('path');
 
 class PushRelayService {
   constructor() {
-    this.relayUrl = process.env.PUSH_RELAY_URL;
-    this.apiKey = process.env.PUSH_RELAY_API_KEY;
+    this.relayUrl = null;
+    this.apiKey = null;
     this.initialized = false;
+  }
+
+  /**
+   * Load configuration from file or environment
+   */
+  loadConfig() {
+    // Try to load from config file first
+    const dataDir = process.env.DATA_DIR || '/var/lib/homenichat';
+    const configPath = path.join(dataDir, 'push-relay.json');
+
+    if (fs.existsSync(configPath)) {
+      try {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        if (config.relayUrl && config.apiKey) {
+          this.relayUrl = config.relayUrl;
+          this.apiKey = config.apiKey;
+          logger.info('[PushRelay] Config loaded from file');
+          return true;
+        }
+      } catch (e) {
+        logger.warn('[PushRelay] Failed to load config file:', e.message);
+      }
+    }
+
+    // Fallback to environment variables
+    this.relayUrl = process.env.PUSH_RELAY_URL || null;
+    this.apiKey = process.env.PUSH_RELAY_API_KEY || null;
+
+    return !!(this.relayUrl && this.apiKey);
   }
 
   /**
    * Initialize the service
    */
   initialize() {
+    // Load config if not already set
+    if (!this.relayUrl || !this.apiKey) {
+      this.loadConfig();
+    }
+
     if (!this.relayUrl || !this.apiKey) {
       logger.warn('[PushRelay] PUSH_RELAY_URL or PUSH_RELAY_API_KEY not configured');
-      logger.warn('[PushRelay] Push notifications will be disabled');
+      logger.warn('[PushRelay] Push notifications via relay will be disabled');
       return false;
     }
 
