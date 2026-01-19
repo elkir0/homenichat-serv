@@ -7,6 +7,7 @@
 #    or: sudo ./install.sh
 #    or: sudo ./install.sh --auto  (non-interactive, accept defaults)
 #    or: sudo ./install.sh --full  (install ALL components: Baileys, Asterisk, Modems)
+#    or: sudo ./install.sh --full --verbose  (full install with detailed output)
 #
 # License: GPL v3
 #
@@ -39,6 +40,7 @@ INSTALL_MODEMS=false
 # Auto mode (non-interactive)
 AUTO_MODE=false
 FULL_MODE=false
+VERBOSE_MODE=false
 
 for arg in "$@"; do
     case "$arg" in
@@ -51,6 +53,9 @@ for arg in "$@"; do
             INSTALL_FREEPBX=true
             INSTALL_BAILEYS=true
             INSTALL_MODEMS=true
+            ;;
+        --verbose|-v)
+            VERBOSE_MODE=true
             ;;
     esac
 done
@@ -72,6 +77,9 @@ print_banner() {
     echo -e "Version ${HOMENICHAT_VERSION}"
     if [ "$AUTO_MODE" = true ]; then
         echo -e "${YELLOW}[AUTO MODE - Non-interactive installation]${NC}"
+    fi
+    if [ "$VERBOSE_MODE" = true ]; then
+        echo -e "${CYAN}[VERBOSE MODE - Detailed output enabled]${NC}"
     fi
     echo ""
     echo "=========================================================="
@@ -107,6 +115,35 @@ fatal() {
     echo ""
     echo -e "${RED}Installation failed. Check log: $LOG_FILE${NC}"
     exit 1
+}
+
+# Run command with optional verbose output
+# Usage: run_cmd "description" command args...
+run_cmd() {
+    local desc="$1"
+    shift
+    if [ "$VERBOSE_MODE" = true ]; then
+        echo -e "${CYAN}>>> $desc${NC}"
+        echo -e "${CYAN}>>> Running: $*${NC}"
+        "$@" 2>&1 | tee -a "$LOG_FILE"
+        local status=${PIPESTATUS[0]}
+        return $status
+    else
+        "$@" >> "$LOG_FILE" 2>&1
+        return $?
+    fi
+}
+
+# Run apt-get with verbose support
+apt_install() {
+    if [ "$VERBOSE_MODE" = true ]; then
+        echo -e "${CYAN}>>> Installing packages: $*${NC}"
+        apt-get install -y "$@" 2>&1 | tee -a "$LOG_FILE"
+        return ${PIPESTATUS[0]}
+    else
+        apt-get install -y "$@" >> "$LOG_FILE" 2>&1
+        return $?
+    fi
 }
 
 confirm() {
@@ -372,19 +409,16 @@ choose_components() {
 install_dependencies() {
     info "Installing system dependencies..."
 
-    apt-get update >> "$LOG_FILE" 2>&1
+    run_cmd "Updating package lists" apt-get update
 
     # Fix locale warnings first
-    apt-get install -y locales >> "$LOG_FILE" 2>&1
+    apt_install locales
     sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen 2>/dev/null || true
-    locale-gen >> "$LOG_FILE" 2>&1 || true
+    run_cmd "Generating locales" locale-gen || true
     export LANG=en_US.UTF-8
     export LC_ALL=en_US.UTF-8
 
-    apt-get install -y \
-        curl wget git build-essential python3 python3-pip \
-        sqlite3 nginx supervisor ufw \
-        >> "$LOG_FILE" 2>&1
+    apt_install curl wget git build-essential python3 python3-pip sqlite3 nginx supervisor ufw
 
     success "System dependencies installed"
 }
@@ -400,8 +434,13 @@ install_nodejs() {
         fi
     fi
 
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >> "$LOG_FILE" 2>&1
-    apt-get install -y nodejs >> "$LOG_FILE" 2>&1
+    if [ "$VERBOSE_MODE" = true ]; then
+        echo -e "${CYAN}>>> Adding NodeSource repository${NC}"
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash - 2>&1 | tee -a "$LOG_FILE"
+    else
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >> "$LOG_FILE" 2>&1
+    fi
+    apt_install nodejs
 
     success "Node.js $(node -v) installed"
 }
@@ -416,11 +455,11 @@ install_homenichat() {
     if [ -d "$INSTALL_DIR/.git" ]; then
         info "Updating existing installation..."
         cd "$INSTALL_DIR"
-        git pull >> "$LOG_FILE" 2>&1 || warning "Could not update, continuing with existing version"
+        run_cmd "Git pull" git pull || warning "Could not update, continuing with existing version"
     else
         info "Cloning from $REPO_URL..."
         rm -rf "$INSTALL_DIR"
-        git clone "$REPO_URL" "$INSTALL_DIR" >> "$LOG_FILE" 2>&1 || {
+        run_cmd "Git clone" git clone "$REPO_URL" "$INSTALL_DIR" || {
             fatal "Could not clone repository. Please check your internet connection."
         }
     fi
@@ -428,14 +467,14 @@ install_homenichat() {
     # Install npm dependencies (repo root is the server, no backend subfolder)
     cd "$INSTALL_DIR"
     info "Installing Node.js dependencies..."
-    npm install --omit=dev >> "$LOG_FILE" 2>&1
+    run_cmd "npm install (server)" npm install --omit=dev
 
     # Build admin interface
     if [ -d "$INSTALL_DIR/admin" ]; then
         info "Building admin interface..."
         cd "$INSTALL_DIR/admin"
-        npm install >> "$LOG_FILE" 2>&1
-        npm run build >> "$LOG_FILE" 2>&1
+        run_cmd "npm install (admin)" npm install
+        run_cmd "npm build (admin)" npm run build
         cd "$INSTALL_DIR"
     fi
 
@@ -530,7 +569,7 @@ install_upnp() {
     info "Installing UPnP support (miniupnpc)..."
 
     # Install miniupnpc
-    apt-get install -y miniupnpc >> "$LOG_FILE" 2>&1 || {
+    apt_install miniupnpc || {
         warning "miniupnpc installation failed"
         return
     }
@@ -614,7 +653,7 @@ install_chan_quectel() {
 
     # Install ALL dependencies required for chan_quectel compilation
     info "Installing chan_quectel build dependencies..."
-    apt-get install -y cmake libasound2-dev libsqlite3-dev >> "$LOG_FILE" 2>&1
+    apt_install cmake libasound2-dev libsqlite3-dev
 
     cd /usr/src
 
@@ -624,16 +663,16 @@ install_chan_quectel() {
     info "Installing Asterisk 22 development headers..."
 
     # Update package list to ensure FreePBX repos are available
-    apt-get update >> "$LOG_FILE" 2>&1 || true
+    run_cmd "Update package lists" apt-get update || true
 
     # Try multiple package names (varies by FreePBX version)
-    if apt-get install -y asterisk22-devel >> "$LOG_FILE" 2>&1; then
+    if apt_install asterisk22-devel; then
         HEADERS_INSTALLED=true
         success "asterisk22-devel installed"
-    elif apt-get install -y asterisk-devel >> "$LOG_FILE" 2>&1; then
+    elif apt_install asterisk-devel; then
         HEADERS_INSTALLED=true
         success "asterisk-devel installed"
-    elif apt-get install -y asterisk-dev >> "$LOG_FILE" 2>&1; then
+    elif apt_install asterisk-dev; then
         HEADERS_INSTALLED=true
         success "asterisk-dev installed"
     else
@@ -828,11 +867,11 @@ UDEV_RULES
     local CHAN_QUECTEL_COMPILED=false
 
     info "Cloning chan_quectel (RoEdAl fork)..."
-    if git clone https://github.com/RoEdAl/asterisk-chan-quectel.git >> "$LOG_FILE" 2>&1; then
+    if run_cmd "Cloning chan_quectel" git clone https://github.com/RoEdAl/asterisk-chan-quectel.git; then
         cd asterisk-chan-quectel
 
         # Use specific commit that works (from user's VM500 setup)
-        git checkout 37b566f >> "$LOG_FILE" 2>&1 || {
+        run_cmd "Checkout commit 37b566f" git checkout 37b566f || {
             warning "Could not checkout known working commit, using latest"
         }
 
@@ -841,13 +880,13 @@ UDEV_RULES
 
         # Run cmake with error checking
         info "Running cmake..."
-        if cmake -DCMAKE_BUILD_TYPE=Release .. >> "$LOG_FILE" 2>&1; then
+        if run_cmd "CMake configure" cmake -DCMAKE_BUILD_TYPE=Release ..; then
             # Run make with error checking
-            info "Running make..."
-            if make -j$(nproc) >> "$LOG_FILE" 2>&1; then
+            info "Running make (this may take a few minutes)..."
+            if run_cmd "Make build" make -j$(nproc); then
                 # Install
                 info "Installing chan_quectel module..."
-                if make install >> "$LOG_FILE" 2>&1; then
+                if run_cmd "Make install" make install; then
                     CHAN_QUECTEL_COMPILED=true
                     success "chan_quectel compiled and installed successfully"
                 else
@@ -860,7 +899,7 @@ UDEV_RULES
         else
             error "cmake failed! Check $LOG_FILE for details"
             echo "=== CMAKE ERROR ===" >> "$LOG_FILE"
-            cmake -DCMAKE_BUILD_TYPE=Release .. >> "$LOG_FILE" 2>&1 || true
+            run_cmd "CMake retry" cmake -DCMAKE_BUILD_TYPE=Release .. || true
             warning "chan_quectel compilation failed at cmake stage"
         fi
 
