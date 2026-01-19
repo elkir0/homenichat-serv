@@ -50,9 +50,11 @@
 ### Professional Features
 - 📱 Web admin interface for configuration
 - 🔔 Real-time notifications via WebSocket
+- 📲 Push notifications for iOS/Android (via Push Relay)
 - 📊 Message analytics and reports
 - 👥 Multi-user support with role-based access
 - 🔌 REST API for custom integrations
+- 🔧 UPnP automatic port forwarding (optional)
 
 ---
 
@@ -125,7 +127,16 @@ docker compose up -d
 
 ### Modem Configuration
 
-After installation, configure your modem in `/etc/asterisk/quectel.conf`:
+**Option 1: Web Interface (Recommended)**
+
+After installation, go to the admin panel (`/admin/modems`) and:
+1. Click "**Scan USB ports**" to detect connected modems
+2. Click "**Add this modem**" on the detected modem
+3. The modem will be automatically configured in Asterisk
+
+**Option 2: Manual Configuration**
+
+Edit `/etc/asterisk/quectel.conf`:
 
 ```ini
 [quectel-sim7600]
@@ -280,8 +291,10 @@ For a **plug-and-play** deployment accessible from internet, open only these por
 | Port | Protocol | Service | Required For | Priority |
 |------|----------|---------|--------------|----------|
 | **443** | TCP | HTTPS | Web interface + API + WebRTC (via reverse proxy) | **Essential** |
-| **5061** | TCP | SIP TLS | Native SIP clients (Groundwire, Zoiper) | Optional |
+| **5160** | TCP/UDP | SIP | Native SIP clients (Groundwire, Zoiper) | Optional |
 | **10000-10100** | UDP | RTP | Voice media packets | **Essential** |
+
+> 💡 **Why port 5160?** Standard SIP port 5060 is often blocked or used by ISP boxes (Livebox, Freebox, etc.). Port 5160 avoids these conflicts.
 
 > 💡 **Recommended Setup:** Use a reverse proxy (Caddy/nginx) on port 443 to handle everything. This minimizes attack surface.
 
@@ -298,8 +311,8 @@ For a **plug-and-play** deployment accessible from internet, open only these por
 
 | Port | Protocol | Service | Description | Expose to Internet? |
 |------|----------|---------|-------------|---------------------|
-| 5060 | UDP | SIP | Standard SIP signaling | ⚠️ Not recommended (unencrypted) |
-| 5061 | TCP | SIP TLS | Secure SIP signaling | ✅ Yes for native SIP clients |
+| 5060 | UDP | SIP | Standard SIP (often blocked by ISP) | ⚠️ Avoid - use 5160 |
+| 5160 | TCP/UDP | SIP | Alternative SIP port | ✅ Yes for native SIP clients |
 | 8088 | TCP | WebSocket (WS) | Non-SSL WebRTC | ❌ Local testing only |
 | 8089 | TCP | WebSocket (WSS) | SSL WebRTC signaling | Via reverse proxy (or direct) |
 | 10000-10100 | UDP | RTP | Voice/video media | ✅ Yes (required for audio) |
@@ -318,8 +331,9 @@ For a **plug-and-play** deployment accessible from internet, open only these por
 
 ```bash
 # Essential ports only (recommended)
-sudo ufw allow 443/tcp        # HTTPS (reverse proxy)
-sudo ufw allow 5061/tcp       # SIP TLS
+sudo ufw allow 443/tcp          # HTTPS (reverse proxy)
+sudo ufw allow 5160/tcp         # SIP (alternative port)
+sudo ufw allow 5160/udp         # SIP UDP
 sudo ufw allow 10000:10100/udp  # RTP media
 
 # Enable firewall
@@ -331,7 +345,8 @@ sudo ufw enable
 ```bash
 # Essential ports
 iptables -A INPUT -p tcp --dport 443 -j ACCEPT
-iptables -A INPUT -p tcp --dport 5061 -j ACCEPT
+iptables -A INPUT -p tcp --dport 5160 -j ACCEPT
+iptables -A INPUT -p udp --dport 5160 -j ACCEPT
 iptables -A INPUT -p udp --dport 10000:10100 -j ACCEPT
 ```
 
@@ -397,8 +412,8 @@ server {
 |-------------|-------------------|------------|
 | **Homenichat App (WebRTC)** | WSS via HTTPS | 443 + RTP (10000-10100) |
 | **Browser (WebRTC)** | WSS via HTTPS | 443 + RTP (10000-10100) |
-| **Groundwire / Zoiper** | SIP TLS | 5061 + RTP (10000-10100) |
-| **Generic SIP Phone** | SIP UDP | 5060 + RTP (avoid if possible) |
+| **Groundwire / Zoiper** | SIP | 5160 + RTP (10000-10100) |
+| **Generic SIP Phone** | SIP UDP | 5160 + RTP (10000-10100) |
 
 ### NAT/Router Configuration
 
@@ -407,9 +422,11 @@ If behind a NAT router, configure port forwarding:
 ```
 External Port    →    Internal IP:Port
 443/TCP          →    192.168.x.x:443     (Reverse proxy)
-5061/TCP         →    192.168.x.x:5061    (SIP TLS)
+5160/TCP+UDP     →    192.168.x.x:5160    (SIP)
 10000-10100/UDP  →    192.168.x.x:10000-10100  (RTP)
 ```
+
+> 💡 **UPnP**: Homenichat includes optional UPnP support for automatic port forwarding. Enable it in **Settings** → **UPnP** if your router supports it.
 
 ### Security Recommendations
 
@@ -469,6 +486,39 @@ your-domain.com {
 | HTTPS (HTTPS=true) | ✅ Enabled | ✅ Enabled | ✅ Enabled |
 
 > ⚠️ **Warning**: Without HTTPS, data between client and server is not encrypted. Only use HTTP mode on trusted local networks.
+
+---
+
+## 📲 Push Notifications
+
+### Push Relay (Recommended)
+
+Homenichat uses a **Push Relay** server to send notifications to iOS and Android apps. This is simpler than configuring Firebase directly.
+
+**Configuration via Admin Panel:**
+
+1. Go to **Settings** → **Push Notifications (Relay)**
+2. Enter the **Relay URL** (e.g., `https://push.homenichat.com`)
+3. Enter your **API Key**
+4. Click **Save** and **Test**
+
+**Environment variables (alternative):**
+
+```bash
+# In /etc/homenichat/.env
+PUSH_RELAY_URL=https://push.homenichat.com
+PUSH_RELAY_API_KEY=your-api-key
+```
+
+### Firebase (Fallback)
+
+If you prefer direct Firebase integration:
+
+1. Create a Firebase project at [Firebase Console](https://console.firebase.google.com)
+2. Go to **Project Settings** → **Service Accounts** → **Generate new private key**
+3. Upload the JSON file via **Admin Panel** → **Settings** → **Firebase**
+
+> 💡 **Note**: Push Relay is recommended as it handles both iOS (APNs) and Android (FCM) with a single configuration.
 
 ---
 
