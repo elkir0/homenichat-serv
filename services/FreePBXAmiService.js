@@ -21,11 +21,12 @@ class FreePBXAmiService extends EventEmitter {
   constructor() {
     super();
 
+    // Support both naming conventions for AMI credentials
     this.config = {
       host: process.env.AMI_HOST || '127.0.0.1',
       port: parseInt(process.env.AMI_PORT) || 5038,
-      username: process.env.AMI_USERNAME || 'homenichat',
-      password: process.env.AMI_PASSWORD || ''
+      username: process.env.AMI_USER || process.env.AMI_USERNAME || 'homenichat',
+      password: process.env.AMI_SECRET || process.env.AMI_PASSWORD || ''
     };
 
     this.socket = null;

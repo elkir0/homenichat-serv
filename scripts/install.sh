@@ -998,27 +998,28 @@ EXTENSIONS_SMS
     # Use global variable so configure_env can include it in .env
     export AMI_PASSWORD=$(openssl rand -hex 12)
 
-    cat > /etc/asterisk/manager.conf << MANAGER_CONF
-[general]
-enabled = yes
-port = 5038
-bindaddr = 127.0.0.1
+    # FreePBX manages manager.conf - use manager_custom.conf for custom users
+    # This file is automatically included by FreePBX's manager.conf
+    cat > /etc/asterisk/manager_custom.conf << MANAGER_CONF
+; Homenichat AMI User - Auto-generated
+; This file is included by FreePBX's manager.conf
 
 [homenichat]
 secret = ${AMI_PASSWORD}
-read = all
-write = all
+read = system,call,log,verbose,command,agent,user,config,dtmf,reporting,cdr,dialplan,originate,message
+write = system,call,log,verbose,command,agent,user,config,dtmf,reporting,cdr,dialplan,originate,message
 deny = 0.0.0.0/0.0.0.0
 permit = 127.0.0.1/255.255.255.255
+writetimeout = 5000
 MANAGER_CONF
 
     # AMI credentials will be added to .env by configure_env function
     # (stored in global AMI_PASSWORD variable)
 
-    # Reload Asterisk manager
+    # Reload Asterisk manager to pick up new config
     asterisk -rx "manager reload" 2>/dev/null || true
 
-    success "AMI configured for Homenichat"
+    success "AMI configured for Homenichat (manager_custom.conf)"
 
     # Cleanup source directories
     cd /usr/src
