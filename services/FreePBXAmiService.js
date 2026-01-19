@@ -987,7 +987,7 @@ class FreePBXAmiService extends EventEmitter {
 
   /**
    * Create a PJSIP extension for WebRTC
-   * Writes directly to pjsip_custom.conf (FreePBX compatible)
+   * Uses FreePBX API first (visible in GUI), falls back to config file
    *
    * @param {object} extensionData - Extension configuration
    * @returns {Promise<{success: boolean, message: string}>}
@@ -999,7 +999,67 @@ class FreePBXAmiService extends EventEmitter {
       displayName,
       context = 'from-internal',
       transport = 'transport-wss',
-      // Codec priority for GSM modem compatibility
+      codecs = 'g722,ulaw,alaw,opus',
+      useApiOnly = false  // Force API-only (no config file fallback)
+    } = extensionData;
+
+    // Try FreePBX API first (extensions visible in FreePBX GUI)
+    try {
+      const freepbxApi = require('./FreePBXApiService');
+
+      if (await freepbxApi.isAvailable()) {
+        logger.info(`[AMI] Trying FreePBX API for extension ${extension}...`);
+
+        const apiResult = await freepbxApi.createExtension({
+          extension,
+          secret,
+          displayName,
+          webrtc: true,
+          context
+        });
+
+        if (apiResult.success) {
+          logger.info(`[AMI] Extension ${extension} created via FreePBX API (visible in GUI)`);
+          return {
+            success: true,
+            message: `Extension ${extension} créée (visible dans FreePBX)`,
+            extension,
+            secret,
+            visibleInFreePBX: true
+          };
+        }
+
+        // API failed but extension might already exist
+        if (apiResult.message && apiResult.message.includes('existe')) {
+          return { success: false, message: apiResult.message };
+        }
+
+        logger.warn(`[AMI] FreePBX API failed: ${apiResult.message}, trying config file...`);
+      }
+    } catch (apiError) {
+      logger.warn(`[AMI] FreePBX API not available: ${apiError.message}`);
+    }
+
+    // If API-only mode requested, don't fall back
+    if (useApiOnly) {
+      return { success: false, message: 'FreePBX API non disponible' };
+    }
+
+    // Fallback: Write to config file (Option A)
+    return await this.createPjsipExtensionViaConfigFile(extensionData);
+  }
+
+  /**
+   * Create extension via config file (fallback method)
+   * Extension works but is NOT visible in FreePBX GUI
+   */
+  async createPjsipExtensionViaConfigFile(extensionData) {
+    const {
+      extension,
+      secret,
+      displayName,
+      context = 'from-internal',
+      transport = 'transport-wss',
       codecs = 'g722,ulaw,alaw,opus'
     } = extensionData;
 
@@ -1015,6 +1075,7 @@ class FreePBXAmiService extends EventEmitter {
 ; ============================================
 ; Extension ${extension} - Created by Homenichat
 ; Created: ${new Date().toISOString()}
+; NOTE: Not visible in FreePBX GUI (config file method)
 ; ============================================
 [${extension}]
 type=endpoint
@@ -1058,8 +1119,14 @@ qualify_frequency=30
         logger.warn('[AMI] Not connected - extension created but PJSIP not reloaded');
       }
 
-      logger.info(`[AMI] PJSIP extension ${extension} created successfully`);
-      return { success: true, message: `Extension ${extension} créée avec succès`, extension, secret };
+      logger.info(`[AMI] PJSIP extension ${extension} created via config file`);
+      return {
+        success: true,
+        message: `Extension ${extension} créée (config file)`,
+        extension,
+        secret,
+        visibleInFreePBX: false
+      };
 
     } catch (error) {
       logger.error(`[AMI] Error creating PJSIP extension ${extension}:`, error);
@@ -1086,12 +1153,40 @@ qualify_frequency=30
   }
 
   /**
-   * Delete a PJSIP extension from pjsip_custom.conf
+   * Delete a PJSIP extension
+   * Tries FreePBX API first, then falls back to config file
    *
    * @param {string} extension - Extension number to delete
    * @returns {Promise<{success: boolean, message: string}>}
    */
   async deletePjsipExtension(extension) {
+    // Try FreePBX API first
+    try {
+      const freepbxApi = require('./FreePBXApiService');
+
+      if (await freepbxApi.isAvailable()) {
+        const exists = await freepbxApi.extensionExists(extension);
+
+        if (exists) {
+          const apiResult = await freepbxApi.deleteExtension(extension);
+          if (apiResult.success) {
+            logger.info(`[AMI] Extension ${extension} deleted via FreePBX API`);
+            return { success: true, message: `Extension ${extension} supprimée de FreePBX` };
+          }
+        }
+      }
+    } catch (apiError) {
+      logger.warn(`[AMI] FreePBX API delete failed: ${apiError.message}`);
+    }
+
+    // Also try to remove from config file (in case it exists there)
+    return await this.deletePjsipExtensionFromConfigFile(extension);
+  }
+
+  /**
+   * Delete extension from config file
+   */
+  async deletePjsipExtensionFromConfigFile(extension) {
     try {
       // Check if extension exists in config file
       if (!this.extensionExistsInConfig(extension)) {
@@ -1107,7 +1202,6 @@ qualify_frequency=30
       let content = fs.readFileSync(PJSIP_CUSTOM_CONF, 'utf8');
 
       // Remove the extension block (from header comment to END comment)
-      // Pattern matches: ; ===... Extension XXXX ... to ; END Extension XXXX
       const blockPattern = new RegExp(
         `\\n?; =+\\n; Extension ${extension} - Created by Homenichat[\\s\\S]*?; END Extension ${extension}\\n?`,
         'g'
@@ -1115,8 +1209,7 @@ qualify_frequency=30
 
       const newContent = content.replace(blockPattern, '\n');
 
-      // Also remove any standalone sections for this extension (fallback pattern)
-      // This handles extensions created without the full block format
+      // Also remove any standalone sections for this extension
       const sectionPatterns = [
         new RegExp(`\\n\\[${extension}\\]\\ntype=endpoint[\\s\\S]*?(?=\\n\\[|$)`, 'g'),
         new RegExp(`\\n\\[auth_${extension}\\]\\ntype=auth[\\s\\S]*?(?=\\n\\[|$)`, 'g'),
@@ -1142,8 +1235,8 @@ qualify_frequency=30
         logger.warn('[AMI] Not connected - extension deleted but PJSIP not reloaded');
       }
 
-      logger.info(`[AMI] PJSIP extension ${extension} deleted successfully`);
-      return { success: true, message: `Extension ${extension} supprimée avec succès` };
+      logger.info(`[AMI] PJSIP extension ${extension} deleted from config file`);
+      return { success: true, message: `Extension ${extension} supprimée` };
 
     } catch (error) {
       logger.error(`[AMI] Error deleting PJSIP extension ${extension}:`, error);
@@ -1152,13 +1245,41 @@ qualify_frequency=30
   }
 
   /**
-   * Update PJSIP extension secret/password in pjsip_custom.conf
+   * Update PJSIP extension secret/password
+   * Tries FreePBX API first, then falls back to config file
    *
    * @param {string} extension - Extension number
    * @param {string} newSecret - New password
    * @returns {Promise<{success: boolean, message: string}>}
    */
   async updatePjsipExtensionSecret(extension, newSecret) {
+    // Try FreePBX API first
+    try {
+      const freepbxApi = require('./FreePBXApiService');
+
+      if (await freepbxApi.isAvailable()) {
+        const exists = await freepbxApi.extensionExists(extension);
+
+        if (exists) {
+          const apiResult = await freepbxApi.updateExtensionSecret(extension, newSecret);
+          if (apiResult.success) {
+            logger.info(`[AMI] Extension ${extension} password updated via FreePBX API`);
+            return { success: true, message: `Mot de passe mis à jour pour ${extension}` };
+          }
+        }
+      }
+    } catch (apiError) {
+      logger.warn(`[AMI] FreePBX API update failed: ${apiError.message}`);
+    }
+
+    // Fallback: update in config file
+    return await this.updatePjsipExtensionSecretInConfigFile(extension, newSecret);
+  }
+
+  /**
+   * Update extension secret in config file (fallback)
+   */
+  async updatePjsipExtensionSecretInConfigFile(extension, newSecret) {
     try {
       // Check if extension exists in config file
       if (!this.extensionExistsInConfig(extension)) {
@@ -1172,8 +1293,7 @@ qualify_frequency=30
 
       let content = fs.readFileSync(PJSIP_CUSTOM_CONF, 'utf8');
 
-      // Find and replace the password line in the auth section for this extension
-      // Pattern: within [auth_XXXX] section, replace password=... line
+      // Find and replace the password line in the auth section
       const authSectionPattern = new RegExp(
         `(\\[auth_${extension}\\][\\s\\S]*?password=)[^\\n]+`,
         'g'
@@ -1199,7 +1319,7 @@ qualify_frequency=30
         logger.warn('[AMI] Not connected - password updated but PJSIP not reloaded');
       }
 
-      logger.info(`[AMI] PJSIP extension ${extension} password updated`);
+      logger.info(`[AMI] PJSIP extension ${extension} password updated in config file`);
       return { success: true, message: `Mot de passe mis à jour pour ${extension}` };
 
     } catch (error) {
@@ -1375,20 +1495,14 @@ qualify_frequency=30
   // GSM Modem Trunk Configuration (chan_quectel)
   // =====================================================
   //
-  // NOTE: With FreePBX, GSM trunks don't need to be "created" in a database.
-  // FreePBX ignores AstDB for trunks - it uses MySQL.
-  // Instead, the dialplan (extensions_homenichat.conf) handles routing:
-  //   - Outbound: Dial(Quectel/modem-id/${EXTEN})
-  //   - Inbound: context=from-gsm in quectel.conf
+  // With FreePBX API (Option B), trunks are created via FreePBX Core
+  // and are visible in the FreePBX GUI for unified management.
   //
-  // This function now just:
-  // 1. Returns the dial string info for reference
-  // 2. Optionally creates a WebRTC extension for the user
+  // Fallback: dialplan-only routing via extensions_homenichat.conf
 
   /**
    * Configure a GSM modem trunk
-   * With FreePBX, this returns routing info and optionally creates a WebRTC extension.
-   * The actual routing is handled by extensions_homenichat.conf dialplan.
+   * Uses FreePBX API first (visible in GUI), falls back to dialplan-only
    *
    * @param {object} modemData - Modem configuration
    * @returns {Promise<{success: boolean, message: string, dialString: string}>}
@@ -1405,6 +1519,31 @@ qualify_frequency=30
 
     try {
       logger.info(`[AMI] Configuring GSM modem ${modemId} (${modemName || 'unnamed'})`);
+
+      // Try FreePBX API first (trunk visible in FreePBX GUI)
+      let trunkCreatedViaApi = false;
+      try {
+        const freepbxApi = require('./FreePBXApiService');
+
+        if (await freepbxApi.isAvailable()) {
+          logger.info(`[AMI] Trying FreePBX API for trunk ${trunkName}...`);
+
+          const apiResult = await freepbxApi.createTrunk({
+            modemId,
+            modemName: modemName || modemId,
+            phoneNumber: phoneNumber || ''
+          });
+
+          if (apiResult.success) {
+            logger.info(`[AMI] Trunk ${trunkName} created via FreePBX API (visible in GUI)`);
+            trunkCreatedViaApi = true;
+          } else {
+            logger.warn(`[AMI] FreePBX API trunk creation failed: ${apiResult.message}`);
+          }
+        }
+      } catch (apiError) {
+        logger.warn(`[AMI] FreePBX API not available for trunk: ${apiError.message}`);
+      }
 
       // Auto-create WebRTC extension if requested
       let webrtcExtension = null;
@@ -1426,11 +1565,11 @@ qualify_frequency=30
             webrtcExtension = {
               extension: extensionNumber,
               secret: extensionSecret,
-              created: true
+              created: true,
+              visibleInFreePBX: extResult.visibleInFreePBX || false
             };
             logger.info(`[AMI] WebRTC extension ${extensionNumber} created for modem ${modemId}`);
-          } else if (extResult.message.includes('existe déjà')) {
-            // Extension already exists, that's OK
+          } else if (extResult.message && extResult.message.includes('existe')) {
             webrtcExtension = {
               extension: extensionNumber,
               created: false,
@@ -1442,22 +1581,21 @@ qualify_frequency=30
         }
       }
 
-      // With FreePBX, we don't need to create anything in AstDB
-      // The dialplan in extensions_homenichat.conf handles routing
-      // Example dialplan patterns are already configured:
-      //   exten => _06XXXXXXXX,1,Dial(Quectel/modem-1/${EXTEN})
-      //   exten => _07XXXXXXXX,1,Dial(Quectel/modem-1/${EXTEN})
-
       logger.info(`[AMI] GSM modem ${modemId} configured. Dial string: ${dialString}`);
 
       return {
         success: true,
-        message: `Modem ${modemName || modemId} configuré. Routage via extensions_homenichat.conf`,
+        message: trunkCreatedViaApi
+          ? `Trunk ${trunkName} créé (visible dans FreePBX)`
+          : `Modem ${modemName || modemId} configuré (routage via dialplan)`,
         trunkName,
         dialString,
         phoneNumber: phoneNumber || null,
         webrtcExtension,
-        note: 'Les appels sortants utilisent le dialplan extensions_homenichat.conf. Les appels entrants arrivent dans le contexte from-gsm.'
+        visibleInFreePBX: trunkCreatedViaApi,
+        note: trunkCreatedViaApi
+          ? 'Trunk visible dans FreePBX → Connectivity → Trunks'
+          : 'Routage via extensions_homenichat.conf'
       };
 
     } catch (error) {

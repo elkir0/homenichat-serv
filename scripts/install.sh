@@ -1373,9 +1373,80 @@ FREEPBX_EXAMPLE
     # Verify
     if [ -d "/var/www/html/admin" ]; then
         success "FreePBX installed"
+
+        # Configure FreePBX API for Homenichat integration
+        configure_freepbx_api
     else
         warning "FreePBX may not be fully installed"
     fi
+}
+
+# ============================================================================
+# FreePBX API Configuration (Option B)
+# ============================================================================
+# This enables Homenichat to create extensions/trunks that are visible
+# in the FreePBX GUI for unified management.
+
+configure_freepbx_api() {
+    info "Configuring FreePBX API for Homenichat integration..."
+
+    # Check if fwconsole is available
+    if ! command -v fwconsole &> /dev/null; then
+        warning "fwconsole not found, skipping API configuration"
+        return
+    fi
+
+    # Wait for FreePBX to be ready
+    sleep 5
+
+    # Install API module if not present
+    if ! fwconsole ma list 2>/dev/null | grep -q "^api"; then
+        info "Installing FreePBX API module..."
+        fwconsole ma downloadinstall api >> "$LOG_FILE" 2>&1 || {
+            warning "Could not install API module - may need manual installation"
+        }
+    fi
+
+    # Generate a random API secret
+    local API_SECRET=$(openssl rand -hex 16)
+
+    # Try to create an API application for Homenichat
+    # Note: fwconsole api createApp may not be available in all versions
+    info "Creating Homenichat API application..."
+    fwconsole api createApp homenichat \
+        --client-secret="$API_SECRET" \
+        --scopes="read:extension,write:extension,read:trunk,write:trunk" \
+        >> "$LOG_FILE" 2>&1 || {
+        warning "Could not create API application via fwconsole"
+        # Will fall back to PHP method in FreePBXApiService
+    }
+
+    # Save API credentials to environment
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        # Remove old FreePBX API vars if present
+        sed -i '/^FREEPBX_/d' "$INSTALL_DIR/.env"
+
+        # Add new ones
+        cat >> "$INSTALL_DIR/.env" << EOF
+
+# FreePBX API Configuration (Option B - Full Integration)
+# Extensions and trunks will be visible in FreePBX GUI
+FREEPBX_URL=http://localhost
+FREEPBX_CLIENT_ID=homenichat
+FREEPBX_CLIENT_SECRET=$API_SECRET
+FREEPBX_ADMIN_USER=admin
+# FREEPBX_ADMIN_PASS= # Set this if OAuth doesn't work
+EOF
+    fi
+
+    # Reload FreePBX to apply changes
+    fwconsole reload >> "$LOG_FILE" 2>&1 || true
+
+    success "FreePBX API configured for Homenichat"
+    echo ""
+    echo "  FreePBX API credentials saved to $INSTALL_DIR/.env"
+    echo "  Extensions/trunks created by Homenichat will be visible in FreePBX GUI"
+    echo ""
 }
 
 # ============================================================================
