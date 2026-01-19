@@ -1372,10 +1372,10 @@ except Exception as e:
         // Recharger chan_quectel pour que Asterisk détecte le modem
         setTimeout(async () => {
           try {
-            await this.asteriskCmd('module reload chan_quectel');
-            this.logger.info('[ModemService] chan_quectel reloaded after PIN entry');
+            await this.loadOrReloadChanQuectel();
+            this.logger.info('[ModemService] chan_quectel loaded/reloaded after PIN entry');
           } catch (e) {
-            this.logger.warn('[ModemService] Failed to reload chan_quectel:', e.message);
+            this.logger.warn('[ModemService] Failed to load/reload chan_quectel:', e.message);
           }
         }, 2000);
 
@@ -1509,6 +1509,30 @@ ${modemConfig.phoneNumber ? `exten=+${modemConfig.phoneNumber.replace(/^\+/, '')
   }
 
   /**
+   * Charge ou recharge le module chan_quectel
+   * Sur fresh install, le module n'est pas chargé car quectel.conf n'avait pas de [modem-xxx]
+   * Dans ce cas, 'module reload' échoue silencieusement - il faut utiliser 'module load'
+   */
+  async loadOrReloadChanQuectel() {
+    // Vérifier si le module est déjà chargé
+    const moduleStatus = await this.asteriskCmd('module show like quectel');
+
+    if (moduleStatus.includes('0 modules loaded') || !moduleStatus.includes('chan_quectel')) {
+      // Module pas chargé → load
+      this.logger.info('[ModemService] chan_quectel not loaded, loading module...');
+      const loadResult = await this.asteriskCmd('module load chan_quectel.so');
+      this.logger.info(`[ModemService] chan_quectel.so loaded: ${loadResult}`);
+      return loadResult;
+    } else {
+      // Module chargé → reload pour prendre en compte la nouvelle config
+      this.logger.info('[ModemService] chan_quectel already loaded, reloading...');
+      const reloadResult = await this.asteriskCmd('module reload chan_quectel');
+      this.logger.info(`[ModemService] chan_quectel reloaded: ${reloadResult}`);
+      return reloadResult;
+    }
+  }
+
+  /**
    * Applique la configuration quectel.conf
    */
   async applyQuectelConf(config = {}) {
@@ -1546,8 +1570,8 @@ ${modemConfig.phoneNumber ? `exten=+${modemConfig.phoneNumber.replace(/^\+/, '')
       // Sauvegarder la config avec IMSI
       this.saveModemConfig(configWithImsi);
 
-      // Recharger Asterisk
-      const reloadResult = await this.asteriskCmd('module reload chan_quectel');
+      // Charger ou recharger le module chan_quectel
+      const reloadResult = await this.loadOrReloadChanQuectel();
 
       // Attendre que le(s) modem(s) apparaissent dans Asterisk
       const modemNames = configWithImsi.modems
@@ -1711,8 +1735,8 @@ ${modemConfig.phoneNumber ? `exten=+${modemConfig.phoneNumber.replace(/^\+/, '')
         // Symlink creation is optional
       }
 
-      // Recharger Asterisk
-      await this.asteriskCmd('module reload chan_quectel');
+      // Charger ou recharger le module chan_quectel
+      await this.loadOrReloadChanQuectel();
 
       return {
         success: true,
