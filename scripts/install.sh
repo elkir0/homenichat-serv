@@ -31,7 +31,7 @@ LOG_FILE="/var/log/homenichat-install.log"
 REPO_URL="https://github.com/elkir0/homenichat-serv.git"
 
 # Installation options
-INSTALL_ASTERISK=false
+# Note: FreePBX is required for VoIP (standalone Asterisk not supported)
 INSTALL_FREEPBX=false
 INSTALL_BAILEYS=true
 INSTALL_MODEMS=false
@@ -48,7 +48,6 @@ for arg in "$@"; do
         --full|--all)
             AUTO_MODE=true
             FULL_MODE=true
-            INSTALL_ASTERISK=true
             INSTALL_FREEPBX=true
             INSTALL_BAILEYS=true
             INSTALL_MODEMS=true
@@ -317,18 +316,18 @@ choose_components() {
     fi
     echo ""
 
-    echo -e "${BOLD}2. VoIP Integration (Asterisk + FreePBX)${NC}"
+    echo -e "${BOLD}2. VoIP Integration (FreePBX)${NC}"
     echo "   Full PBX functionality with web management."
-    echo "   - Make/receive phone calls"
-    echo "   - Extensions, IVR, voicemail"
-    echo "   - Requires more resources (~500MB extra RAM)"
+    echo "   - Make/receive phone calls via WebRTC or SIP"
+    echo "   - Extensions, IVR, voicemail, call recording"
+    echo "   - Web interface for PBX management"
+    echo "   - Requires Debian 12 Bookworm AMD64"
+    echo "   - Requires ~500MB extra RAM"
     echo ""
-    if confirm "   Install Asterisk + FreePBX?" "n"; then
-        INSTALL_ASTERISK=true
+    if confirm "   Install FreePBX?" "n"; then
         INSTALL_FREEPBX=true
-        success "   Asterisk + FreePBX will be installed"
+        success "   FreePBX will be installed"
     else
-        INSTALL_ASTERISK=false
         INSTALL_FREEPBX=false
         info "   VoIP will NOT be installed"
     fi
@@ -583,101 +582,19 @@ UPNP_CONF
     success "UPnP support installed (disabled by default)"
 }
 
-install_asterisk() {
-    [ "$INSTALL_ASTERISK" != true ] && return
-
-    # If FreePBX will be installed, skip standalone Asterisk installation
-    # FreePBX installs its own Asterisk from Sangoma packages
-    if [ "$INSTALL_FREEPBX" = true ]; then
-        info "Skipping standalone Asterisk - FreePBX will install Asterisk 22"
-        return
-    fi
-
-    info "Installing Asterisk (standalone mode)..."
-
-    # Try to install from repos first (may not be available in Bookworm/Trixie)
-    # Use apt-get install with || to handle failure gracefully
-    if apt-get install -y asterisk asterisk-modules asterisk-config >> "$LOG_FILE" 2>&1; then
-        info "Asterisk installed from repositories"
-    else
-        info "Asterisk not in repos, building from source (this takes 15-30 minutes)..."
-        install_asterisk_from_source
-    fi
-
-    # Enable and start
-    systemctl enable asterisk >> "$LOG_FILE" 2>&1 || true
-    systemctl start asterisk >> "$LOG_FILE" 2>&1 || true
-
-    # Verify installation
-    if command -v asterisk &>/dev/null; then
-        success "Asterisk $(asterisk -V 2>/dev/null || echo 'installed')"
-    else
-        warning "Asterisk installation may have issues"
-    fi
-}
-
-install_asterisk_from_source() {
-    info "Installing build dependencies..."
-
-    # Install linux headers if available (may not exist on all systems)
-    apt-get install -y linux-headers-$(uname -r) >> "$LOG_FILE" 2>&1 || {
-        warning "linux-headers not available for kernel $(uname -r), continuing without"
-    }
-
-    # Core build dependencies
-    apt-get install -y build-essential wget libssl-dev libncurses5-dev \
-        libnewt-dev libxml2-dev libsqlite3-dev \
-        uuid-dev libjansson-dev libedit-dev libsrtp2-dev \
-        subversion libspandsp-dev libresample1-dev \
-        >> "$LOG_FILE" 2>&1
-
-    cd /usr/src
-    ASTERISK_VERSION="20-current"
-
-    info "Downloading Asterisk ${ASTERISK_VERSION}..."
-    wget -q "http://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${ASTERISK_VERSION}.tar.gz" \
-        -O asterisk.tar.gz >> "$LOG_FILE" 2>&1 || {
-        # Try certified version if current fails
-        wget -q "http://downloads.asterisk.org/pub/telephony/certified-asterisk/asterisk-certified-20.7-current.tar.gz" \
-            -O asterisk.tar.gz >> "$LOG_FILE" 2>&1
-    }
-
-    tar xzf asterisk.tar.gz
-    cd asterisk-*/
-
-    info "Configuring Asterisk..."
-    contrib/scripts/get_mp3_source.sh >> "$LOG_FILE" 2>&1 || true
-    ./configure --with-jansson-bundled >> "$LOG_FILE" 2>&1
-
-    info "Building Asterisk (this takes 10-20 minutes on Pi)..."
-    make menuselect.makeopts >> "$LOG_FILE" 2>&1
-    make -j$(nproc) >> "$LOG_FILE" 2>&1
-    make install >> "$LOG_FILE" 2>&1
-    make samples >> "$LOG_FILE" 2>&1
-    make config >> "$LOG_FILE" 2>&1
-
-    # Create asterisk user
-    useradd -r -d /var/lib/asterisk -s /sbin/nologin asterisk 2>/dev/null || true
-    chown -R asterisk:asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk 2>/dev/null || true
-
-    cd /usr/src
-    # Don't clean up asterisk source yet - chan_quectel needs headers
-    # Cleanup happens in install_chan_quectel after headers are installed
-    rm -f asterisk.tar.gz
-}
-
 install_chan_quectel() {
     [ "$INSTALL_MODEMS" != true ] && return
 
-    # chan_quectel requires Asterisk - either standalone or via FreePBX
-    if [ "$INSTALL_ASTERISK" != true ] && [ "$INSTALL_FREEPBX" != true ]; then
-        warning "Skipping chan_quectel - no Asterisk installation selected"
+    # chan_quectel requires FreePBX (which installs Asterisk 22)
+    if [ "$INSTALL_FREEPBX" != true ]; then
+        warning "Skipping chan_quectel - FreePBX not selected"
+        warning "GSM modems require FreePBX for VoIP functionality"
         return
     fi
 
     # Wait for Asterisk to be available (FreePBX installs it)
     if ! command -v asterisk &>/dev/null; then
-        warning "Asterisk not found - chan_quectel requires Asterisk"
+        warning "Asterisk not found - FreePBX installation may have failed"
         return
     fi
 
@@ -689,40 +606,26 @@ install_chan_quectel() {
 
     cd /usr/src
 
-    # Install Asterisk development headers
+    # Install Asterisk development headers (FreePBX uses Asterisk 22)
     local HEADERS_INSTALLED=false
 
-    if [ "$INSTALL_FREEPBX" = true ]; then
-        # FreePBX 17 uses Asterisk 22 - need asterisk22-devel package
-        info "Installing Asterisk 22 development headers (FreePBX)..."
+    info "Installing Asterisk 22 development headers..."
 
-        # Update package list to ensure FreePBX repos are available
-        apt-get update >> "$LOG_FILE" 2>&1 || true
+    # Update package list to ensure FreePBX repos are available
+    apt-get update >> "$LOG_FILE" 2>&1 || true
 
-        # Try multiple package names (varies by FreePBX version)
-        if apt-get install -y asterisk22-devel >> "$LOG_FILE" 2>&1; then
-            HEADERS_INSTALLED=true
-            success "asterisk22-devel installed"
-        elif apt-get install -y asterisk-devel >> "$LOG_FILE" 2>&1; then
-            HEADERS_INSTALLED=true
-            success "asterisk-devel installed"
-        elif apt-get install -y asterisk-dev >> "$LOG_FILE" 2>&1; then
-            HEADERS_INSTALLED=true
-            success "asterisk-dev installed"
-        else
-            warning "Could not install Asterisk dev headers from packages"
-        fi
+    # Try multiple package names (varies by FreePBX version)
+    if apt-get install -y asterisk22-devel >> "$LOG_FILE" 2>&1; then
+        HEADERS_INSTALLED=true
+        success "asterisk22-devel installed"
+    elif apt-get install -y asterisk-devel >> "$LOG_FILE" 2>&1; then
+        HEADERS_INSTALLED=true
+        success "asterisk-devel installed"
+    elif apt-get install -y asterisk-dev >> "$LOG_FILE" 2>&1; then
+        HEADERS_INSTALLED=true
+        success "asterisk-dev installed"
     else
-        # Standalone Asterisk built from source - install headers from source
-        ASTERISK_SRC=$(find /usr/src -maxdepth 1 -type d -name "asterisk-*" 2>/dev/null | head -1)
-        if [ -n "$ASTERISK_SRC" ] && [ -d "$ASTERISK_SRC" ]; then
-            info "Installing Asterisk development headers (from source)..."
-            cd "$ASTERISK_SRC"
-            if make install-headers >> "$LOG_FILE" 2>&1; then
-                HEADERS_INSTALLED=true
-                success "Asterisk headers installed from source"
-            fi
-        fi
+        warning "Could not install Asterisk dev headers from packages"
     fi
 
     # Verify headers are available
@@ -1250,7 +1153,7 @@ MODEM_SERVICE
 }
 
 configure_asterisk_audio() {
-    [ "$INSTALL_ASTERISK" != true ] && return
+    [ "$INSTALL_FREEPBX" != true ] && return
 
     info "Configuring Asterisk audio for WebRTC ↔ GSM bridge..."
 
@@ -1602,7 +1505,7 @@ SESSION_SECRET=$SESSION_SECRET_VAL
 ENV_FILE
 
     # Add AMI configuration if Asterisk was installed
-    if [ "$INSTALL_ASTERISK" = true ] && [ -n "$AMI_PASSWORD" ]; then
+    if [ "$INSTALL_FREEPBX" = true ] && [ -n "$AMI_PASSWORD" ]; then
         cat >> "$CONFIG_DIR/.env" << AMI_ENV
 
 # AMI Configuration (auto-generated)
@@ -1641,7 +1544,7 @@ start_services() {
     fi
 
     # Restart Asterisk to ensure all config changes and modules are loaded
-    if [ "$INSTALL_ASTERISK" = true ] && systemctl is-enabled asterisk 2>/dev/null; then
+    if [ "$INSTALL_FREEPBX" = true ] && systemctl is-enabled asterisk 2>/dev/null; then
         info "Restarting Asterisk to apply all configurations..."
         systemctl restart asterisk >> "$LOG_FILE" 2>&1 || true
         sleep 3
@@ -1675,7 +1578,7 @@ configure_firewall() {
         ufw allow 443/tcp comment 'HTTPS' >> "$LOG_FILE" 2>&1 || true
         ufw allow 3001/tcp comment 'Homenichat API' >> "$LOG_FILE" 2>&1 || true
 
-        if [ "$INSTALL_ASTERISK" = true ]; then
+        if [ "$INSTALL_FREEPBX" = true ]; then
             ufw allow 5060/udp comment 'SIP' >> "$LOG_FILE" 2>&1 || true
             ufw allow 5061/tcp comment 'SIP TLS' >> "$LOG_FILE" 2>&1 || true
             ufw allow 5038/tcp comment 'Asterisk AMI' >> "$LOG_FILE" 2>&1 || true
@@ -1776,7 +1679,6 @@ main() {
     disable_modemmanager
     install_gammu
     install_upnp
-    install_asterisk
     install_freepbx
     install_chan_quectel
     configure_asterisk_audio
