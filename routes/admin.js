@@ -1210,6 +1210,78 @@ router.post('/modems/detect', async (req, res) => {
 });
 
 /**
+ * POST /api/admin/modems/add
+ * Ajoute un modem détecté à la configuration Asterisk (quectel.conf)
+ * Utilisé quand aucun modem n'est configuré et qu'on veut en ajouter un depuis l'interface
+ */
+router.post('/modems/add', [
+  body('modemId').optional().matches(/^modem-[1-5]$/).withMessage('Invalid modem ID'),
+  body('modemType').isIn(['ec25', 'sim7600']).withMessage('Type must be ec25 or sim7600'),
+  body('dataPort').matches(/^\/dev\/ttyUSB\d+$/).withMessage('Invalid data port'),
+  body('audioPort').matches(/^\/dev\/ttyUSB\d+$/).withMessage('Invalid audio port'),
+  body('modemName').optional().matches(/^[a-z0-9-]+$/i).withMessage('Invalid modem name'),
+  body('phoneNumber').optional().matches(/^\+?[0-9]{0,15}$/),
+], validate, async (req, res) => {
+  try {
+    if (!modemService) {
+      return res.status(503).json({ error: 'Modem service not available' });
+    }
+
+    const { modemId, modemType, dataPort, audioPort, modemName, phoneNumber } = req.body;
+    const effectiveModemId = modemId || 'modem-1';
+    const effectiveName = modemName || `hni-${modemType}`;
+
+    // Créer la config du modem
+    const modemConfig = {
+      id: effectiveModemId,
+      type: modemType.toUpperCase(),
+      name: effectiveName,
+      dataPort,
+      audioPort,
+      phoneNumber: phoneNumber || '',
+    };
+
+    console.log(`[Admin] Adding modem: ${JSON.stringify(modemConfig)}`);
+
+    // Sauvegarder dans la config interne
+    modemService.saveModemConfig(effectiveModemId, {
+      modemType,
+      modemName: effectiveName,
+      dataPort,
+      audioPort,
+      phoneNumber: phoneNumber || '',
+      autoDetect: false, // Manually configured
+    });
+
+    // Générer et appliquer quectel.conf avec ce modem
+    const result = await modemService.applyQuectelConf({
+      modems: [modemConfig],
+    });
+
+    await securityService?.logAction(req.user.id, 'modem_added', {
+      category: 'admin',
+      modemId: effectiveModemId,
+      modemType,
+      dataPort,
+      audioPort,
+      username: req.user.username,
+    }, req);
+
+    res.json({
+      success: true,
+      message: `Modem ${effectiveName} ajouté et configuré`,
+      modemId: effectiveModemId,
+      modemName: effectiveName,
+      ...result,
+    });
+
+  } catch (error) {
+    console.error('[Admin] Add modem error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * GET /api/admin/modems/sim-status
  * Vérifie l'état du PIN SIM
  */

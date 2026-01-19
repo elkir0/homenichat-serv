@@ -59,6 +59,8 @@ import {
   Code as CodeIcon,
   PhoneForwarded as TrunkIcon,
   Delete as DeleteIcon,
+  Add as AddIcon,
+  Router as RouterIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
@@ -449,6 +451,30 @@ const modemsApi = {
     if (!response.ok) throw new Error('Failed to get trunk defaults');
     return response.json();
   },
+
+  // Add modem to quectel.conf
+  addModem: async (modem: {
+    modemId?: string;
+    modemType: string;
+    dataPort: string;
+    audioPort: string;
+    modemName?: string;
+    phoneNumber?: string;
+  }): Promise<{ success: boolean; message: string; modemId: string; modemName: string }> => {
+    const response = await fetch('/api/admin/modems/add', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(modem),
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Failed to add modem');
+    }
+    return response.json();
+  },
 };
 
 // Signal strength component
@@ -534,6 +560,23 @@ export default function ModemsPage() {
   const [pinInput, setPinInput] = useState('');
   const [pinConfirmInput, setPinConfirmInput] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
+
+  // Add modem dialog state
+  const [addModemDialogOpen, setAddModemDialogOpen] = useState(false);
+  const [addModemForm, setAddModemForm] = useState({
+    modemType: 'sim7600',
+    dataPort: '/dev/ttyUSB2',
+    audioPort: '/dev/ttyUSB4',
+    modemName: '',
+    phoneNumber: '',
+  });
+  const [detectedModems, setDetectedModems] = useState<Array<{
+    id: string;
+    type: string;
+    dataPort: string;
+    audioPort: string;
+  }>>([]);
+
   const [configForm, setConfigForm] = useState<Partial<ModemConfig>>({
     modemType: 'ec25',
     modemName: 'hni-modem',
@@ -715,6 +758,17 @@ export default function ModemsPage() {
           audioPort: result.suggestedAudioPort || prev.audioPort,
           modemType: result.modemType || prev.modemType,
         }));
+        // Also update add modem form
+        setAddModemForm(prev => ({
+          ...prev,
+          dataPort: result.suggestedDataPort || prev.dataPort,
+          audioPort: result.suggestedAudioPort || prev.audioPort,
+          modemType: result.modemType || prev.modemType,
+        }));
+      }
+      // Store detected modems list
+      if ((result as DetectedPorts & { modems?: typeof detectedModems }).modems) {
+        setDetectedModems((result as DetectedPorts & { modems: typeof detectedModems }).modems);
       }
       setActionResult({
         success: true,
@@ -765,6 +819,31 @@ export default function ModemsPage() {
       queryClient.invalidateQueries({ queryKey: ['modemConfig'] });
       queryClient.invalidateQueries({ queryKey: ['modemFullStatus'] });
       queryClient.invalidateQueries({ queryKey: ['quectelConf'] });
+    },
+    onError: (err: Error) => {
+      setActionResult({ success: false, message: err.message });
+    },
+  });
+
+  // Add modem mutation
+  const addModemMutation = useMutation({
+    mutationFn: (modem: typeof addModemForm) => modemsApi.addModem(modem),
+    onSuccess: (result) => {
+      setActionResult({ success: result.success, message: result.message });
+      setAddModemDialogOpen(false);
+      setAddModemForm({
+        modemType: 'sim7600',
+        dataPort: '/dev/ttyUSB2',
+        audioPort: '/dev/ttyUSB4',
+        modemName: '',
+        phoneNumber: '',
+      });
+      setDetectedModems([]);
+      // Refresh all modem data
+      queryClient.invalidateQueries({ queryKey: ['modemConfig'] });
+      queryClient.invalidateQueries({ queryKey: ['modemFullStatus'] });
+      queryClient.invalidateQueries({ queryKey: ['quectelConf'] });
+      refetch();
     },
     onError: (err: Error) => {
       setActionResult({ success: false, message: err.message });
@@ -1069,9 +1148,123 @@ export default function ModemsPage() {
       )}
 
       {modemsList.length === 0 && !isLoading && (
-        <Alert severity="info" sx={{ mb: 3 }}>
-          Aucun modem détecté. Vérifiez la connexion USB et la configuration chan_quectel.
-        </Alert>
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+              <RouterIcon sx={{ color: 'warning.main' }} />
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                Aucun modem configure
+              </Typography>
+            </Box>
+
+            <Alert severity="info" sx={{ mb: 3 }}>
+              <Typography variant="body2">
+                Aucun modem n'est configure dans Asterisk. Connectez un modem USB (SIM7600 ou EC25)
+                et cliquez sur "Scanner les ports USB" pour le detecter automatiquement.
+              </Typography>
+            </Alert>
+
+            {/* Detected modems list */}
+            {detectedModems.length > 0 && (
+              <Box sx={{ mb: 3 }}>
+                <Typography variant="subtitle2" color="success.main" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <CheckIcon fontSize="small" />
+                  {detectedModems.length} modem(s) detecte(s) via USB
+                </Typography>
+                <Grid container spacing={2}>
+                  {detectedModems.map((modem, idx) => (
+                    <Grid item xs={12} md={6} key={modem.id}>
+                      <Paper
+                        sx={{
+                          p: 2,
+                          border: '1px solid',
+                          borderColor: 'success.main',
+                          backgroundColor: alpha(theme.palette.success.main, 0.05),
+                        }}
+                      >
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <SimCardIcon color="success" />
+                            <Typography variant="subtitle1" fontWeight={600}>
+                              {modem.type}
+                            </Typography>
+                          </Box>
+                          <Chip label={modem.id} size="small" color="success" variant="outlined" />
+                        </Box>
+                        <Typography variant="body2" color="text.secondary">
+                          Port AT: <strong>{modem.dataPort}</strong>
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          Port Audio: <strong>{modem.audioPort}</strong>
+                        </Typography>
+                        <Box sx={{ mt: 2 }}>
+                          <Button
+                            variant="contained"
+                            color="success"
+                            size="small"
+                            startIcon={<AddIcon />}
+                            onClick={() => {
+                              setAddModemForm({
+                                modemType: modem.type.toLowerCase(),
+                                dataPort: modem.dataPort,
+                                audioPort: modem.audioPort,
+                                modemName: `hni-${modem.type.toLowerCase()}`,
+                                phoneNumber: '',
+                              });
+                              setAddModemDialogOpen(true);
+                            }}
+                          >
+                            Ajouter ce modem
+                          </Button>
+                        </Box>
+                      </Paper>
+                    </Grid>
+                  ))}
+                </Grid>
+              </Box>
+            )}
+
+            {/* Action buttons */}
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+              <Button
+                variant="contained"
+                color="primary"
+                startIcon={detectPortsMutation.isPending ? <CircularProgress size={20} color="inherit" /> : <SearchIcon />}
+                onClick={() => detectPortsMutation.mutate()}
+                disabled={detectPortsMutation.isPending}
+              >
+                Scanner les ports USB
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<AddIcon />}
+                onClick={() => setAddModemDialogOpen(true)}
+              >
+                Ajouter manuellement
+              </Button>
+              <Button
+                variant="outlined"
+                color="warning"
+                startIcon={<RestartIcon />}
+                onClick={() => restartAsteriskMutation.mutate()}
+                disabled={restartAsteriskMutation.isPending}
+              >
+                Restart Asterisk
+              </Button>
+            </Box>
+
+            {/* Detection result */}
+            {actionResult && (
+              <Alert
+                severity={actionResult.success ? 'success' : 'error'}
+                sx={{ mt: 2 }}
+                onClose={() => setActionResult(null)}
+              >
+                {actionResult.message}
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {/* Configuration Panel - For selected modem */}
@@ -2282,6 +2475,128 @@ export default function ModemsPage() {
               Créer le trunk
             </Button>
           )}
+        </DialogActions>
+      </Dialog>
+
+      {/* Add Modem Dialog */}
+      <Dialog open={addModemDialogOpen} onClose={() => setAddModemDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <AddIcon color="primary" />
+            Ajouter un modem
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            Configurez les parametres du modem a ajouter a Asterisk. Les ports seront ajoutes au fichier quectel.conf.
+          </Typography>
+
+          <Grid container spacing={2}>
+            <Grid item xs={12}>
+              <FormControl fullWidth size="small">
+                <InputLabel>Type de Modem</InputLabel>
+                <Select
+                  value={addModemForm.modemType}
+                  label="Type de Modem"
+                  onChange={(e) => {
+                    const type = e.target.value;
+                    // Auto-adjust audio port based on modem type
+                    const audioPort = type === 'sim7600' ? '/dev/ttyUSB4' : '/dev/ttyUSB1';
+                    setAddModemForm(prev => ({
+                      ...prev,
+                      modemType: type,
+                      audioPort: prev.audioPort === '/dev/ttyUSB4' || prev.audioPort === '/dev/ttyUSB1' ? audioPort : prev.audioPort,
+                    }));
+                  }}
+                >
+                  <MenuItem value="sim7600">
+                    <Box>
+                      <Typography variant="body2" fontWeight={500}>Simcom SIM7600</Typography>
+                      <Typography variant="caption" color="text.secondary">Audio 16kHz - Port audio: ttyUSB+4</Typography>
+                    </Box>
+                  </MenuItem>
+                  <MenuItem value="ec25">
+                    <Box>
+                      <Typography variant="body2" fontWeight={500}>Quectel EC25</Typography>
+                      <Typography variant="caption" color="text.secondary">Audio 8kHz - Port audio: ttyUSB+1</Typography>
+                    </Box>
+                  </MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+
+            <Grid item xs={6}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Port Data (AT)"
+                value={addModemForm.dataPort}
+                onChange={(e) => setAddModemForm(prev => ({ ...prev, dataPort: e.target.value }))}
+                placeholder="/dev/ttyUSB2"
+                helperText="Port pour commandes AT"
+              />
+            </Grid>
+
+            <Grid item xs={6}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Port Audio"
+                value={addModemForm.audioPort}
+                onChange={(e) => setAddModemForm(prev => ({ ...prev, audioPort: e.target.value }))}
+                placeholder="/dev/ttyUSB4"
+                helperText="Port pour audio PCM"
+              />
+            </Grid>
+
+            <Grid item xs={6}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Nom du modem (optionnel)"
+                value={addModemForm.modemName}
+                onChange={(e) => setAddModemForm(prev => ({ ...prev, modemName: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 12) }))}
+                placeholder={`hni-${addModemForm.modemType}`}
+                helperText="Identifiant dans Asterisk"
+              />
+            </Grid>
+
+            <Grid item xs={6}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Numero de telephone (optionnel)"
+                value={addModemForm.phoneNumber}
+                onChange={(e) => setAddModemForm(prev => ({ ...prev, phoneNumber: e.target.value.replace(/[^0-9+]/g, '') }))}
+                placeholder="+590690XXXXXX"
+                helperText="Format international"
+              />
+            </Grid>
+          </Grid>
+
+          {actionResult && (
+            <Alert
+              severity={actionResult.success ? 'success' : 'error'}
+              sx={{ mt: 2 }}
+              onClose={() => setActionResult(null)}
+            >
+              {actionResult.message}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAddModemDialogOpen(false)}>
+            Annuler
+          </Button>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={addModemMutation.isPending ? <CircularProgress size={20} color="inherit" /> : <AddIcon />}
+            onClick={() => addModemMutation.mutate(addModemForm)}
+            disabled={addModemMutation.isPending || !addModemForm.dataPort || !addModemForm.audioPort}
+          >
+            Ajouter le modem
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>
