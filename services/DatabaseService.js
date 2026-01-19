@@ -11,7 +11,8 @@ class DatabaseService {
         }
 
         const dataDir = process.env.DATA_DIR || path.join(__dirname, '../data');
-        this.dbPath = path.join(dataDir, 'lekip-chat.db');
+        // Respect DB_PATH env var, fallback to default location
+        this.dbPath = process.env.DB_PATH || path.join(dataDir, 'homenichat.db');
 
         this.db = null;
         this.ensureDataDirectory();
