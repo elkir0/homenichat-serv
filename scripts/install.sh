@@ -1220,12 +1220,11 @@ configure_asterisk_audio() {
         info "Installed pjsip_homenichat.conf (g722,ulaw,alaw,opus codecs)"
     fi
 
-    # Update quectel.conf with optimized audio settings if modems installed
-    if [ "$INSTALL_MODEMS" = true ] && [ -f "$INSTALL_DIR/config/asterisk/quectel.conf" ]; then
-        # Backup existing config
-        [ -f /etc/asterisk/quectel.conf ] && cp /etc/asterisk/quectel.conf /etc/asterisk/quectel.conf.bak
-        cp "$INSTALL_DIR/config/asterisk/quectel.conf" /etc/asterisk/
-        info "Installed quectel.conf (txgain=-18, rxgain=-5)"
+    # NOTE: quectel.conf is auto-generated in install_chan_quectel() with modem detection
+    # Do NOT overwrite it here - the auto-detected config includes actual modem devices
+    # The static config/asterisk/quectel.conf is just a reference template
+    if [ "$INSTALL_MODEMS" = true ]; then
+        info "quectel.conf already configured by install_chan_quectel (modem auto-detection)"
     fi
 
     # Include Homenichat configs via *_custom.conf files
@@ -1709,10 +1708,38 @@ start_services() {
 
             # Verify chan_quectel loaded (if modems installed)
             if [ "$INSTALL_MODEMS" = true ]; then
+                # First ensure modules.conf has the load directive (might have been overwritten by FreePBX)
+                if [ -f /etc/asterisk/modules.conf ]; then
+                    if ! grep -q "chan_quectel.so" /etc/asterisk/modules.conf 2>/dev/null; then
+                        info "Adding chan_quectel.so to modules.conf..."
+                        if grep -q "^\[modules\]" /etc/asterisk/modules.conf 2>/dev/null; then
+                            sed -i '/^\[modules\]/a load => chan_quectel.so' /etc/asterisk/modules.conf
+                        else
+                            echo -e "[modules]\nload => chan_quectel.so" >> /etc/asterisk/modules.conf
+                        fi
+                    fi
+                fi
+
+                # Try to load the module
                 if asterisk -rx "module show like quectel" 2>/dev/null | grep -q "chan_quectel"; then
                     success "chan_quectel module loaded"
                 else
-                    warning "chan_quectel module not loaded - check /etc/asterisk/modules.conf"
+                    info "Loading chan_quectel module..."
+                    asterisk -rx "module load chan_quectel.so" >> "$LOG_FILE" 2>&1 || true
+                    sleep 1
+                    if asterisk -rx "module show like quectel" 2>/dev/null | grep -q "chan_quectel"; then
+                        success "chan_quectel module loaded successfully"
+                    else
+                        warning "chan_quectel module failed to load - check /var/log/asterisk/messages"
+                    fi
+                fi
+
+                # Verify at least one modem is configured
+                if grep -q "^\[modem-" /etc/asterisk/quectel.conf 2>/dev/null; then
+                    MODEM_COUNT=$(grep -c "^\[modem-" /etc/asterisk/quectel.conf 2>/dev/null || echo "0")
+                    success "$MODEM_COUNT modem(s) configured in quectel.conf"
+                else
+                    warning "No modems configured in quectel.conf - add via admin interface or manually"
                 fi
             fi
         else
