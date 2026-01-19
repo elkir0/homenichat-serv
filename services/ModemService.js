@@ -1549,6 +1549,35 @@ ${modemConfig.phoneNumber ? `exten=+${modemConfig.phoneNumber.replace(/^\+/, '')
       // Recharger Asterisk
       const reloadResult = await this.asteriskCmd('module reload chan_quectel');
 
+      // Attendre que le(s) modem(s) apparaissent dans Asterisk
+      const modemNames = configWithImsi.modems
+        ? configWithImsi.modems.map(m => m.name || m.id)
+        : [configWithImsi.modemName || 'hni-modem'];
+
+      let detectedAll = false;
+      let attempts = 0;
+      const maxAttempts = 10; // 5 secondes max
+
+      this.logger.info(`[ModemService] Waiting for modem(s) to be detected: ${modemNames.join(', ')}`);
+
+      while (!detectedAll && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const currentModems = await this.listModems();
+
+        // Vérifier si tous les modems attendus sont détectés
+        detectedAll = modemNames.every(name => currentModems.includes(name));
+        attempts++;
+
+        if (detectedAll) {
+          this.logger.info(`[ModemService] All modems detected after ${attempts * 500}ms`);
+          break;
+        }
+      }
+
+      if (!detectedAll) {
+        this.logger.warn(`[ModemService] Not all modems detected after ${maxAttempts * 500}ms - some may still be initializing`);
+      }
+
       // Si PIN configuré, l'envoyer
       if (this.modemConfig.pinCode) {
         await new Promise(resolve => setTimeout(resolve, 3000)); // Attendre que le modem soit prêt
@@ -1594,10 +1623,13 @@ ${modemConfig.phoneNumber ? `exten=+${modemConfig.phoneNumber.replace(/^\+/, '')
 
       return {
         success: true,
-        message: 'Configuration appliquée',
+        message: detectedAll
+          ? 'Configuration appliquée - modem(s) détecté(s)'
+          : 'Configuration appliquée - certains modems peuvent encore être en cours d\'initialisation',
         confPath: QUECTEL_CONF_PATH,
         imsi: configWithImsi.imsi,
         reloadResult,
+        modemsDetected: detectedAll,
         trunksCreated: trunksCreated.length > 0 ? trunksCreated : undefined,
       };
     } catch (error) {
