@@ -20,6 +20,10 @@ LOG_FILE="${UPNP_LOG_FILE:-/var/log/homenichat/upnp-watchdog.log}"
 LEASE_DURATION="${UPNP_LEASE_DURATION:-3600}"  # 1 heure
 LOCAL_IP="${UPNP_LOCAL_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 
+# IGD URL directe (optionnel - pour VM où multicast ne fonctionne pas)
+# Peut être configuré via /etc/homenichat/upnp.conf: igd_url=http://...
+IGD_URL=""
+
 # Ports à mapper
 SIP_TLS_PORT=5061
 RTP_START=10000
@@ -39,6 +43,18 @@ check_upnpc() {
     if ! command -v upnpc &> /dev/null; then
         log "ERREUR: miniupnpc n'est pas installé. Installez avec: apt install miniupnpc"
         exit 1
+    fi
+}
+
+load_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        # Load IGD URL if configured (for VM where multicast doesn't work)
+        local url
+        url=$(grep -E "^igd_url=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2- | tr -d ' ')
+        if [[ -n "$url" ]]; then
+            IGD_URL="$url"
+            log "Using direct IGD URL: $IGD_URL"
+        fi
     fi
 }
 
@@ -80,16 +96,25 @@ EOF
     fi
 }
 
+# Build upnpc command with optional IGD URL
+upnpc_cmd() {
+    if [[ -n "$IGD_URL" ]]; then
+        echo "upnpc -u $IGD_URL"
+    else
+        echo "upnpc"
+    fi
+}
+
 get_external_ip() {
-    upnpc -s 2>/dev/null | grep -i "ExternalIPAddress" | awk -F'=' '{print $2}' | tr -d ' ' || echo ""
+    $(upnpc_cmd) -s 2>/dev/null | grep -i "ExternalIPAddress" | awk -F'=' '{print $2}' | tr -d ' ' || echo ""
 }
 
 get_router_info() {
-    upnpc -s 2>/dev/null | grep -i "desc:" | head -1 | sed 's/.*desc: //' || echo "Unknown"
+    $(upnpc_cmd) -s 2>/dev/null | grep -i "desc:" | head -1 | sed 's/.*desc: //' || echo "Unknown"
 }
 
 check_upnp_available() {
-    if upnpc -s 2>/dev/null | grep -q "Found valid IGD"; then
+    if $(upnpc_cmd) -s 2>/dev/null | grep -q "Found valid IGD"; then
         return 0
     else
         return 1
@@ -99,7 +124,7 @@ check_upnp_available() {
 check_port_mapping() {
     local port=$1
     local protocol=$2
-    upnpc -l 2>/dev/null | grep -qE "${port}.*->.*${LOCAL_IP}:${port}.*${protocol}" 2>/dev/null
+    $(upnpc_cmd) -l 2>/dev/null | grep -qE "${port}.*->.*${LOCAL_IP}:${port}.*${protocol}" 2>/dev/null
 }
 
 add_port_mapping() {
@@ -112,7 +137,7 @@ add_port_mapping() {
     fi
 
     log "Ajout mapping: ${port}/${protocol} -> ${LOCAL_IP}:${port}"
-    if upnpc -e "$description" -a "$LOCAL_IP" "$port" "$port" "$protocol" "$LEASE_DURATION" 2>/dev/null; then
+    if $(upnpc_cmd) -e "$description" -a "$LOCAL_IP" "$port" "$port" "$protocol" "$LEASE_DURATION" 2>/dev/null; then
         return 0
     else
         log "ERREUR: Échec mapping ${port}/${protocol}"
@@ -126,7 +151,7 @@ remove_port_mapping() {
 
     if check_port_mapping "$port" "$protocol"; then
         log "Suppression mapping: ${port}/${protocol}"
-        upnpc -d "$port" "$protocol" 2>/dev/null || true
+        $(upnpc_cmd) -d "$port" "$protocol" 2>/dev/null || true
     fi
 }
 
@@ -264,6 +289,7 @@ status_report() {
 # === MAIN ===
 
 check_upnpc
+load_config
 
 case "${1:-check}" in
     check)

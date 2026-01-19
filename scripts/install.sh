@@ -548,6 +548,11 @@ install_upnp() {
 enabled=false
 lease_duration=3600
 
+# Optionnel: URL IGD directe pour VM où le multicast SSDP ne fonctionne pas
+# Pour trouver l'URL: upnpc -l (depuis le host physique ou un PC sur le réseau)
+# Exemple: igd_url=http://192.168.1.1:60000/abc123/gatedesc1.xml
+# igd_url=
+
 [ports]
 sip_tls=5061
 rtp_start=10000
