@@ -1258,6 +1258,15 @@ router.post('/modems/add', [
       modems: [modemConfig],
     });
 
+    // Auto-map all users to this modem for push notifications
+    let usersMapped = 0;
+    try {
+      usersMapped = db.autoMapAllUsersToModem(effectiveName, phoneNumber || null);
+      console.log(`[Admin] Auto-mapped ${usersMapped} users to modem ${effectiveName}`);
+    } catch (mapErr) {
+      console.warn(`[Admin] Failed to auto-map users to modem: ${mapErr.message}`);
+    }
+
     await securityService?.logAction(req.user.id, 'modem_added', {
       category: 'admin',
       modemId: effectiveModemId,
@@ -1265,13 +1274,15 @@ router.post('/modems/add', [
       dataPort,
       audioPort,
       username: req.user.username,
+      usersMapped,
     }, req);
 
     res.json({
       success: true,
-      message: `Modem ${effectiveName} ajouté et configuré`,
+      message: `Modem ${effectiveName} ajouté et configuré (${usersMapped} utilisateurs mappés)`,
       modemId: effectiveModemId,
       modemName: effectiveName,
+      usersMapped,
       ...result,
     });
 
@@ -3495,6 +3506,228 @@ router.post('/upnp/refresh', async (req, res) => {
     }
   } catch (error) {
     console.error('[Admin] UPnP refresh error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
+// USER-MODEM MAPPINGS (Push Notifications Routing)
+// =============================================================================
+
+/**
+ * GET /api/admin/modem-mappings
+ * Get all user-modem mappings
+ */
+router.get('/modem-mappings', async (req, res) => {
+  try {
+    const mappings = db.getAllUserModemMappings();
+    res.json({ mappings });
+  } catch (error) {
+    console.error('[Admin] Get modem mappings error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/modem-mappings/user/:userId
+ * Get modem mappings for a specific user
+ */
+router.get('/modem-mappings/user/:userId', [
+  param('userId').isInt({ min: 1 })
+], validate, async (req, res) => {
+  try {
+    const mappings = db.getUserModems(parseInt(req.params.userId));
+    res.json({ mappings });
+  } catch (error) {
+    console.error('[Admin] Get user modem mappings error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/modem-mappings/modem/:modemId
+ * Get users mapped to a specific modem
+ */
+router.get('/modem-mappings/modem/:modemId', async (req, res) => {
+  try {
+    const users = db.getUsersForModem(req.params.modemId);
+    res.json({ users });
+  } catch (error) {
+    console.error('[Admin] Get modem users error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modem-mappings
+ * Create or update a user-modem mapping
+ */
+router.post('/modem-mappings', [
+  body('userId').isInt({ min: 1 }),
+  body('modemId').notEmpty().isString(),
+  body('modemPhoneNumber').optional().isString(),
+  body('notifySms').optional().isBoolean(),
+  body('notifyCalls').optional().isBoolean()
+], validate, async (req, res) => {
+  try {
+    const { userId, modemId, modemPhoneNumber, notifySms, notifyCalls } = req.body;
+
+    const mapping = db.createUserModemMapping(userId, modemId, {
+      modemPhoneNumber,
+      notifySms: notifySms !== false,
+      notifyCalls: notifyCalls !== false
+    });
+
+    await securityService?.logAction(req.user.id, 'modem_mapping_created', {
+      category: 'admin',
+      targetUserId: userId,
+      modemId,
+      username: req.user.username
+    }, req);
+
+    res.json({ success: true, mapping });
+  } catch (error) {
+    console.error('[Admin] Create modem mapping error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/admin/modem-mappings/:userId/:modemId
+ * Delete a user-modem mapping
+ */
+router.delete('/modem-mappings/:userId/:modemId', [
+  param('userId').isInt({ min: 1 }),
+  param('modemId').notEmpty()
+], validate, async (req, res) => {
+  try {
+    const { userId, modemId } = req.params;
+    const deleted = db.deleteUserModemMapping(parseInt(userId), modemId);
+
+    if (deleted) {
+      await securityService?.logAction(req.user.id, 'modem_mapping_deleted', {
+        category: 'admin',
+        targetUserId: parseInt(userId),
+        modemId,
+        username: req.user.username
+      }, req);
+    }
+
+    res.json({ success: deleted, message: deleted ? 'Mapping deleted' : 'Mapping not found' });
+  } catch (error) {
+    console.error('[Admin] Delete modem mapping error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modem-mappings/auto-map
+ * Auto-map all users to a modem (for single-user or initial setup)
+ */
+router.post('/modem-mappings/auto-map', [
+  body('modemId').notEmpty().isString(),
+  body('modemPhoneNumber').optional().isString()
+], validate, async (req, res) => {
+  try {
+    const { modemId, modemPhoneNumber } = req.body;
+    const count = db.autoMapAllUsersToModem(modemId, modemPhoneNumber);
+
+    await securityService?.logAction(req.user.id, 'modem_auto_mapped', {
+      category: 'admin',
+      modemId,
+      usersCount: count,
+      username: req.user.username
+    }, req);
+
+    res.json({ success: true, message: `${count} users mapped to modem ${modemId}` });
+  } catch (error) {
+    console.error('[Admin] Auto-map modem error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
+// DEVICE TOKENS (Push Notification Tokens)
+// =============================================================================
+
+/**
+ * GET /api/admin/device-tokens
+ * Get all registered device tokens
+ */
+router.get('/device-tokens', async (req, res) => {
+  try {
+    const tokens = db.getAllDeviceTokens();
+    // Mask tokens for security (show only last 8 chars)
+    const masked = tokens.map(t => ({
+      ...t,
+      token: t.token ? `...${t.token.slice(-8)}` : null
+    }));
+    res.json({ tokens: masked, count: tokens.length });
+  } catch (error) {
+    console.error('[Admin] Get device tokens error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/device-tokens/user/:userId
+ * Get device tokens for a specific user
+ */
+router.get('/device-tokens/user/:userId', [
+  param('userId').isInt({ min: 1 })
+], validate, async (req, res) => {
+  try {
+    const tokens = db.getDeviceTokensByUserId(parseInt(req.params.userId));
+    const masked = tokens.map(t => ({
+      ...t,
+      token: t.token ? `...${t.token.slice(-8)}` : null
+    }));
+    res.json({ tokens: masked });
+  } catch (error) {
+    console.error('[Admin] Get user device tokens error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/admin/device-tokens/:token
+ * Delete a device token
+ */
+router.delete('/device-tokens/:token', async (req, res) => {
+  try {
+    // Allow deleting by partial token (last 8 chars) or full token
+    let tokenToDelete = req.params.token;
+
+    // If partial token provided, find full token
+    if (tokenToDelete.length <= 20) {
+      const allTokens = db.getAllDeviceTokens();
+      const match = allTokens.find(t => t.token.endsWith(tokenToDelete));
+      if (match) {
+        tokenToDelete = match.token;
+      }
+    }
+
+    const deleted = db.unregisterDeviceToken(tokenToDelete);
+    res.json({ success: deleted, message: deleted ? 'Token deleted' : 'Token not found' });
+  } catch (error) {
+    console.error('[Admin] Delete device token error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/device-tokens/cleanup
+ * Cleanup stale device tokens
+ */
+router.post('/device-tokens/cleanup', [
+  body('daysInactive').optional().isInt({ min: 1, max: 365 })
+], validate, async (req, res) => {
+  try {
+    const days = req.body.daysInactive || 30;
+    const deleted = db.cleanupStaleDeviceTokens(days);
+    res.json({ success: true, deleted, message: `${deleted} stale tokens cleaned up` });
+  } catch (error) {
+    console.error('[Admin] Cleanup device tokens error:', error);
     res.status(500).json({ error: error.message });
   }
 });

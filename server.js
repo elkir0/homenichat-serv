@@ -168,7 +168,7 @@ app.use('/api/media', mediaRoutes);
 // ============================================
 // INTERNAL API - SMS depuis Asterisk (localhost only)
 // ============================================
-app.post('/api/internal/sms/incoming', (req, res) => {
+app.post('/api/internal/sms/incoming', async (req, res) => {
   // Vérifier que la requête vient de localhost
   const ip = req.ip || req.connection.remoteAddress;
   if (!ip.includes('127.0.0.1') && !ip.includes('::1') && !ip.includes('localhost')) {
@@ -177,17 +177,117 @@ app.post('/api/internal/sms/incoming', (req, res) => {
   }
 
   const { from, text, device } = req.body;
+  const timestamp = Date.now();
+  const messageId = `sms-${timestamp}-${Math.random().toString(36).substring(7)}`;
+
   console.log(`[SMS] Incoming SMS from ${from} via ${device}: ${text}`);
 
-  // TODO: Stocker le SMS dans la base de données et notifier les clients
-  // Pour l'instant, on log juste
+  try {
+    // 1. Import services
+    const db = require('./services/DatabaseService');
+    const webPushService = require('./services/WebPushService');
+    const pushRelayService = require('./services/PushRelayService');
 
-  // Émettre via Socket.IO si disponible
-  if (global.io) {
-    global.io.emit('sms:incoming', { from, text, device, timestamp: new Date().toISOString() });
+    // 2. Create/update chat in database
+    const chatId = `sms-${from.replace(/[^0-9+]/g, '')}`;
+    const chatStmt = db.prepare(`
+      INSERT INTO chats (id, name, provider, timestamp, local_phone_number)
+      VALUES (?, ?, 'sms', ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        timestamp = excluded.timestamp,
+        unread_count = unread_count + 1
+    `);
+    chatStmt.run(chatId, from, Math.floor(timestamp / 1000), device);
+
+    // 3. Store message in database
+    const msgStmt = db.prepare(`
+      INSERT INTO messages (id, chat_id, sender_id, from_me, type, content, timestamp, status)
+      VALUES (?, ?, ?, 0, 'text', ?, ?, 'received')
+    `);
+    msgStmt.run(messageId, chatId, from, text, Math.floor(timestamp / 1000));
+
+    console.log(`[SMS] Stored in DB: messageId=${messageId}, chatId=${chatId}`);
+
+    // 4. Broadcast via WebSocket to all connected clients
+    pushService.broadcast('new_message', {
+      id: messageId,
+      chatId: chatId,
+      from: from,
+      content: text,
+      timestamp: timestamp,
+      fromMe: false,
+      provider: 'sms',
+      type: 'text',
+      device: device
+    });
+
+    // 5. Send Web Push notifications (PWA offline)
+    try {
+      await webPushService.notifyNewMessage(from, text, chatId, false);
+      console.log(`[SMS] Web push sent for message from ${from}`);
+    } catch (pushErr) {
+      console.warn(`[SMS] Web push failed:`, pushErr.message);
+    }
+
+    // 6. Send Push Relay notifications (iOS/Android apps)
+    if (pushRelayService.isConfigured()) {
+      try {
+        // Get users who should receive notifications for this modem
+        const users = db.getUsersForModemSmsNotifications(device);
+
+        if (users.length === 0) {
+          // No specific mappings - broadcast to all users
+          console.log(`[SMS] No modem mappings found, broadcasting to all users`);
+          const result = await pushRelayService.broadcast('new_message', {
+            chatId: chatId,
+            messageId: messageId,
+            senderName: from,
+            provider: 'sms',
+            modemId: device
+          }, {
+            title: `SMS: ${from}`,
+            body: text.length > 100 ? text.substring(0, 100) + '...' : text
+          });
+          console.log(`[SMS] Push relay broadcast: sent=${result.sent || 0}`);
+        } else {
+          // Send to specific users mapped to this modem
+          for (const user of users) {
+            const result = await pushRelayService.sendNewMessage(user.id, {
+              chatId: chatId,
+              messageId: messageId,
+              senderName: from,
+              preview: text.length > 100 ? text.substring(0, 100) + '...' : text
+            });
+            console.log(`[SMS] Push relay sent to user ${user.id}: sent=${result.sent || 0}`);
+          }
+        }
+      } catch (relayErr) {
+        console.warn(`[SMS] Push relay failed:`, relayErr.message);
+      }
+    }
+
+    // 7. Legacy Socket.IO emit (if available)
+    if (global.io) {
+      global.io.emit('sms:incoming', {
+        id: messageId,
+        from,
+        text,
+        device,
+        timestamp: new Date(timestamp).toISOString()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'SMS received and notifications sent',
+      messageId: messageId,
+      chatId: chatId
+    });
+
+  } catch (error) {
+    console.error(`[SMS] Error processing incoming SMS:`, error);
+    res.status(500).json({ error: 'Failed to process SMS', details: error.message });
   }
-
-  res.json({ success: true, message: 'SMS received' });
 });
 
 // Routes protégées - Ajouter le middleware d'authentification
@@ -707,7 +807,7 @@ async function startServer() {
     });
 
     // Écouter les messages entrants des providers (Baileys, SMS, Meta, etc.)
-    providerManager.on('message', (data) => {
+    providerManager.on('message', async (data) => {
       // data = { provider: 'baileys'|'sms-bridge'|'meta', ...messageData }
       const messageData = data;
       const providerName = messageData.provider || 'unknown';
@@ -723,15 +823,41 @@ async function startServer() {
       pushService.pushNewMessage(messageData);
       logger.info(`Message pushé via WebSocket: ${messageData.id || 'no-id'}`);
 
+      // Skip notifications for outgoing messages
+      if (messageData.isFromMe || messageData.fromMe) {
+        return;
+      }
+
       // Push notification sur les appareils (PWA installée)
       const webPushService = require('./services/WebPushService');
-      if (!messageData.isFromMe && !messageData.fromMe) {
-        webPushService.notifyNewMessage(
-          messageData.chatName || messageData.from,
-          messageData.content || messageData.text,
-          messageData.chatId,
-          false
-        ).catch(err => logger.warn('Web push failed:', err.message));
+      webPushService.notifyNewMessage(
+        messageData.chatName || messageData.from,
+        messageData.content || messageData.text,
+        messageData.chatId,
+        false
+      ).catch(err => logger.warn('Web push failed:', err.message));
+
+      // Push Relay pour les apps mobiles (iOS/Android)
+      const pushRelayService = require('./services/PushRelayService');
+      if (pushRelayService.isConfigured()) {
+        try {
+          const senderName = messageData.chatName || messageData.from || 'Unknown';
+          const preview = (messageData.content || messageData.text || '').substring(0, 100);
+
+          // Broadcast to all registered devices
+          const result = await pushRelayService.broadcast('new_message', {
+            chatId: messageData.chatId,
+            messageId: messageData.id,
+            senderName: senderName,
+            provider: providerName
+          }, {
+            title: senderName,
+            body: preview.length > 100 ? preview + '...' : preview
+          });
+          logger.info(`[PushRelay] Broadcast for ${providerName} message: sent=${result.sent || 0}`);
+        } catch (relayErr) {
+          logger.warn('[PushRelay] Failed for message:', relayErr.message);
+        }
       }
     });
 
@@ -794,6 +920,44 @@ async function startServer() {
             voipPushService.sendIncomingCallPush(callData).catch(err => {
               logger.warn('[VoIPPush] Failed to send iOS push:', err.message);
             });
+
+            // ADDITIVE: Envoyer Push Relay pour les apps mobiles (iOS/Android)
+            const pushRelayService = require('./services/PushRelayService');
+            if (pushRelayService.isConfigured()) {
+              try {
+                const db = require('./services/DatabaseService');
+                const modemId = callData.lineName || callData.channel?.split('/')[1]?.split('-')[0] || 'unknown';
+
+                // Get users who should receive call notifications
+                const users = db.getUsersForModemCallNotifications(modemId);
+
+                if (users.length === 0) {
+                  // No specific mappings - broadcast to all users
+                  const result = await pushRelayService.broadcast('incoming_call', {
+                    callId: callData.callId,
+                    callerName: callData.callerName || callData.callerNumber,
+                    callerNumber: callData.callerNumber,
+                    lineName: callData.lineName || modemId,
+                    extension: callData.extension
+                  });
+                  logger.info(`[Server] Push relay broadcast for call: sent=${result.sent || 0}`);
+                } else {
+                  // Send to specific users mapped to this modem/line
+                  for (const user of users) {
+                    const result = await pushRelayService.sendIncomingCall(user.id, {
+                      callId: callData.callId,
+                      callerName: callData.callerName || callData.callerNumber,
+                      callerNumber: callData.callerNumber,
+                      lineName: callData.lineName || modemId,
+                      extension: callData.extension
+                    });
+                    logger.info(`[Server] Push relay sent to user ${user.id} for call: sent=${result.sent || 0}`);
+                  }
+                }
+              } catch (relayErr) {
+                logger.warn('[Server] Push relay failed for call:', relayErr.message);
+              }
+            }
           } catch (error) {
             logger.error('[Server] Error sending incoming call push:', error);
           }

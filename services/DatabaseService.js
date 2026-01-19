@@ -247,6 +247,54 @@ class DatabaseService {
         } catch (err) {
             logger.debug('Migration user_voip_extensions skipped:', err.message);
         }
+
+        // Migration: Add device_tokens table for FCM/APNs push notifications
+        // This persists tokens across server restarts (previously in-memory only!)
+        try {
+            this.db.exec(`
+                CREATE TABLE IF NOT EXISTS device_tokens (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    token TEXT NOT NULL,
+                    device_id TEXT,
+                    platform TEXT DEFAULT 'android',
+                    app_version TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    UNIQUE(token)
+                );
+                CREATE INDEX IF NOT EXISTS idx_device_tokens_user_id ON device_tokens(user_id);
+                CREATE INDEX IF NOT EXISTS idx_device_tokens_token ON device_tokens(token);
+            `);
+            logger.info('Migration: device_tokens table ready');
+        } catch (err) {
+            logger.debug('Migration device_tokens skipped:', err.message);
+        }
+
+        // Migration: Add user_modem_mappings table for user-modem relationships
+        // Allows knowing which users should receive notifications for each modem
+        try {
+            this.db.exec(`
+                CREATE TABLE IF NOT EXISTS user_modem_mappings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    modem_id TEXT NOT NULL,
+                    modem_phone_number TEXT,
+                    permissions TEXT DEFAULT 'send,receive',
+                    notify_sms BOOLEAN DEFAULT 1,
+                    notify_calls BOOLEAN DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    UNIQUE(user_id, modem_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_modem_mappings_user_id ON user_modem_mappings(user_id);
+                CREATE INDEX IF NOT EXISTS idx_user_modem_mappings_modem_id ON user_modem_mappings(modem_id);
+            `);
+            logger.info('Migration: user_modem_mappings table ready');
+        } catch (err) {
+            logger.debug('Migration user_modem_mappings skipped:', err.message);
+        }
     }
 
     // --- Generic Helpers ---
@@ -884,6 +932,269 @@ class DatabaseService {
             createdAt: row.created_at,
             updatedAt: row.updated_at
         };
+    }
+
+    // =====================================================
+    // Device Tokens (FCM/APNs) - Persistent push tokens
+    // =====================================================
+
+    /**
+     * Register or update a device token for push notifications
+     * @param {number} userId - User ID
+     * @param {string} token - FCM or APNs token
+     * @param {string} deviceId - Unique device identifier
+     * @param {string} platform - 'android', 'ios', or 'web'
+     * @param {object} metadata - Optional device info
+     */
+    registerDeviceToken(userId, token, deviceId, platform = 'android', metadata = {}) {
+        const stmt = this.db.prepare(`
+            INSERT INTO device_tokens (user_id, token, device_id, platform, app_version, last_used_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(token) DO UPDATE SET
+                user_id = excluded.user_id,
+                device_id = excluded.device_id,
+                platform = excluded.platform,
+                app_version = excluded.app_version,
+                last_used_at = CURRENT_TIMESTAMP
+        `);
+        stmt.run(
+            userId,
+            token,
+            deviceId || null,
+            platform,
+            metadata.appVersion || null
+        );
+        logger.info(`Device token registered for user ${userId} (${platform})`);
+        return { userId, token, deviceId, platform };
+    }
+
+    /**
+     * Get all device tokens for a user
+     * @param {number} userId - User ID
+     */
+    getDeviceTokensByUserId(userId) {
+        return this.db.prepare('SELECT * FROM device_tokens WHERE user_id = ?').all(userId);
+    }
+
+    /**
+     * Get all device tokens (for broadcasting to all devices)
+     */
+    getAllDeviceTokens() {
+        return this.db.prepare('SELECT * FROM device_tokens').all();
+    }
+
+    /**
+     * Get device tokens by platform
+     * @param {string} platform - 'android', 'ios', or 'web'
+     */
+    getDeviceTokensByPlatform(platform) {
+        return this.db.prepare('SELECT * FROM device_tokens WHERE platform = ?').all(platform);
+    }
+
+    /**
+     * Unregister a device token
+     * @param {string} token - Token to remove
+     */
+    unregisterDeviceToken(token) {
+        const result = this.db.prepare('DELETE FROM device_tokens WHERE token = ?').run(token);
+        return result.changes > 0;
+    }
+
+    /**
+     * Unregister all device tokens for a user (on logout)
+     * @param {number} userId - User ID
+     */
+    unregisterAllDeviceTokensForUser(userId) {
+        const result = this.db.prepare('DELETE FROM device_tokens WHERE user_id = ?').run(userId);
+        return result.changes;
+    }
+
+    /**
+     * Update last_used_at timestamp for a token
+     * @param {string} token - Device token
+     */
+    touchDeviceToken(token) {
+        this.db.prepare('UPDATE device_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE token = ?').run(token);
+    }
+
+    /**
+     * Cleanup stale device tokens (not used in X days)
+     * @param {number} daysInactive - Days of inactivity before cleanup
+     */
+    cleanupStaleDeviceTokens(daysInactive = 30) {
+        const result = this.db.prepare(`
+            DELETE FROM device_tokens
+            WHERE last_used_at < datetime('now', '-' || ? || ' days')
+        `).run(daysInactive);
+        if (result.changes > 0) {
+            logger.info(`Cleaned up ${result.changes} stale device tokens`);
+        }
+        return result.changes;
+    }
+
+    // =====================================================
+    // User-Modem Mappings - Which users can use which modems
+    // =====================================================
+
+    /**
+     * Create a user-modem mapping
+     * @param {number} userId - User ID
+     * @param {string} modemId - Modem ID (e.g., 'ec25', 'modem-1')
+     * @param {object} options - Optional settings
+     */
+    createUserModemMapping(userId, modemId, options = {}) {
+        const {
+            modemPhoneNumber = null,
+            permissions = 'send,receive',
+            notifySms = true,
+            notifyCalls = true
+        } = options;
+
+        const stmt = this.db.prepare(`
+            INSERT INTO user_modem_mappings (user_id, modem_id, modem_phone_number, permissions, notify_sms, notify_calls)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, modem_id) DO UPDATE SET
+                modem_phone_number = excluded.modem_phone_number,
+                permissions = excluded.permissions,
+                notify_sms = excluded.notify_sms,
+                notify_calls = excluded.notify_calls
+        `);
+        stmt.run(userId, modemId, modemPhoneNumber, permissions, notifySms ? 1 : 0, notifyCalls ? 1 : 0);
+        logger.info(`User ${userId} mapped to modem ${modemId}`);
+        return { userId, modemId, modemPhoneNumber, permissions, notifySms, notifyCalls };
+    }
+
+    /**
+     * Get all modems a user can access
+     * @param {number} userId - User ID
+     */
+    getUserModems(userId) {
+        return this.db.prepare('SELECT * FROM user_modem_mappings WHERE user_id = ?').all(userId);
+    }
+
+    /**
+     * Get all users who can access a modem (for push notifications)
+     * @param {string} modemId - Modem ID
+     */
+    getUsersForModem(modemId) {
+        const rows = this.db.prepare(`
+            SELECT u.id, u.username, m.modem_id, m.permissions, m.notify_sms, m.notify_calls
+            FROM user_modem_mappings m
+            JOIN users u ON m.user_id = u.id
+            WHERE m.modem_id = ?
+        `).all(modemId);
+        return rows.map(r => ({
+            id: r.id,
+            username: r.username,
+            modemId: r.modem_id,
+            permissions: r.permissions,
+            notifySms: !!r.notify_sms,
+            notifyCalls: !!r.notify_calls
+        }));
+    }
+
+    /**
+     * Get all users who should receive SMS notifications for a modem
+     * @param {string} modemId - Modem ID
+     */
+    getUsersForModemSmsNotifications(modemId) {
+        const rows = this.db.prepare(`
+            SELECT u.id, u.username
+            FROM user_modem_mappings m
+            JOIN users u ON m.user_id = u.id
+            WHERE m.modem_id = ? AND m.notify_sms = 1
+        `).all(modemId);
+        return rows;
+    }
+
+    /**
+     * Get all users who should receive call notifications for a modem
+     * @param {string} modemId - Modem ID
+     */
+    getUsersForModemCallNotifications(modemId) {
+        const rows = this.db.prepare(`
+            SELECT u.id, u.username
+            FROM user_modem_mappings m
+            JOIN users u ON m.user_id = u.id
+            WHERE m.modem_id = ? AND m.notify_calls = 1
+        `).all(modemId);
+        return rows;
+    }
+
+    /**
+     * Check if a user has access to a modem
+     * @param {number} userId - User ID
+     * @param {string} modemId - Modem ID
+     */
+    hasUserAccessToModem(userId, modemId) {
+        const row = this.db.prepare(
+            'SELECT id FROM user_modem_mappings WHERE user_id = ? AND modem_id = ?'
+        ).get(userId, modemId);
+        return !!row;
+    }
+
+    /**
+     * Delete a user-modem mapping
+     * @param {number} userId - User ID
+     * @param {string} modemId - Modem ID
+     */
+    deleteUserModemMapping(userId, modemId) {
+        const result = this.db.prepare(
+            'DELETE FROM user_modem_mappings WHERE user_id = ? AND modem_id = ?'
+        ).run(userId, modemId);
+        return result.changes > 0;
+    }
+
+    /**
+     * Delete all modem mappings for a user
+     * @param {number} userId - User ID
+     */
+    deleteAllUserModemMappings(userId) {
+        const result = this.db.prepare('DELETE FROM user_modem_mappings WHERE user_id = ?').run(userId);
+        return result.changes;
+    }
+
+    /**
+     * Get all user-modem mappings (admin view)
+     */
+    getAllUserModemMappings() {
+        const rows = this.db.prepare(`
+            SELECT m.*, u.username
+            FROM user_modem_mappings m
+            JOIN users u ON m.user_id = u.id
+            ORDER BY u.username, m.modem_id
+        `).all();
+        return rows.map(r => ({
+            id: r.id,
+            userId: r.user_id,
+            username: r.username,
+            modemId: r.modem_id,
+            modemPhoneNumber: r.modem_phone_number,
+            permissions: r.permissions,
+            notifySms: !!r.notify_sms,
+            notifyCalls: !!r.notify_calls,
+            createdAt: r.created_at
+        }));
+    }
+
+    /**
+     * Auto-map all users to a modem (for single-user scenarios or initial setup)
+     * @param {string} modemId - Modem ID
+     * @param {string} modemPhoneNumber - Modem phone number
+     */
+    autoMapAllUsersToModem(modemId, modemPhoneNumber = null) {
+        const users = this.getAllUsers();
+        let mapped = 0;
+        for (const user of users) {
+            try {
+                this.createUserModemMapping(user.id, modemId, { modemPhoneNumber });
+                mapped++;
+            } catch (e) {
+                // Already mapped, ignore
+            }
+        }
+        logger.info(`Auto-mapped ${mapped} users to modem ${modemId}`);
+        return mapped;
     }
 }
 

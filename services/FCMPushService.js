@@ -62,6 +62,9 @@ class FCMPushService {
       this.serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
       this.projectId = this.serviceAccount.project_id;
 
+      // Load existing device tokens from database
+      this.loadTokensFromDB();
+
       logger.info(`[FCM] Service initialized for project: ${this.projectId}`);
       this.initialized = true;
       return true;
@@ -147,6 +150,7 @@ class FCMPushService {
    * Register a device FCM token
    */
   registerDevice(userId, token, deviceId, platform = 'android') {
+    // Update in-memory cache
     if (!this.deviceTokens.has(userId)) {
       this.deviceTokens.set(userId, new Set());
     }
@@ -162,21 +166,70 @@ class FCMPushService {
 
     userTokens.add({ token, deviceId, platform, registeredAt: Date.now() });
     logger.info(`[FCM] Device registered: userId=${userId} deviceId=${deviceId}`);
+
+    // Persist to database for restart survival
+    try {
+      const db = require('./DatabaseService');
+      db.registerDeviceToken(userId, token, deviceId, platform);
+    } catch (dbErr) {
+      logger.warn(`[FCM] Failed to persist token to DB: ${dbErr.message}`);
+    }
   }
 
   /**
    * Unregister a device
    */
   unregisterDevice(userId, deviceId) {
+    // Remove from in-memory cache
     const userTokens = this.deviceTokens.get(userId);
-    if (!userTokens) return;
+    let tokenToRemove = null;
 
-    for (const entry of userTokens) {
-      if (entry.deviceId === deviceId) {
-        userTokens.delete(entry);
-        logger.info(`[FCM] Device unregistered: userId=${userId} deviceId=${deviceId}`);
-        break;
+    if (userTokens) {
+      for (const entry of userTokens) {
+        if (entry.deviceId === deviceId) {
+          tokenToRemove = entry.token;
+          userTokens.delete(entry);
+          logger.info(`[FCM] Device unregistered: userId=${userId} deviceId=${deviceId}`);
+          break;
+        }
       }
+    }
+
+    // Remove from database
+    try {
+      const db = require('./DatabaseService');
+      if (tokenToRemove) {
+        db.unregisterDeviceToken(tokenToRemove);
+      }
+    } catch (dbErr) {
+      logger.warn(`[FCM] Failed to remove token from DB: ${dbErr.message}`);
+    }
+  }
+
+  /**
+   * Load device tokens from database (for restart recovery)
+   */
+  loadTokensFromDB() {
+    try {
+      const db = require('./DatabaseService');
+      const allTokens = db.getAllDeviceTokens();
+
+      for (const row of allTokens) {
+        const userId = row.user_id;
+        if (!this.deviceTokens.has(userId)) {
+          this.deviceTokens.set(userId, new Set());
+        }
+        this.deviceTokens.get(userId).add({
+          token: row.token,
+          deviceId: row.device_id,
+          platform: row.platform,
+          registeredAt: new Date(row.created_at).getTime()
+        });
+      }
+
+      logger.info(`[FCM] Loaded ${allTokens.length} device tokens from database`);
+    } catch (dbErr) {
+      logger.warn(`[FCM] Failed to load tokens from DB: ${dbErr.message}`);
     }
   }
 
@@ -184,9 +237,36 @@ class FCMPushService {
    * Get all registered tokens for a user
    */
   getUserTokens(userId) {
+    // Try in-memory cache first
     const userTokens = this.deviceTokens.get(userId);
-    if (!userTokens) return [];
-    return Array.from(userTokens).map(entry => entry.token);
+    if (userTokens && userTokens.size > 0) {
+      return Array.from(userTokens).map(entry => entry.token);
+    }
+
+    // Fall back to database
+    try {
+      const db = require('./DatabaseService');
+      const dbTokens = db.getDeviceTokensByUserId(userId);
+      if (dbTokens.length > 0) {
+        // Populate cache for next time
+        if (!this.deviceTokens.has(userId)) {
+          this.deviceTokens.set(userId, new Set());
+        }
+        for (const row of dbTokens) {
+          this.deviceTokens.get(userId).add({
+            token: row.token,
+            deviceId: row.device_id,
+            platform: row.platform,
+            registeredAt: new Date(row.created_at).getTime()
+          });
+        }
+        return dbTokens.map(t => t.token);
+      }
+    } catch (dbErr) {
+      logger.warn(`[FCM] Failed to get tokens from DB: ${dbErr.message}`);
+    }
+
+    return [];
   }
 
   /**
