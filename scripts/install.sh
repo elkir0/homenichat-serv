@@ -563,18 +563,22 @@ rtp_end=10100
 UPNP_CONF
 
     # Copy watchdog script
-    if [ -f "$HOMENICHAT_DIR/scripts/upnp-watchdog.sh" ]; then
-        cp "$HOMENICHAT_DIR/scripts/upnp-watchdog.sh" /usr/local/bin/upnp-watchdog.sh
+    if [ -f "$INSTALL_DIR/scripts/upnp-watchdog.sh" ]; then
+        cp "$INSTALL_DIR/scripts/upnp-watchdog.sh" /usr/local/bin/upnp-watchdog.sh
         chmod +x /usr/local/bin/upnp-watchdog.sh
-        info "UPnP watchdog script installed"
+        info "UPnP watchdog script installed to /usr/local/bin/"
+    else
+        warning "UPnP watchdog script not found at $INSTALL_DIR/scripts/upnp-watchdog.sh"
     fi
 
     # Copy systemd files
-    if [ -f "$HOMENICHAT_DIR/config/systemd/upnp-watchdog.service" ]; then
-        cp "$HOMENICHAT_DIR/config/systemd/upnp-watchdog.service" /etc/systemd/system/
-        cp "$HOMENICHAT_DIR/config/systemd/upnp-watchdog.timer" /etc/systemd/system/
+    if [ -f "$INSTALL_DIR/config/systemd/upnp-watchdog.service" ]; then
+        cp "$INSTALL_DIR/config/systemd/upnp-watchdog.service" /etc/systemd/system/
+        cp "$INSTALL_DIR/config/systemd/upnp-watchdog.timer" /etc/systemd/system/
         systemctl daemon-reload
         info "UPnP systemd units installed"
+    else
+        warning "UPnP systemd files not found at $INSTALL_DIR/config/systemd/"
     fi
 
     # Note: Timer is NOT enabled by default - user must enable via admin UI
