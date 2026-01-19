@@ -1172,7 +1172,7 @@ export default function ModemsPage() {
                   {detectedModems.length} modem(s) detecte(s) via USB
                 </Typography>
                 <Grid container spacing={2}>
-                  {detectedModems.map((modem, idx) => (
+                  {detectedModems.map((modem) => (
                     <Grid item xs={12} md={6} key={modem.id}>
                       <Paper
                         sx={{

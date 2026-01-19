@@ -474,8 +474,20 @@ install_homenichat() {
         info "Building admin interface..."
         cd "$INSTALL_DIR/admin"
         run_cmd "npm install (admin)" npm install
-        run_cmd "npm build (admin)" npm run build
+        if ! run_cmd "npm build (admin)" npm run build; then
+            error "Admin interface build failed!"
+            error "Running build again with visible output:"
+            npm run build 2>&1 | tail -20
+            error "Check TypeScript errors above. Build failed."
+            exit 1
+        fi
+        # Verify build output exists
+        if [ ! -d "$INSTALL_DIR/admin/dist" ]; then
+            error "Admin interface build did not produce dist/ folder"
+            exit 1
+        fi
         cd "$INSTALL_DIR"
+        success "Admin interface built successfully"
     fi
 
     # Create symlinks for data directories
