@@ -690,23 +690,51 @@ install_chan_quectel() {
     cd /usr/src
 
     # Install Asterisk development headers
+    local HEADERS_INSTALLED=false
+
     if [ "$INSTALL_FREEPBX" = true ]; then
         # FreePBX 17 uses Asterisk 22 - need asterisk22-devel package
         info "Installing Asterisk 22 development headers (FreePBX)..."
+
+        # Update package list to ensure FreePBX repos are available
+        apt-get update >> "$LOG_FILE" 2>&1 || true
+
         # Try multiple package names (varies by FreePBX version)
-        apt-get install -y asterisk22-devel >> "$LOG_FILE" 2>&1 || \
-        apt-get install -y asterisk-devel >> "$LOG_FILE" 2>&1 || \
-        apt-get install -y asterisk-dev >> "$LOG_FILE" 2>&1 || {
-            warning "Could not install Asterisk dev headers - chan_quectel may fail to compile"
-        }
+        if apt-get install -y asterisk22-devel >> "$LOG_FILE" 2>&1; then
+            HEADERS_INSTALLED=true
+            success "asterisk22-devel installed"
+        elif apt-get install -y asterisk-devel >> "$LOG_FILE" 2>&1; then
+            HEADERS_INSTALLED=true
+            success "asterisk-devel installed"
+        elif apt-get install -y asterisk-dev >> "$LOG_FILE" 2>&1; then
+            HEADERS_INSTALLED=true
+            success "asterisk-dev installed"
+        else
+            warning "Could not install Asterisk dev headers from packages"
+        fi
     else
         # Standalone Asterisk built from source - install headers from source
         ASTERISK_SRC=$(find /usr/src -maxdepth 1 -type d -name "asterisk-*" 2>/dev/null | head -1)
         if [ -n "$ASTERISK_SRC" ] && [ -d "$ASTERISK_SRC" ]; then
             info "Installing Asterisk development headers (from source)..."
             cd "$ASTERISK_SRC"
-            make install-headers >> "$LOG_FILE" 2>&1 || true
+            if make install-headers >> "$LOG_FILE" 2>&1; then
+                HEADERS_INSTALLED=true
+                success "Asterisk headers installed from source"
+            fi
         fi
+    fi
+
+    # Verify headers are available
+    if [ -f /usr/include/asterisk.h ] || [ -f /usr/include/asterisk/asterisk.h ] || \
+       [ -d /usr/include/asterisk ]; then
+        HEADERS_INSTALLED=true
+        info "Asterisk headers found in /usr/include"
+    fi
+
+    if [ "$HEADERS_INSTALLED" != true ]; then
+        warning "Asterisk headers not found - chan_quectel compilation will likely fail"
+        warning "You may need to manually install: apt-get install asterisk22-devel"
     fi
 
     cd /usr/src
@@ -950,9 +978,17 @@ UDEV_RULES
         mkdir -p "/lib/${LIB_ARCH}/asterisk/modules" 2>/dev/null || true
         cp "$CHAN_QUECTEL_SO" "/lib/${LIB_ARCH}/asterisk/modules/" 2>/dev/null || true
 
-        # Standard location
+        # Standard location - copy the file
         mkdir -p /usr/lib/asterisk/modules 2>/dev/null || true
         cp "$CHAN_QUECTEL_SO" /usr/lib/asterisk/modules/ 2>/dev/null || true
+
+        # Create symlinks for maximum compatibility (bug #12)
+        # Homenichat may check different paths depending on setup
+        if [ -f "/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so" ]; then
+            # Symlink from /usr/lib to /lib location
+            ln -sf "/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so" \
+                   /usr/lib/asterisk/modules/chan_quectel.so 2>/dev/null || true
+        fi
 
         info "chan_quectel.so copied to Asterisk module directories"
     else
