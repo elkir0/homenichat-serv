@@ -1572,10 +1572,12 @@ ${modemConfig.phoneNumber ? `exten=+${modemConfig.phoneNumber.replace(/^\+/, '')
             const modemId = modem.id || modem.name || 'hni-modem';
             const trunkStatus = await amiService.getModemTrunkStatus(modemId);
 
-            if (!trunkStatus.exists) {
-              const result = await amiService.createModemTrunk(modemId, {
+            if (!trunkStatus.modemStatus || trunkStatus.modemStatus === 'not_found') {
+              const result = await amiService.createModemTrunk({
+                modemId: modemId,
+                modemName: modem.name || modemId,
                 phoneNumber: modem.phoneNumber || '',
-                context: 'from-gsm',
+                createWebRtcExtension: false, // Don't auto-create WebRTC extension here
               });
               if (result.success) {
                 trunksCreated.push(modemId);

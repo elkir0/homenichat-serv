@@ -1177,22 +1177,46 @@ configure_asterisk_audio() {
         info "Installed quectel.conf (txgain=-18, rxgain=-5)"
     fi
 
-    # Include Homenichat configs in main Asterisk configs
-    if [ -f /etc/asterisk/extensions.conf ]; then
-        if ! grep -q "extensions_homenichat.conf" /etc/asterisk/extensions.conf 2>/dev/null; then
-            echo "" >> /etc/asterisk/extensions.conf
-            echo "; Homenichat dialplan" >> /etc/asterisk/extensions.conf
-            echo "#include extensions_homenichat.conf" >> /etc/asterisk/extensions.conf
-            info "Added extensions_homenichat.conf include"
-        fi
-    fi
+    # Include Homenichat configs via *_custom.conf files
+    # FreePBX manages extensions.conf and pjsip.conf directly - we use custom files
+    # which FreePBX automatically includes
 
-    if [ -f /etc/asterisk/pjsip.conf ]; then
-        if ! grep -q "pjsip_homenichat.conf" /etc/asterisk/pjsip.conf 2>/dev/null; then
-            echo "" >> /etc/asterisk/pjsip.conf
-            echo "; Homenichat PJSIP config" >> /etc/asterisk/pjsip.conf
-            echo "#include pjsip_homenichat.conf" >> /etc/asterisk/pjsip.conf
-            info "Added pjsip_homenichat.conf include"
+    # Extensions dialplan - use extensions_custom.conf
+    info "Configuring extensions_custom.conf for FreePBX..."
+    cat > /etc/asterisk/extensions_custom.conf << 'EXTENSIONS_CUSTOM'
+; Homenichat Custom Dialplan for FreePBX
+; This file is automatically included by FreePBX
+; DO NOT EDIT extensions.conf directly - FreePBX regenerates it!
+
+#include extensions_homenichat.conf
+EXTENSIONS_CUSTOM
+    info "Created extensions_custom.conf with homenichat include"
+
+    # PJSIP config - use pjsip_custom.conf
+    info "Configuring pjsip_custom.conf for FreePBX..."
+    if [ ! -f /etc/asterisk/pjsip_custom.conf ]; then
+        cat > /etc/asterisk/pjsip_custom.conf << 'PJSIP_CUSTOM'
+; Homenichat Custom PJSIP Configuration for FreePBX
+; This file is automatically included by FreePBX
+; DO NOT EDIT pjsip.conf directly - FreePBX regenerates it!
+
+; Include Homenichat PJSIP transport and template definitions
+#include pjsip_homenichat.conf
+
+; ============================================
+; HOMENICHAT DYNAMIC EXTENSIONS
+; Extensions created via Homenichat API will be added below
+; ============================================
+
+PJSIP_CUSTOM
+        info "Created pjsip_custom.conf"
+    else
+        # Ensure homenichat include exists
+        if ! grep -q "pjsip_homenichat.conf" /etc/asterisk/pjsip_custom.conf 2>/dev/null; then
+            echo "" >> /etc/asterisk/pjsip_custom.conf
+            echo "; Include Homenichat PJSIP config" >> /etc/asterisk/pjsip_custom.conf
+            echo "#include pjsip_homenichat.conf" >> /etc/asterisk/pjsip_custom.conf
+            info "Added pjsip_homenichat.conf include to existing pjsip_custom.conf"
         fi
     fi
 

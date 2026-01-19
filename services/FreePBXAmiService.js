@@ -12,10 +12,17 @@
  */
 
 const net = require('net');
+const fs = require('fs');
+const path = require('path');
 const EventEmitter = require('events');
 const logger = require('../utils/logger');
 const db = require('./DatabaseService');
 const pushService = require('./PushService');
+
+// FreePBX configuration file paths
+// These are *_custom.conf files that FreePBX includes automatically
+const PJSIP_CUSTOM_CONF = '/etc/asterisk/pjsip_custom.conf';
+const EXTENSIONS_CUSTOM_CONF = '/etc/asterisk/extensions_custom.conf';
 
 class FreePBXAmiService extends EventEmitter {
   constructor() {
@@ -980,7 +987,7 @@ class FreePBXAmiService extends EventEmitter {
 
   /**
    * Create a PJSIP extension for WebRTC
-   * Uses AMI command to add to Asterisk DB and reload PJSIP
+   * Writes directly to pjsip_custom.conf (FreePBX compatible)
    *
    * @param {object} extensionData - Extension configuration
    * @returns {Promise<{success: boolean, message: string}>}
@@ -996,53 +1003,63 @@ class FreePBXAmiService extends EventEmitter {
       codecs = 'g722,ulaw,alaw,opus'
     } = extensionData;
 
-    if (!this.connected || !this.authenticated) {
-      return { success: false, message: 'Non connecté au PBX' };
-    }
-
     try {
-      // For FreePBX, we use the database to store extension config
-      // Then reload PJSIP module
-
-      // Create PJSIP endpoint via AMI DBput commands
-      const commands = [
-        // Endpoint configuration
-        { family: `PJSIP/endpoint/${extension}`, key: 'type', value: 'endpoint' },
-        { family: `PJSIP/endpoint/${extension}`, key: 'context', value: context },
-        { family: `PJSIP/endpoint/${extension}`, key: 'disallow', value: 'all' },
-        { family: `PJSIP/endpoint/${extension}`, key: 'allow', value: codecs },
-        { family: `PJSIP/endpoint/${extension}`, key: 'auth', value: `auth_${extension}` },
-        { family: `PJSIP/endpoint/${extension}`, key: 'aors', value: extension },
-        { family: `PJSIP/endpoint/${extension}`, key: 'callerid', value: displayName ? `"${displayName}" <${extension}>` : extension },
-        { family: `PJSIP/endpoint/${extension}`, key: 'webrtc', value: 'yes' },
-        { family: `PJSIP/endpoint/${extension}`, key: 'dtls_auto_generate_cert', value: 'yes' },
-        { family: `PJSIP/endpoint/${extension}`, key: 'ice_support', value: 'yes' },
-        { family: `PJSIP/endpoint/${extension}`, key: 'media_encryption', value: 'dtls' },
-        { family: `PJSIP/endpoint/${extension}`, key: 'media_use_received_transport', value: 'yes' },
-        { family: `PJSIP/endpoint/${extension}`, key: 'rtcp_mux', value: 'yes' },
-
-        // Auth configuration
-        { family: `PJSIP/auth/auth_${extension}`, key: 'type', value: 'auth' },
-        { family: `PJSIP/auth/auth_${extension}`, key: 'auth_type', value: 'userpass' },
-        { family: `PJSIP/auth/auth_${extension}`, key: 'username', value: extension },
-        { family: `PJSIP/auth/auth_${extension}`, key: 'password', value: secret },
-
-        // AOR (Address of Record) configuration
-        { family: `PJSIP/aor/${extension}`, key: 'type', value: 'aor' },
-        { family: `PJSIP/aor/${extension}`, key: 'max_contacts', value: '5' },
-        { family: `PJSIP/aor/${extension}`, key: 'remove_existing', value: 'yes' }
-      ];
-
-      // Execute DBput commands
-      for (const cmd of commands) {
-        await this.sendDbPut(cmd.family, cmd.key, cmd.value);
+      // Check if extension already exists in config file
+      if (this.extensionExistsInConfig(extension)) {
+        logger.warn(`[AMI] Extension ${extension} already exists in pjsip_custom.conf`);
+        return { success: false, message: `Extension ${extension} existe déjà` };
       }
 
+      // Generate PJSIP configuration block for this extension
+      const configBlock = `
+; ============================================
+; Extension ${extension} - Created by Homenichat
+; Created: ${new Date().toISOString()}
+; ============================================
+[${extension}]
+type=endpoint
+context=${context}
+auth=auth_${extension}
+aors=${extension}
+callerid="${displayName || 'Homenichat'}" <${extension}>
+webrtc=yes
+dtls_auto_generate_cert=yes
+direct_media=no
+ice_support=yes
+media_encryption=dtls
+media_use_received_transport=yes
+rtcp_mux=yes
+disallow=all
+allow=${codecs}
+transport=${transport}
+
+[auth_${extension}]
+type=auth
+auth_type=userpass
+username=${extension}
+password=${secret}
+
+[${extension}]
+type=aor
+max_contacts=5
+remove_existing=yes
+qualify_frequency=30
+; END Extension ${extension}
+`;
+
+      // Append to pjsip_custom.conf
+      fs.appendFileSync(PJSIP_CUSTOM_CONF, configBlock);
+      logger.info(`[AMI] Extension ${extension} added to ${PJSIP_CUSTOM_CONF}`);
+
       // Reload PJSIP module to apply changes
-      await this.reloadPjsip();
+      if (this.connected && this.authenticated) {
+        await this.reloadPjsip();
+      } else {
+        logger.warn('[AMI] Not connected - extension created but PJSIP not reloaded');
+      }
 
       logger.info(`[AMI] PJSIP extension ${extension} created successfully`);
-      return { success: true, message: `Extension ${extension} créée avec succès` };
+      return { success: true, message: `Extension ${extension} créée avec succès`, extension, secret };
 
     } catch (error) {
       logger.error(`[AMI] Error creating PJSIP extension ${extension}:`, error);
@@ -1051,30 +1068,79 @@ class FreePBXAmiService extends EventEmitter {
   }
 
   /**
-   * Delete a PJSIP extension
+   * Check if an extension already exists in pjsip_custom.conf
+   */
+  extensionExistsInConfig(extension) {
+    try {
+      if (!fs.existsSync(PJSIP_CUSTOM_CONF)) {
+        return false;
+      }
+      const content = fs.readFileSync(PJSIP_CUSTOM_CONF, 'utf8');
+      // Look for the extension section header
+      const pattern = new RegExp(`^\\[${extension}\\]$`, 'm');
+      return pattern.test(content);
+    } catch (error) {
+      logger.error(`[AMI] Error checking extension in config:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Delete a PJSIP extension from pjsip_custom.conf
    *
    * @param {string} extension - Extension number to delete
    * @returns {Promise<{success: boolean, message: string}>}
    */
   async deletePjsipExtension(extension) {
-    if (!this.connected || !this.authenticated) {
-      return { success: false, message: 'Non connecté au PBX' };
-    }
-
     try {
-      // Delete all related database entries
-      const families = [
-        `PJSIP/endpoint/${extension}`,
-        `PJSIP/auth/auth_${extension}`,
-        `PJSIP/aor/${extension}`
-      ];
-
-      for (const family of families) {
-        await this.sendDbDelTree(family);
+      // Check if extension exists in config file
+      if (!this.extensionExistsInConfig(extension)) {
+        logger.warn(`[AMI] Extension ${extension} not found in pjsip_custom.conf`);
+        return { success: false, message: `Extension ${extension} introuvable` };
       }
 
-      // Reload PJSIP module
-      await this.reloadPjsip();
+      // Read the config file
+      if (!fs.existsSync(PJSIP_CUSTOM_CONF)) {
+        return { success: false, message: 'Fichier pjsip_custom.conf introuvable' };
+      }
+
+      let content = fs.readFileSync(PJSIP_CUSTOM_CONF, 'utf8');
+
+      // Remove the extension block (from header comment to END comment)
+      // Pattern matches: ; ===... Extension XXXX ... to ; END Extension XXXX
+      const blockPattern = new RegExp(
+        `\\n?; =+\\n; Extension ${extension} - Created by Homenichat[\\s\\S]*?; END Extension ${extension}\\n?`,
+        'g'
+      );
+
+      const newContent = content.replace(blockPattern, '\n');
+
+      // Also remove any standalone sections for this extension (fallback pattern)
+      // This handles extensions created without the full block format
+      const sectionPatterns = [
+        new RegExp(`\\n\\[${extension}\\]\\ntype=endpoint[\\s\\S]*?(?=\\n\\[|$)`, 'g'),
+        new RegExp(`\\n\\[auth_${extension}\\]\\ntype=auth[\\s\\S]*?(?=\\n\\[|$)`, 'g'),
+        new RegExp(`\\n\\[${extension}\\]\\ntype=aor[\\s\\S]*?(?=\\n\\[|$)`, 'g'),
+      ];
+
+      let finalContent = newContent;
+      for (const pattern of sectionPatterns) {
+        finalContent = finalContent.replace(pattern, '\n');
+      }
+
+      // Clean up multiple consecutive newlines
+      finalContent = finalContent.replace(/\n{3,}/g, '\n\n');
+
+      // Write the updated config
+      fs.writeFileSync(PJSIP_CUSTOM_CONF, finalContent);
+      logger.info(`[AMI] Extension ${extension} removed from ${PJSIP_CUSTOM_CONF}`);
+
+      // Reload PJSIP module to apply changes
+      if (this.connected && this.authenticated) {
+        await this.reloadPjsip();
+      } else {
+        logger.warn('[AMI] Not connected - extension deleted but PJSIP not reloaded');
+      }
 
       logger.info(`[AMI] PJSIP extension ${extension} deleted successfully`);
       return { success: true, message: `Extension ${extension} supprimée avec succès` };
@@ -1086,20 +1152,52 @@ class FreePBXAmiService extends EventEmitter {
   }
 
   /**
-   * Update PJSIP extension secret/password
+   * Update PJSIP extension secret/password in pjsip_custom.conf
    *
    * @param {string} extension - Extension number
    * @param {string} newSecret - New password
    * @returns {Promise<{success: boolean, message: string}>}
    */
   async updatePjsipExtensionSecret(extension, newSecret) {
-    if (!this.connected || !this.authenticated) {
-      return { success: false, message: 'Non connecté au PBX' };
-    }
-
     try {
-      await this.sendDbPut(`PJSIP/auth/auth_${extension}`, 'password', newSecret);
-      await this.reloadPjsip();
+      // Check if extension exists in config file
+      if (!this.extensionExistsInConfig(extension)) {
+        return { success: false, message: `Extension ${extension} introuvable` };
+      }
+
+      // Read the config file
+      if (!fs.existsSync(PJSIP_CUSTOM_CONF)) {
+        return { success: false, message: 'Fichier pjsip_custom.conf introuvable' };
+      }
+
+      let content = fs.readFileSync(PJSIP_CUSTOM_CONF, 'utf8');
+
+      // Find and replace the password line in the auth section for this extension
+      // Pattern: within [auth_XXXX] section, replace password=... line
+      const authSectionPattern = new RegExp(
+        `(\\[auth_${extension}\\][\\s\\S]*?password=)[^\\n]+`,
+        'g'
+      );
+
+      if (!authSectionPattern.test(content)) {
+        return { success: false, message: `Section auth pour ${extension} introuvable` };
+      }
+
+      // Reset the pattern (test() advances lastIndex)
+      authSectionPattern.lastIndex = 0;
+
+      const newContent = content.replace(authSectionPattern, `$1${newSecret}`);
+
+      // Write the updated config
+      fs.writeFileSync(PJSIP_CUSTOM_CONF, newContent);
+      logger.info(`[AMI] Password updated for extension ${extension} in ${PJSIP_CUSTOM_CONF}`);
+
+      // Reload PJSIP module to apply changes
+      if (this.connected && this.authenticated) {
+        await this.reloadPjsip();
+      } else {
+        logger.warn('[AMI] Not connected - password updated but PJSIP not reloaded');
+      }
 
       logger.info(`[AMI] PJSIP extension ${extension} password updated`);
       return { success: true, message: `Mot de passe mis à jour pour ${extension}` };
@@ -1274,72 +1372,44 @@ class FreePBXAmiService extends EventEmitter {
   }
 
   // =====================================================
-  // GSM Modem Trunk Management (chan_quectel -> SIP Trunk)
+  // GSM Modem Trunk Configuration (chan_quectel)
   // =====================================================
+  //
+  // NOTE: With FreePBX, GSM trunks don't need to be "created" in a database.
+  // FreePBX ignores AstDB for trunks - it uses MySQL.
+  // Instead, the dialplan (extensions_homenichat.conf) handles routing:
+  //   - Outbound: Dial(Quectel/modem-id/${EXTEN})
+  //   - Inbound: context=from-gsm in quectel.conf
+  //
+  // This function now just:
+  // 1. Returns the dial string info for reference
+  // 2. Optionally creates a WebRTC extension for the user
 
   /**
-   * Create a PJSIP trunk for a GSM modem
-   * This allows routing calls through the modem via FreePBX
+   * Configure a GSM modem trunk
+   * With FreePBX, this returns routing info and optionally creates a WebRTC extension.
+   * The actual routing is handled by extensions_homenichat.conf dialplan.
    *
    * @param {object} modemData - Modem configuration
-   * @returns {Promise<{success: boolean, message: string, trunkName: string}>}
+   * @returns {Promise<{success: boolean, message: string, dialString: string}>}
    */
   async createModemTrunk(modemData) {
     const {
-      modemId,         // chan_quectel device name (e.g., 'hni-modem')
+      modemId,         // chan_quectel device name (e.g., 'modem-1')
       modemName,       // Display name for the trunk
       phoneNumber,     // Phone number associated with the modem
-      context = 'from-gsm',
     } = modemData;
 
-    if (!this.connected || !this.authenticated) {
-      return { success: false, message: 'Non connecté au PBX' };
-    }
-
     const trunkName = `GSM-${modemId}`.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    const dialString = `Quectel/${modemId}/$OUTNUM$`;
 
     try {
-      // Create custom trunk configuration via AMI
-      // This creates a trunk that uses Quectel/<modemId>/$OUTNUM$ for dialing
-
-      const commands = [
-        // Trunk definition
-        { family: `TRUNK/${trunkName}`, key: 'tech', value: 'custom' },
-        { family: `TRUNK/${trunkName}`, key: 'name', value: trunkName },
-        { family: `TRUNK/${trunkName}`, key: 'outcid', value: phoneNumber || '' },
-        { family: `TRUNK/${trunkName}`, key: 'keepcid', value: 'on' },
-        { family: `TRUNK/${trunkName}`, key: 'maxchans', value: '1' },
-        { family: `TRUNK/${trunkName}`, key: 'dialoutprefix', value: '' },
-        { family: `TRUNK/${trunkName}`, key: 'channelid', value: modemId },
-        { family: `TRUNK/${trunkName}`, key: 'disabled', value: 'off' },
-        { family: `TRUNK/${trunkName}`, key: 'description', value: `Modem GSM ${modemName || modemId}` },
-
-        // Custom dial string for chan_quectel
-        { family: `TRUNK/${trunkName}`, key: 'dial', value: `Quectel/${modemId}/$OUTNUM$` },
-
-        // Context for incoming calls on this trunk
-        { family: `TRUNK/${trunkName}`, key: 'context', value: context },
-      ];
-
-      // Execute DBput commands
-      for (const cmd of commands) {
-        try {
-          await this.sendDbPut(cmd.family, cmd.key, cmd.value);
-        } catch (e) {
-          logger.warn(`[AMI] DBput warning for ${cmd.key}: ${e.message}`);
-        }
-      }
-
-      // Reload dialplan
-      await this.sendCommand('dialplan reload');
-
-      logger.info(`[AMI] GSM trunk ${trunkName} created for modem ${modemId}`);
+      logger.info(`[AMI] Configuring GSM modem ${modemId} (${modemName || 'unnamed'})`);
 
       // Auto-create WebRTC extension if requested
       let webrtcExtension = null;
       if (modemData.createWebRtcExtension !== false) {
         try {
-          // Create a WebRTC extension for this trunk (e.g., 200 for mobile app)
           const extensionNumber = modemData.webrtcExtension || '200';
           const extensionSecret = modemData.webrtcSecret || this.generateSecret();
 
@@ -1358,23 +1428,40 @@ class FreePBXAmiService extends EventEmitter {
               secret: extensionSecret,
               created: true
             };
-            logger.info(`[AMI] WebRTC extension ${extensionNumber} auto-created for trunk ${trunkName}`);
+            logger.info(`[AMI] WebRTC extension ${extensionNumber} created for modem ${modemId}`);
+          } else if (extResult.message.includes('existe déjà')) {
+            // Extension already exists, that's OK
+            webrtcExtension = {
+              extension: extensionNumber,
+              created: false,
+              message: 'Extension existe déjà'
+            };
           }
         } catch (extError) {
-          logger.warn(`[AMI] Could not auto-create WebRTC extension: ${extError.message}`);
+          logger.warn(`[AMI] Could not create WebRTC extension: ${extError.message}`);
         }
       }
 
+      // With FreePBX, we don't need to create anything in AstDB
+      // The dialplan in extensions_homenichat.conf handles routing
+      // Example dialplan patterns are already configured:
+      //   exten => _06XXXXXXXX,1,Dial(Quectel/modem-1/${EXTEN})
+      //   exten => _07XXXXXXXX,1,Dial(Quectel/modem-1/${EXTEN})
+
+      logger.info(`[AMI] GSM modem ${modemId} configured. Dial string: ${dialString}`);
+
       return {
         success: true,
-        message: `Trunk ${trunkName} créé avec succès. Utilisez "Quectel/${modemId}/$OUTNUM$" pour les appels sortants.`,
+        message: `Modem ${modemName || modemId} configuré. Routage via extensions_homenichat.conf`,
         trunkName,
-        dialString: `Quectel/${modemId}/$OUTNUM$`,
+        dialString,
+        phoneNumber: phoneNumber || null,
         webrtcExtension,
+        note: 'Les appels sortants utilisent le dialplan extensions_homenichat.conf. Les appels entrants arrivent dans le contexte from-gsm.'
       };
 
     } catch (error) {
-      logger.error(`[AMI] Error creating modem trunk ${trunkName}:`, error);
+      logger.error(`[AMI] Error configuring modem ${modemId}:`, error);
       return { success: false, message: error.message };
     }
   }
@@ -1392,57 +1479,92 @@ class FreePBXAmiService extends EventEmitter {
   }
 
   /**
-   * Delete a modem trunk
+   * Delete a modem trunk configuration
+   * With FreePBX, there's nothing in AstDB to delete.
+   * Optionally deletes the associated WebRTC extension.
+   *
+   * @param {string} modemId - Modem identifier
+   * @param {string} webrtcExtension - Optional extension to delete
    */
-  async deleteModemTrunk(modemId) {
-    if (!this.connected || !this.authenticated) {
-      return { success: false, message: 'Non connecté au PBX' };
-    }
-
+  async deleteModemTrunk(modemId, webrtcExtension = null) {
     const trunkName = `GSM-${modemId}`.toUpperCase().replace(/[^A-Z0-9-]/g, '');
 
     try {
-      await this.sendDbDelTree(`TRUNK/${trunkName}`);
-      await this.sendCommand('dialplan reload');
+      // With FreePBX, trunk routing is handled by dialplan
+      // There's nothing in AstDB to delete
 
-      logger.info(`[AMI] GSM trunk ${trunkName} deleted`);
-      return { success: true, message: `Trunk ${trunkName} supprimé` };
+      // If a WebRTC extension was associated, delete it
+      if (webrtcExtension) {
+        const extResult = await this.deletePjsipExtension(webrtcExtension);
+        if (extResult.success) {
+          logger.info(`[AMI] WebRTC extension ${webrtcExtension} deleted for modem ${modemId}`);
+        }
+      }
+
+      logger.info(`[AMI] GSM modem ${modemId} configuration removed`);
+      return {
+        success: true,
+        message: `Configuration du modem ${modemId} supprimée`,
+        note: 'Le dialplan extensions_homenichat.conf peut encore contenir des routes pour ce modem.'
+      };
 
     } catch (error) {
-      logger.error(`[AMI] Error deleting modem trunk:`, error);
+      logger.error(`[AMI] Error deleting modem configuration:`, error);
       return { success: false, message: error.message };
     }
   }
 
   /**
    * Get modem trunk status
+   * With FreePBX, checks if the modem is available via chan_quectel
    */
   async getModemTrunkStatus(modemId) {
     const trunkName = `GSM-${modemId}`.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    const dialString = `Quectel/${modemId}/$OUTNUM$`;
 
     if (!this.connected || !this.authenticated) {
-      return { exists: false, trunkName, error: 'Non connecté au PBX' };
+      return {
+        modemId,
+        trunkName,
+        dialString,
+        connected: false,
+        error: 'Non connecté au PBX'
+      };
     }
 
+    // Try to get modem status via quectel show devices command
     return new Promise((resolve) => {
-      const actionId = `trunk_status_${Date.now()}`;
+      const actionId = `modem_status_${Date.now()}`;
       let responseData = '';
 
       const timeout = setTimeout(() => {
-        resolve({ exists: false, trunkName });
+        resolve({
+          modemId,
+          trunkName,
+          dialString,
+          connected: true,
+          modemStatus: 'unknown',
+          note: 'Utilisez "asterisk -rx quectel show devices" pour vérifier l\'état du modem'
+        });
       }, 5000);
 
       const handler = (data) => {
         responseData += data.toString();
-        if (responseData.includes(actionId)) {
+        if (responseData.includes(actionId) && responseData.includes('--END COMMAND--')) {
           clearTimeout(timeout);
           this.socket.removeListener('data', handler);
 
-          const exists = responseData.includes('Val:') && !responseData.includes('not found');
+          // Parse quectel show devices output
+          const modemFound = responseData.toLowerCase().includes(modemId.toLowerCase());
+          const isFree = responseData.includes('Free') || responseData.includes('GSM');
+
           resolve({
-            exists,
+            modemId,
             trunkName,
-            status: exists ? 'configured' : 'not_found',
+            dialString,
+            connected: true,
+            modemStatus: modemFound ? (isFree ? 'available' : 'busy') : 'not_found',
+            rawOutput: responseData.substring(0, 500) // First 500 chars for debug
           });
         }
       };
@@ -1454,10 +1576,9 @@ class FreePBXAmiService extends EventEmitter {
       }, 6000);
 
       this.sendAction({
-        Action: 'DBGet',
+        Action: 'Command',
         ActionID: actionId,
-        Family: `TRUNK/${trunkName}`,
-        Key: 'tech',
+        Command: 'quectel show devices'
       });
     });
   }
