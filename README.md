@@ -229,6 +229,78 @@ providers:
 
 ---
 
+## 🔔 Push Notifications
+
+Push notifications are sent for:
+- 📨 Incoming SMS
+- 📞 Incoming calls
+- 💬 WhatsApp/Meta messages
+
+### Architecture
+
+```
+Event (SMS/Call/Message)
+      │
+      ▼
+┌─────────────────────────────────────┐
+│     Homenichat Server               │
+│  1. WebSocket (realtime)            │
+│  2. Web Push (PWA offline)          │
+│  3. Push Relay (iOS/Android)        │
+└─────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────┐
+│     Push Relay Server               │
+│  → APNS (iOS)                       │
+│  → FCM (Android)                    │
+└─────────────────────────────────────┘
+```
+
+### Configuration
+
+**Option 1: Config file (recommended)**
+```json
+// /var/lib/homenichat/push-relay.json
+{
+  "relayUrl": "https://push.homenichat.com",
+  "apiKey": "hpr_your_api_key_here"
+}
+```
+
+**Option 2: Environment variables**
+```bash
+PUSH_RELAY_URL=https://push.homenichat.com
+PUSH_RELAY_API_KEY=hpr_your_api_key_here
+```
+
+**Option 3: Admin interface**
+Navigate to `/admin` → Settings → Push Notifications
+
+### User-Modem Mappings
+
+Control which users receive notifications for each modem:
+
+```bash
+# List mappings
+GET /api/admin/modem-mappings
+
+# Map user to modem
+POST /api/admin/modem-mappings
+{
+  "userId": 1,
+  "modemId": "ec25",
+  "notifySms": true,
+  "notifyCalls": true
+}
+
+# Auto-map all users to a modem
+POST /api/admin/modem-mappings/auto-map
+{ "modemId": "ec25" }
+```
+
+---
+
 ## 📚 API Overview
 
 ### Authentication
