@@ -47,11 +47,16 @@ class TunnelRelayService extends EventEmitter {
       turnCredentials: null,
       lastError: null,
       lastRefresh: null,
+      lastHeartbeat: null,
     };
 
     // Timers
     this.refreshTimer = null;
     this.healthCheckTimer = null;
+    this.heartbeatTimer = null;
+
+    // Intervals
+    this.heartbeatInterval = 60000; // 60 seconds
 
     // WireGuard interface
     this.wgInterface = 'wg-relay';
@@ -140,6 +145,7 @@ class TunnelRelayService extends EventEmitter {
           registration: this.state.registration,
           turnCredentials: this.state.turnCredentials,
           lastRefresh: this.state.lastRefresh,
+          lastHeartbeat: this.state.lastHeartbeat,
         }
       }, null, 2));
 
@@ -351,6 +357,9 @@ class TunnelRelayService extends EventEmitter {
 
     // Start health check
     this.startHealthCheck();
+
+    // Start heartbeat to relay server
+    this.startHeartbeat();
   }
 
   /**
@@ -359,6 +368,7 @@ class TunnelRelayService extends EventEmitter {
   async disconnect() {
     this.stopRefreshTimer();
     this.stopHealthCheck();
+    this.stopHeartbeat();
 
     if (this.isWireGuardAvailable()) {
       try {
@@ -500,6 +510,87 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
   }
 
   /**
+   * Start heartbeat timer (sends system stats to relay server)
+   */
+  startHeartbeat() {
+    this.stopHeartbeat();
+
+    // Send immediately
+    this.sendHeartbeat().catch(() => {});
+
+    this.heartbeatTimer = setInterval(async () => {
+      await this.sendHeartbeat();
+    }, this.heartbeatInterval);
+
+    console.log('[TunnelRelayService] Heartbeat started (interval: 60s)');
+  }
+
+  /**
+   * Stop heartbeat timer
+   */
+  stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  /**
+   * Send heartbeat with system stats to relay server
+   */
+  async sendHeartbeat() {
+    if (!this.state.registered || !this.isConfigured()) {
+      return;
+    }
+
+    try {
+      const memoryUsage = process.memoryUsage();
+      const lastHandshake = await this.getLastHandshake();
+
+      const stats = {
+        clientId: this.config.clientId,
+        timestamp: Date.now(),
+        uptime: Math.floor(process.uptime()),
+        memory: {
+          heapUsed: memoryUsage.heapUsed,
+          heapTotal: memoryUsage.heapTotal,
+          rss: memoryUsage.rss,
+        },
+        wireguard: {
+          connected: this.state.connected,
+          interface: this.wgInterface,
+          lastHandshake: lastHandshake,
+        },
+        version: process.env.npm_package_version || '1.0.0',
+      };
+
+      await this.apiRequest('POST', '/api/heartbeat', stats);
+      this.state.lastHeartbeat = Date.now();
+
+    } catch (error) {
+      // Silently fail - heartbeat is non-critical
+      console.debug('[TunnelRelayService] Heartbeat failed:', error.message);
+    }
+  }
+
+  /**
+   * Get last WireGuard handshake time
+   */
+  async getLastHandshake() {
+    if (!this.state.connected || !this.isWireGuardAvailable()) {
+      return null;
+    }
+
+    try {
+      const output = execSync(`wg show ${this.wgInterface}`).toString();
+      const match = output.match(/latest handshake: (.+)/);
+      return match ? match[1] : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Start health check timer
    */
   startHealthCheck() {
@@ -583,6 +674,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
       publicKey: this.state.publicKey,
       lastError: this.state.lastError,
       lastRefresh: this.state.lastRefresh,
+      lastHeartbeat: this.state.lastHeartbeat,
     };
 
     if (this.state.registration) {

@@ -24,7 +24,7 @@ import {
   AccessTime as AccessTimeIcon,
 } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
-import { dashboardApi } from '../services/api';
+import { dashboardApi, tunnelRelayApi } from '../services/api';
 import type { DashboardStats } from '../services/api';
 
 interface StatCardProps {
@@ -135,6 +135,13 @@ export default function DashboardPage() {
   const { data: stats, isLoading } = useQuery<DashboardStats>({
     queryKey: ['dashboard-stats'],
     queryFn: dashboardApi.getStats,
+    refetchInterval: 30000,
+  });
+
+  // Tunnel Relay status
+  const { data: tunnelStatus } = useQuery({
+    queryKey: ['tunnel-relay-status'],
+    queryFn: tunnelRelayApi.getStatus,
     refetchInterval: 30000,
   });
 
@@ -250,6 +257,20 @@ export default function DashboardPage() {
                   name="Modems GSM"
                   status="warning"
                   details="Non configuré"
+                />
+                <ServiceStatus
+                  name="Tunnel Relay"
+                  status={
+                    tunnelStatus?.connected ? 'online' :
+                    tunnelStatus?.configured ? 'warning' : 'offline'
+                  }
+                  details={
+                    tunnelStatus?.connected
+                      ? `VPN IP: ${tunnelStatus?.wireguard?.clientIP || 'N/A'}`
+                      : tunnelStatus?.configured
+                        ? 'Configuré mais non connecté'
+                        : 'Non configuré'
+                  }
                 />
               </List>
             </CardContent>

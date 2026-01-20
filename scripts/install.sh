@@ -694,7 +694,7 @@ install_asterisk_source() {
 
     # Install build dependencies
     info "Installing Asterisk build dependencies..."
-    apt_install build-essential wget curl git \
+    apt_install build-essential wget curl git subversion \
         libncurses5-dev libssl-dev libxml2-dev libsqlite3-dev \
         uuid-dev libjansson-dev libedit-dev libsrtp2-dev \
         libspeex-dev libspeexdsp-dev libogg-dev libvorbis-dev \
@@ -726,7 +726,18 @@ install_asterisk_source() {
 
     # Install MP3 support (optional but useful)
     info "Installing MP3 source..."
-    contrib/scripts/get_mp3_source.sh >> "$LOG_FILE" 2>&1 || true
+    local MP3_OK=false
+    if command -v svn &>/dev/null; then
+        if contrib/scripts/get_mp3_source.sh >> "$LOG_FILE" 2>&1; then
+            # Verify MP3 sources were actually downloaded
+            if [ -d "addons/mp3" ] && [ -f "addons/mp3/mpg123.h" ]; then
+                MP3_OK=true
+                info "MP3 source installed successfully"
+            fi
+        fi
+    else
+        warn "Subversion (svn) not found, skipping MP3 support"
+    fi
 
     # Configure Asterisk
     info "Configuring Asterisk (this takes a few minutes)..."
@@ -744,7 +755,15 @@ install_asterisk_source() {
     menuselect/menuselect --enable chan_pjsip menuselect.makeopts 2>/dev/null || true
     menuselect/menuselect --enable res_pjsip menuselect.makeopts 2>/dev/null || true
     menuselect/menuselect --enable codec_opus menuselect.makeopts 2>/dev/null || true
-    menuselect/menuselect --enable format_mp3 menuselect.makeopts 2>/dev/null || true
+
+    # Only enable format_mp3 if MP3 sources were successfully downloaded
+    if [ "$MP3_OK" = true ]; then
+        menuselect/menuselect --enable format_mp3 menuselect.makeopts 2>/dev/null || true
+    else
+        # Explicitly disable format_mp3 to prevent build failure
+        warn "MP3 source not available, disabling format_mp3 module"
+        menuselect/menuselect --disable format_mp3 menuselect.makeopts 2>/dev/null || true
+    fi
 
     # Compile Asterisk
     info "Compiling Asterisk (this takes 10-20 minutes on Raspberry Pi)..."

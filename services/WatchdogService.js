@@ -12,9 +12,12 @@
 const { exec, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const EventEmitter = require('events');
 
-class WatchdogService {
+class WatchdogService extends EventEmitter {
   constructor(config = {}) {
+    super();
+
     this.enabled = config.enabled !== false;
     this.checkIntervalMs = config.checkIntervalMs || 30000; // 30 secondes
     this.modems = config.modems || {};
@@ -34,6 +37,22 @@ class WatchdogService {
 
     this.interval = null;
     this.running = false;
+
+    // WireGuard tunnel monitoring
+    this.wgInterface = config.wgInterface || 'wg-relay';
+    this.tunnelRelayService = null;
+    this.wgCheckCount = 0;
+    this.wgMaxRecoveryAttempts = 3;
+
+    // Last health check result
+    this.lastHealthCheck = null;
+  }
+
+  /**
+   * Inject TunnelRelayService for WireGuard monitoring
+   */
+  setTunnelRelayService(service) {
+    this.tunnelRelayService = service;
   }
 
   /**
@@ -75,19 +94,43 @@ class WatchdogService {
    * Exécute une vérification complète
    */
   async runCheck() {
+    const healthResult = {
+      timestamp: Date.now(),
+      overall: 'ok',
+      checks: {
+        asterisk: { status: 'unknown' },
+        modems: { status: 'unknown' },
+        wireguard: { status: 'unknown' },
+      },
+    };
+
     try {
+      // Vérifier WireGuard tunnel
+      const wgOk = await this.checkWireGuard();
+      healthResult.checks.wireguard = {
+        status: wgOk ? 'ok' : 'warning',
+        connected: wgOk,
+      };
+
       // Vérifier Asterisk
       const asteriskOk = await this.checkAsterisk();
+      healthResult.checks.asterisk = {
+        status: asteriskOk ? 'ok' : 'critical',
+        running: asteriskOk,
+      };
+
       if (!asteriskOk) {
         await this.recoverAsterisk();
-        return;
+        healthResult.overall = 'critical';
       }
 
       // Vérifier chaque modem
       const modemIds = await this.listModems();
+      const modemResults = [];
 
       for (const modemId of modemIds) {
         const status = await this.checkModem(modemId);
+        modemResults.push({ id: modemId, ...status });
 
         if (!status.ok) {
           this.incrementFailure(modemId);
@@ -97,8 +140,102 @@ class WatchdogService {
         }
       }
 
+      const modemsOk = modemResults.every(m => m.ok);
+      healthResult.checks.modems = {
+        status: modemResults.length === 0 ? 'ok' : (modemsOk ? 'ok' : 'warning'),
+        total: modemResults.length,
+        healthy: modemResults.filter(m => m.ok).length,
+        modems: modemResults,
+      };
+
+      // Determine overall status
+      const statuses = Object.values(healthResult.checks).map(c => c.status);
+      if (statuses.includes('critical')) {
+        healthResult.overall = 'critical';
+      } else if (statuses.includes('warning')) {
+        healthResult.overall = 'warning';
+      }
+
+      // Store and emit result
+      this.lastHealthCheck = healthResult;
+      this.emit(`health.${healthResult.overall}`, healthResult);
+      this.emit('health.check', healthResult);
+
     } catch (error) {
       this.log('ERROR', `Check error: ${error.message}`);
+      healthResult.overall = 'error';
+      healthResult.error = error.message;
+      this.lastHealthCheck = healthResult;
+    }
+
+    return healthResult;
+  }
+
+  /**
+   * Vérifie l'état du tunnel WireGuard
+   */
+  async checkWireGuard() {
+    // Skip if TunnelRelayService not injected
+    if (!this.tunnelRelayService) {
+      return true; // Assume OK if not configured
+    }
+
+    try {
+      const status = await this.tunnelRelayService.getStatus();
+
+      // If not enabled, skip check
+      if (!status.enabled) {
+        return true;
+      }
+
+      // If configured but not connected, attempt recovery
+      if (status.configured && !status.connected) {
+        this.wgCheckCount++;
+        this.log('WARNING', `WireGuard tunnel not connected (failures: ${this.wgCheckCount})`);
+
+        if (this.wgCheckCount >= 3 && this.wgCheckCount < this.wgMaxRecoveryAttempts + 3) {
+          await this.recoverWireGuard();
+        }
+
+        return false;
+      }
+
+      // Check actual interface if connected
+      if (status.connected) {
+        try {
+          const output = execSync(`wg show ${this.wgInterface} 2>/dev/null || true`).toString();
+          if (!output.includes('interface')) {
+            this.log('WARNING', 'WireGuard interface not found');
+            return false;
+          }
+        } catch {
+          return false;
+        }
+      }
+
+      // Reset counter on success
+      this.wgCheckCount = 0;
+      return true;
+
+    } catch (error) {
+      this.log('ERROR', `WireGuard check failed: ${error.message}`);
+      return true; // Don't fail on check error
+    }
+  }
+
+  /**
+   * Récupération du tunnel WireGuard
+   */
+  async recoverWireGuard() {
+    this.log('INFO', 'Attempting WireGuard tunnel recovery');
+
+    try {
+      if (this.tunnelRelayService) {
+        await this.tunnelRelayService.reconnect();
+        this.log('OK', 'WireGuard tunnel recovery initiated');
+      }
+    } catch (error) {
+      this.log('ERROR', `WireGuard recovery failed: ${error.message}`);
     }
   }
 
@@ -429,7 +566,19 @@ class WatchdogService {
       modems: this.checkCount,
       recoveryAttempts: this.recoveryAttempts,
       thresholds: this.thresholds,
+      wireguard: {
+        checkCount: this.wgCheckCount,
+        maxRecoveryAttempts: this.wgMaxRecoveryAttempts,
+      },
+      lastHealthCheck: this.lastHealthCheck,
     };
+  }
+
+  /**
+   * Force une vérification immédiate
+   */
+  async forceCheck() {
+    return this.runCheck();
   }
 }
 
