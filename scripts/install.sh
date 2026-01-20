@@ -780,6 +780,12 @@ install_asterisk_source() {
         return 1
     }
 
+    # Install development headers (needed for chan_quectel compilation)
+    info "Installing Asterisk development headers..."
+    make install-headers >> "$LOG_FILE" 2>&1 || {
+        warning "Failed to install Asterisk headers (chan_quectel may not compile)"
+    }
+
     # Install sample configs
     info "Installing Asterisk sample configuration..."
     make samples >> "$LOG_FILE" 2>&1 || true
@@ -907,6 +913,26 @@ install_chan_quectel() {
        [ -d /usr/include/asterisk ]; then
         HEADERS_INSTALLED=true
         info "Asterisk headers found in /usr/include"
+    fi
+
+    # On ARM64 with source-compiled Asterisk, headers might be in /usr/local/include
+    if [ "$HEADERS_INSTALLED" != true ]; then
+        if [ -d /usr/local/include/asterisk ]; then
+            HEADERS_INSTALLED=true
+            info "Asterisk headers found in /usr/local/include"
+        fi
+    fi
+
+    # Last resort: check for source directory headers
+    if [ "$HEADERS_INSTALLED" != true ]; then
+        if [ -d /usr/src/asterisk-*/include/asterisk ]; then
+            info "Asterisk headers found in source directory, creating symlink..."
+            local AST_SRC=$(ls -d /usr/src/asterisk-* 2>/dev/null | head -1)
+            if [ -d "$AST_SRC/include/asterisk" ]; then
+                ln -sf "$AST_SRC/include/asterisk" /usr/include/asterisk 2>/dev/null || true
+                HEADERS_INSTALLED=true
+            fi
+        fi
     fi
 
     if [ "$HEADERS_INSTALLED" != true ]; then
@@ -1571,22 +1597,43 @@ install_freepbx() {
                 return 1
             }
 
-            echo ""
-            echo -e "${BOLD}Asterisk is now installed. Options for FreePBX:${NC}"
-            echo ""
-            echo "  1. ${BOLD}Run FreePBX ARM installer${NC} (recommended for full GUI)"
-            echo "     ${CYAN}sudo /opt/homenichat/scripts/install-freepbx-arm.sh${NC}"
-            echo ""
-            echo "  2. ${BOLD}Use external FreePBX${NC}"
-            echo "     Connect to an existing FreePBX server via AMI."
-            echo "     Configure in /etc/homenichat/providers.yaml"
-            echo ""
-            echo "  3. ${BOLD}Use Asterisk directly (current setup)${NC}"
-            echo "     Asterisk is installed and running. Configure SIP"
-            echo "     trunks and extensions via /etc/asterisk/ config files."
-            echo ""
-
             success "Asterisk installed successfully on ARM64"
+
+            # Install chan_quectel for GSM modem support
+            if [ "$INSTALL_MODEMS" = true ]; then
+                info "Installing chan_quectel for ARM64..."
+                install_chan_quectel || warning "chan_quectel installation failed"
+            fi
+
+            # In AUTO/FULL mode, automatically run FreePBX ARM installer
+            if [ "$AUTO_MODE" = true ] || [ "$FULL_MODE" = true ]; then
+                info "AUTO MODE: Running FreePBX ARM installer..."
+                if [ -f "/opt/homenichat/scripts/install-freepbx-arm.sh" ]; then
+                    # Run with auto-confirm (pipe yes)
+                    yes | /opt/homenichat/scripts/install-freepbx-arm.sh >> "$LOG_FILE" 2>&1 || {
+                        warning "FreePBX ARM installation had issues (check $LOG_FILE)"
+                        warning "You can retry manually: sudo /opt/homenichat/scripts/install-freepbx-arm.sh"
+                    }
+                else
+                    warning "FreePBX ARM installer script not found at /opt/homenichat/scripts/install-freepbx-arm.sh"
+                fi
+            else
+                # Interactive mode: show options
+                echo ""
+                echo -e "${BOLD}Asterisk is now installed. Options for FreePBX:${NC}"
+                echo ""
+                echo "  1. ${BOLD}Run FreePBX ARM installer${NC} (recommended for full GUI)"
+                echo "     ${CYAN}sudo /opt/homenichat/scripts/install-freepbx-arm.sh${NC}"
+                echo ""
+                echo "  2. ${BOLD}Use external FreePBX${NC}"
+                echo "     Connect to an existing FreePBX server via AMI."
+                echo "     Configure in /etc/homenichat/providers.yaml"
+                echo ""
+                echo "  3. ${BOLD}Use Asterisk directly (current setup)${NC}"
+                echo "     Asterisk is installed and running. Configure SIP"
+                echo "     trunks and extensions via /etc/asterisk/ config files."
+                echo ""
+            fi
         else
             echo "Options:"
             echo "  1. Use an external FreePBX server"
@@ -2048,9 +2095,19 @@ show_completion() {
     echo ""
 
     if [ "$INSTALL_FREEPBX" = true ]; then
-        echo -e "${BOLD}FreePBX:${NC}"
-        echo "  FreePBX Admin:  http://${IP_ADDR}:8080"
-        echo ""
+        # Verify FreePBX is actually installed
+        if command -v fwconsole &>/dev/null; then
+            echo -e "${BOLD}FreePBX:${NC}"
+            echo "  FreePBX Admin:  http://${IP_ADDR}:8080"
+            echo ""
+        else
+            echo -e "${YELLOW}FreePBX:${NC}"
+            echo "  FreePBX was selected but not fully installed."
+            if [ "$(uname -m)" = "aarch64" ]; then
+                echo "  Run: sudo /opt/homenichat/scripts/install-freepbx-arm.sh"
+            fi
+            echo ""
+        fi
     fi
 
     echo "=========================================================="
