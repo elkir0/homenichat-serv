@@ -2875,7 +2875,7 @@ router.get('/tunnel-relay/status', async (req, res) => {
  */
 router.post('/tunnel-relay/configure', async (req, res) => {
   try {
-    const { enabled, relayUrl, hostname, autoConnect } = req.body;
+    const { enabled, hostname, autoConnect, activationKey } = req.body;
 
     // Log action
     if (securityService && req.user) {
@@ -2883,15 +2883,15 @@ router.post('/tunnel-relay/configure', async (req, res) => {
         category: 'system',
         username: req.user.username,
         enabled,
-        relayUrl,
+        hasActivationKey: !!activationKey,
       }, req);
     }
 
     const status = await tunnelRelayService.configure({
       enabled,
-      relayUrl,
       hostname,
       autoConnect,
+      activationKey,
     });
 
     res.json({

@@ -36,6 +36,7 @@ class TunnelRelayService extends EventEmitter {
       relayUrl: RELAY_URL,
       clientId: '',
       hostname: '',
+      activationKey: '', // For future paid features
       autoConnect: true,
       refreshInterval: 12 * 60 * 60 * 1000, // 12 hours
     };
@@ -105,6 +106,10 @@ class TunnelRelayService extends EventEmitter {
         if (data.state) {
           Object.assign(this.state, data.state);
         }
+        // Restore activation key if saved
+        if (data.config?.activationKey) {
+          this.config.activationKey = data.config.activationKey;
+        }
       }
 
       // Generate client ID if not set
@@ -136,7 +141,9 @@ class TunnelRelayService extends EventEmitter {
       }
 
       fs.writeFileSync(this.configPath, JSON.stringify({
-        config: this.config,
+        config: {
+          activationKey: this.config.activationKey, // Only save activation key
+        },
         state: {
           configured: this.state.configured,
           registered: this.state.registered,
@@ -670,6 +677,8 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
       relayUrl: this.config.relayUrl,
       clientId: this.config.clientId,
       hostname: this.config.hostname,
+      activationKey: this.config.activationKey ? '••••••••' : null, // Masked
+      hasActivationKey: !!this.config.activationKey,
       publicKey: this.state.publicKey,
       lastError: this.state.lastError,
       lastRefresh: this.state.lastRefresh,
@@ -719,15 +728,16 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
     const wasEnabled = this.config.enabled;
     const wasConnected = this.state.connected;
 
-    // Update config
-    if (newConfig.relayUrl !== undefined) {
-      this.config.relayUrl = newConfig.relayUrl;
+    // Update config (only hostname and activationKey are user-configurable)
+    if (newConfig.hostname !== undefined) {
+      this.config.hostname = newConfig.hostname;
+    }
+    if (newConfig.activationKey !== undefined) {
+      this.config.activationKey = newConfig.activationKey;
+      console.log('[TunnelRelayService] Activation key updated');
     }
     if (newConfig.enabled !== undefined) {
       this.config.enabled = newConfig.enabled;
-    }
-    if (newConfig.hostname !== undefined) {
-      this.config.hostname = newConfig.hostname;
     }
     if (newConfig.autoConnect !== undefined) {
       this.config.autoConnect = newConfig.autoConnect;

@@ -568,7 +568,7 @@ export const tunnelRelayApi = {
     return response.data;
   },
 
-  configure: async (config: { enabled?: boolean; relayUrl?: string; hostname?: string; autoConnect?: boolean }) => {
+  configure: async (config: { enabled?: boolean; hostname?: string; autoConnect?: boolean; activationKey?: string }) => {
     const response = await api.post('/api/admin/tunnel-relay/configure', config);
     return response.data;
   },

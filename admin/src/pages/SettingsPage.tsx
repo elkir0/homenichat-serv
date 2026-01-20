@@ -85,6 +85,8 @@ interface TunnelRelayStatus {
   relayUrl: string;
   clientId: string;
   hostname: string;
+  hasActivationKey: boolean;
+  activationKey: string | null;
   publicKey: string | null;
   subdomain?: string;
   publicUrl?: string;
@@ -199,30 +201,21 @@ export default function SettingsPage() {
   });
 
   // Tunnel Relay state
-  const [relayServerUrl, setRelayServerUrl] = useState('');
-  const [relayHostname, setRelayHostname] = useState('');
+  const [activationKey, setActivationKey] = useState('');
+  const [showActivationKey, setShowActivationKey] = useState(false);
   const [tunnelRelayError, setTunnelRelayError] = useState<string | null>(null);
   const [tunnelRelayResult, setTunnelRelayResult] = useState<string | null>(null);
   const [copyRelayUrlSuccess, setCopyRelayUrlSuccess] = useState(false);
 
-  // Load existing config when status is fetched
-  useEffect(() => {
-    if (tunnelRelayStatus?.relayUrl) {
-      setRelayServerUrl(tunnelRelayStatus.relayUrl);
-    }
-    if (tunnelRelayStatus?.hostname) {
-      setRelayHostname(tunnelRelayStatus.hostname);
-    }
-  }, [tunnelRelayStatus]);
-
   // Tunnel Relay configure mutation
   const tunnelRelayConfigureMutation = useMutation({
-    mutationFn: (config: { enabled?: boolean; relayUrl?: string; hostname?: string }) =>
+    mutationFn: (config: { enabled?: boolean; hostname?: string; activationKey?: string }) =>
       tunnelRelayApi.configure(config),
     onSuccess: () => {
       refetchTunnelRelay();
       setTunnelRelayResult('Configuration sauvegardee');
       setTunnelRelayError(null);
+      setActivationKey(''); // Clear activation key input after save
     },
     onError: (error: Error & { response?: { data?: { error?: string } } }) => {
       setTunnelRelayError(error.response?.data?.error || error.message);
@@ -253,7 +246,7 @@ export default function SettingsPage() {
 
   // Tunnel Relay test mutation
   const tunnelRelayTestMutation = useMutation({
-    mutationFn: () => tunnelRelayApi.test(relayServerUrl),
+    mutationFn: () => tunnelRelayApi.test(), // Uses hardcoded relay URL
     onSuccess: (data) => {
       if (data.success) {
         setTunnelRelayResult('Connexion au serveur relay reussie');
@@ -271,15 +264,13 @@ export default function SettingsPage() {
     if (tunnelRelayStatus?.enabled) {
       tunnelRelayConfigureMutation.mutate({ enabled: false });
     } else {
-      if (!relayServerUrl) {
-        setTunnelRelayError('URL du serveur relay requise');
-        return;
-      }
-      tunnelRelayConfigureMutation.mutate({
-        enabled: true,
-        relayUrl: relayServerUrl,
-        hostname: relayHostname || undefined,
-      });
+      tunnelRelayConfigureMutation.mutate({ enabled: true });
+    }
+  };
+
+  const handleSaveActivationKey = () => {
+    if (activationKey) {
+      tunnelRelayConfigureMutation.mutate({ activationKey });
     }
   };
 
@@ -693,58 +684,55 @@ export default function SettingsPage() {
                 </Alert>
               )}
 
-              {/* Configuration Form */}
+              {/* Activation Key (for future premium features) */}
               <Box sx={{ mb: 3 }}>
-                <Grid container spacing={2}>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  Cle d'activation (optionnel)
+                </Typography>
+                <Grid container spacing={2} alignItems="flex-end">
                   <Grid item xs={12} md={8}>
                     <TextField
                       fullWidth
-                      label="URL du serveur relay"
-                      placeholder="https://relay.homenichat.com"
-                      value={relayServerUrl}
-                      onChange={(e) => setRelayServerUrl(e.target.value)}
-                      disabled={tunnelRelayStatus?.enabled}
+                      label="Cle d'activation"
+                      placeholder={tunnelRelayStatus?.hasActivationKey ? '••••••••' : 'Entrez votre cle d\'activation'}
+                      value={activationKey}
+                      onChange={(e) => setActivationKey(e.target.value)}
+                      type={showActivationKey ? 'text' : 'password'}
                       size="small"
-                      helperText="URL de l'API du serveur relay Homenichat"
+                      helperText={tunnelRelayStatus?.hasActivationKey ? 'Une cle est deja configuree' : 'Pour activer les fonctionnalites premium'}
+                      InputProps={{
+                        endAdornment: (
+                          <IconButton
+                            size="small"
+                            onClick={() => setShowActivationKey(!showActivationKey)}
+                          >
+                            {showActivationKey ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                          </IconButton>
+                        ),
+                      }}
                     />
                   </Grid>
                   <Grid item xs={12} md={4}>
-                    <TextField
-                      fullWidth
-                      label="Hostname (optionnel)"
-                      placeholder="mon-serveur"
-                      value={relayHostname}
-                      onChange={(e) => setRelayHostname(e.target.value)}
-                      disabled={tunnelRelayStatus?.enabled}
-                      size="small"
-                      helperText="Utilise pour generer le subdomain"
-                    />
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Button
+                        variant="contained"
+                        size="small"
+                        onClick={handleSaveActivationKey}
+                        disabled={isTunnelRelayMutating || !activationKey}
+                      >
+                        Enregistrer
+                      </Button>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={() => tunnelRelayTestMutation.mutate()}
+                        disabled={isTunnelRelayMutating}
+                      >
+                        Tester
+                      </Button>
+                    </Box>
                   </Grid>
                 </Grid>
-
-                <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    onClick={() => tunnelRelayTestMutation.mutate()}
-                    disabled={isTunnelRelayMutating || !relayServerUrl}
-                  >
-                    Tester la connexion
-                  </Button>
-                  {!tunnelRelayStatus?.enabled && (
-                    <Button
-                      variant="contained"
-                      size="small"
-                      onClick={() => tunnelRelayConfigureMutation.mutate({
-                        relayUrl: relayServerUrl,
-                        hostname: relayHostname || undefined,
-                      })}
-                      disabled={isTunnelRelayMutating || !relayServerUrl}
-                    >
-                      Sauvegarder
-                    </Button>
-                  )}
-                </Box>
               </Box>
 
               {/* Connected Status */}
