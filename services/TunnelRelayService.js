@@ -293,6 +293,7 @@ class TunnelRelayService extends EventEmitter {
     console.log('[TunnelRelayService] Registering with relay...');
 
     const response = await this.apiRequest('POST', '/api/register', {
+      licenseKey: this.config.activationKey || this.config.clientId, // Use activationKey or clientId as fallback
       clientId: this.config.clientId,
       publicKey: this.state.publicKey,
       hostname: this.config.hostname
