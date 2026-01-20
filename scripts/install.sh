@@ -646,33 +646,76 @@ UPNP_CONF
 }
 
 install_wireguard() {
-    info "Installing WireGuard tools..."
+    info "Installing WireGuard for Tunnel Relay..."
 
-    # WireGuard is built into Linux kernel 5.6+
-    # We just need the tools
-    apt_install wireguard-tools || {
-        warning "WireGuard tools not available in repositories"
-        warning "Tunnel Relay will work in TURN-only mode"
-        return
-    }
+    # Check kernel version - WireGuard is built into Linux kernel 5.6+
+    KERNEL_VERSION=$(uname -r | cut -d. -f1-2)
+    KERNEL_MAJOR=$(echo "$KERNEL_VERSION" | cut -d. -f1)
+    KERNEL_MINOR=$(echo "$KERNEL_VERSION" | cut -d. -f2)
+
+    info "Kernel version: $(uname -r)"
+
+    # Install wireguard-tools (required) and wireguard-dkms if kernel < 5.6
+    if [ "$KERNEL_MAJOR" -lt 5 ] || ([ "$KERNEL_MAJOR" -eq 5 ] && [ "$KERNEL_MINOR" -lt 6 ]); then
+        info "Kernel < 5.6, installing wireguard-dkms for kernel module..."
+        apt_install wireguard wireguard-tools wireguard-dkms || {
+            warning "WireGuard packages not available"
+            warning "Tunnel Relay will work in TURN-only mode (no VPN)"
+            return
+        }
+    else
+        # Kernel 5.6+ has WireGuard built-in, just need tools
+        apt_install wireguard-tools || {
+            warning "WireGuard tools not available in repositories"
+            warning "Tunnel Relay will work in TURN-only mode (no VPN)"
+            return
+        }
+    fi
 
     # Verify wg command is available
-    if command -v wg &>/dev/null; then
-        success "WireGuard tools installed"
-        info "WireGuard version: $(wg --version)"
-    else
+    if ! command -v wg &>/dev/null; then
         warning "wg command not found after installation"
+        warning "Tunnel Relay will work in TURN-only mode (no VPN)"
+        return
     fi
 
-    # Enable IP forwarding (needed for VPN)
-    if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf 2>/dev/null; then
+    success "WireGuard tools installed: $(wg --version 2>/dev/null || echo 'version unknown')"
+
+    # Load WireGuard kernel module
+    if ! lsmod | grep -q "^wireguard"; then
+        info "Loading WireGuard kernel module..."
+        modprobe wireguard 2>/dev/null || {
+            warning "Could not load wireguard module - may need reboot"
+        }
+    fi
+
+    # Verify module is loaded or can be loaded
+    if lsmod | grep -q "^wireguard" || modinfo wireguard &>/dev/null; then
+        success "WireGuard kernel module available"
+    else
+        warning "WireGuard kernel module not available"
+        warning "Tunnel Relay will work in TURN-only mode (no VPN)"
+    fi
+
+    # Enable IP forwarding (needed for VPN routing)
+    if ! grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf 2>/dev/null; then
         echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-        sysctl -p 2>/dev/null || true
-        info "IP forwarding enabled"
+        info "IP forwarding added to sysctl.conf"
     fi
 
-    # Note: WireGuard configuration will be created by TunnelRelayService
-    # when the user enables and configures it from the admin UI
+    # Apply sysctl immediately
+    sysctl -w net.ipv4.ip_forward=1 >> "$LOG_FILE" 2>&1 || true
+    info "IP forwarding enabled"
+
+    # Ensure wireguard module loads on boot
+    if [ ! -f /etc/modules-load.d/wireguard.conf ]; then
+        echo "wireguard" > /etc/modules-load.d/wireguard.conf
+        info "WireGuard module will load on boot"
+    fi
+
+    # Note: WireGuard interface configuration will be created by TunnelRelayService
+    # when the user enables Tunnel Relay from the admin UI
+    success "WireGuard installation complete"
 }
 
 # ============================================================================
@@ -1973,27 +2016,6 @@ SUPERVISOR_CONF
     success "Supervisor configured"
 }
 
-configure_firewall() {
-    info "Configuring firewall..."
-
-    ufw --force reset >> "$LOG_FILE" 2>&1
-    ufw default deny incoming >> "$LOG_FILE" 2>&1
-    ufw default allow outgoing >> "$LOG_FILE" 2>&1
-    ufw allow ssh >> "$LOG_FILE" 2>&1
-    ufw allow 80/tcp >> "$LOG_FILE" 2>&1
-    ufw allow 443/tcp >> "$LOG_FILE" 2>&1
-
-    if [ "$INSTALL_FREEPBX" = true ]; then
-        ufw allow 5060/udp >> "$LOG_FILE" 2>&1
-        ufw allow 5061/tcp >> "$LOG_FILE" 2>&1
-        ufw allow 10000:20000/udp >> "$LOG_FILE" 2>&1
-    fi
-
-    ufw --force enable >> "$LOG_FILE" 2>&1
-
-    success "Firewall configured"
-}
-
 configure_env() {
     info "Creating environment configuration..."
 
@@ -2114,6 +2136,9 @@ configure_firewall() {
         ufw allow 80/tcp comment 'HTTP' >> "$LOG_FILE" 2>&1 || true
         ufw allow 443/tcp comment 'HTTPS' >> "$LOG_FILE" 2>&1 || true
         ufw allow 3001/tcp comment 'Homenichat API' >> "$LOG_FILE" 2>&1 || true
+
+        # WireGuard for Tunnel Relay
+        ufw allow 51820/udp comment 'WireGuard VPN' >> "$LOG_FILE" 2>&1 || true
 
         if [ "$INSTALL_FREEPBX" = true ]; then
             ufw allow 5060/udp comment 'SIP' >> "$LOG_FILE" 2>&1 || true
