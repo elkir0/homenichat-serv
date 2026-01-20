@@ -287,16 +287,6 @@ export default function SettingsPage() {
     tunnelRelayDisconnectMutation.isPending ||
     tunnelRelayTestMutation.isPending;
 
-  const formatUptime = (ms: number | null) => {
-    if (!ms) return '-';
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    if (hours > 0) return `${hours}h ${minutes % 60}m`;
-    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-    return `${seconds}s`;
-  };
-
   const [localConfig, setLocalConfig] = useState<ServerConfig | null>(null);
 
   // Initialize local config when data loads
