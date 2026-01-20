@@ -31,6 +31,10 @@ providers:
         session_name: "lekipchat"
         sync_history: true
         # browser: ["Chrome", "Windows", "10"]  # Decommenter si necessaire
+        # Worker process isolation (recommande pour la stabilite)
+        # - true: Baileys tourne dans un processus separe (crash isolation, auto-restart)
+        # - false: Baileys tourne dans le processus principal (mode legacy)
+        use_worker: true
 
     # Meta Cloud API - WhatsApp Business officiel (payant)
     - id: meta_cloud

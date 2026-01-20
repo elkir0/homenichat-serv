@@ -994,5 +994,61 @@ async function startServer() {
 // Démarrer l'application
 startServer();
 
+// =====================================================================
+// Graceful Shutdown Handler
+// Ensures Baileys worker and other resources are properly cleaned up
+// =====================================================================
+
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) {
+    logger.warn(`[Shutdown] Already shutting down, ignoring ${signal}`);
+    return;
+  }
+  isShuttingDown = true;
+
+  logger.info(`[Shutdown] Received ${signal}, initiating graceful shutdown...`);
+
+  // Stop accepting new connections
+  server.close(() => {
+    logger.info('[Shutdown] HTTP server closed');
+  });
+
+  // Shutdown Baileys worker if running
+  try {
+    const baileysProvider = providerManager.providers?.get('baileys');
+    if (baileysProvider && typeof baileysProvider.shutdown === 'function') {
+      logger.info('[Shutdown] Shutting down Baileys worker...');
+      await baileysProvider.shutdown();
+      logger.info('[Shutdown] Baileys worker shut down successfully');
+    }
+  } catch (error) {
+    logger.error('[Shutdown] Error shutting down Baileys:', error.message);
+  }
+
+  // Close WebSocket connections
+  try {
+    const wss = require('./services/WebSocketManager').getWSS?.();
+    if (wss) {
+      wss.clients.forEach((client) => {
+        client.close(1001, 'Server shutting down');
+      });
+      logger.info('[Shutdown] WebSocket connections closed');
+    }
+  } catch (error) {
+    logger.warn('[Shutdown] Error closing WebSocket connections:', error.message);
+  }
+
+  // Give time for cleanup
+  setTimeout(() => {
+    logger.info('[Shutdown] Exiting process');
+    process.exit(0);
+  }, 3000);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
 // Export pour les tests
 module.exports = { app, broadcastToChat };

@@ -197,7 +197,7 @@ class ProviderManager {
    */
   async loadProviders() {
     const providerFiles = {
-      baileys: '../providers/baileys/BaileysProvider.js',
+      baileys: '../providers/baileys/BaileysProxy.js',  // Uses worker process for isolation
       meta: '../providers/meta/MetaCloudProvider.js',
       'sms-bridge': '../providers/sms/SmsBridgeProvider.js'
     };
@@ -228,7 +228,7 @@ class ProviderManager {
    */
   async loadSingleProvider(providerName) {
     const providerFiles = {
-      baileys: '../providers/baileys/BaileysProvider.js',
+      baileys: '../providers/baileys/BaileysProxy.js',  // Uses worker process for isolation
       meta: '../providers/meta/MetaCloudProvider.js',
       'sms-bridge': '../providers/sms/SmsBridgeProvider.js'
     };
