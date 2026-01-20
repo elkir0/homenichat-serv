@@ -1037,7 +1037,7 @@ export default function SettingsPage() {
                     <TextField
                       fullWidth
                       label="URL du serveur relay"
-                      placeholder="https://relay.homenichat.com/api"
+                      placeholder="https://relay.homenichat.com"
                       value={relayServerUrl}
                       onChange={(e) => setRelayServerUrl(e.target.value)}
                       disabled={tunnelRelayStatus?.enabled}

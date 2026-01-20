@@ -219,7 +219,7 @@ tunnel_relay:
   enabled: false
 
   # URL du serveur relay Homenichat
-  relay_url: "${TUNNEL_RELAY_URL:https://relay.homenichat.com/api}"
+  relay_url: "${TUNNEL_RELAY_URL:https://relay.homenichat.com}"
 
   # Hostname affiché (utilisé pour le subdomain)
   hostname: "${TUNNEL_RELAY_HOSTNAME}"

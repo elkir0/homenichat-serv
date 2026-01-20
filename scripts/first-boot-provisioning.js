@@ -29,7 +29,7 @@ const os = require('os');
 
 // Configuration
 const CONFIG = {
-  provisioningUrl: process.env.PROVISIONING_URL || 'https://relay.homenichat.com/api',
+  provisioningUrl: process.env.PROVISIONING_URL || 'https://relay.homenichat.com',
   licenseKey: process.env.LICENSE_KEY || process.env.HOMENICHAT_LICENSE_KEY,
   hostname: process.env.HOSTNAME || os.hostname(),
   dataDir: process.env.DATA_DIR || '/var/lib/homenichat',
@@ -161,7 +161,7 @@ function apiRequest(method, endpoint, body = null) {
 async function register(publicKey) {
   log.info(`Registering with ${CONFIG.provisioningUrl}...`);
 
-  const response = await apiRequest('POST', '/register', {
+  const response = await apiRequest('POST', '/api/register', {
     licenseKey: CONFIG.licenseKey,
     publicKey,
     hostname: CONFIG.hostname,
@@ -280,7 +280,7 @@ if [ -z "\$CLIENT_ID" ]; then
     exit 1
 fi
 
-RESPONSE=$(curl -s -X POST "\$PROVISIONING_URL/turn-credentials" \\
+RESPONSE=$(curl -s -X POST "\$PROVISIONING_URL/api/turn-credentials" \\
     -H "Content-Type: application/json" \\
     -d "{\\"clientId\\": \\"\$CLIENT_ID\\"}")
 
