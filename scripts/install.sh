@@ -689,7 +689,7 @@ install_asterisk_source() {
     info "Installing Asterisk from source (this takes 15-25 minutes on Raspberry Pi)..."
 
     # Asterisk version - use 22 LTS for stability
-    local AST_VERSION="22.2.0"
+    local AST_VERSION="22.7.0"
     local AST_URL="https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${AST_VERSION}.tar.gz"
 
     # Install build dependencies
