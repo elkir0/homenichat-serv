@@ -2,7 +2,8 @@
  * TunnelRelayService - WireGuard + TURN Relay Integration
  *
  * Connects homenichat-serv to the Homenichat Relay infrastructure
- * for zero-config VoIP and remote access
+ * for zero-config VoIP and remote access.
+ * Configuration is automatic - no user setup required.
  *
  * Features:
  * - Auto-registration with relay server
@@ -19,6 +20,9 @@ const { execSync, spawn } = require('child_process');
 const crypto = require('crypto');
 const EventEmitter = require('events');
 
+// Hardcoded Homenichat Relay configuration
+const RELAY_URL = 'https://relay.homenichat.com';
+
 class TunnelRelayService extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -26,10 +30,10 @@ class TunnelRelayService extends EventEmitter {
     this.dataDir = options.dataDir || process.env.DATA_DIR || '/var/lib/homenichat';
     this.configPath = options.configPath || path.join(this.dataDir, 'tunnel-relay.json');
 
-    // Configuration
+    // Configuration (auto-enabled with hardcoded URL)
     this.config = {
-      enabled: false,
-      relayUrl: '',
+      enabled: true,
+      relayUrl: RELAY_URL,
       clientId: '',
       hostname: '',
       autoConnect: true,
@@ -90,23 +94,17 @@ class TunnelRelayService extends EventEmitter {
   }
 
   /**
-   * Load configuration from file
+   * Load saved state from file (registration, credentials)
    */
   async loadConfig() {
     try {
-      // Load from file
+      // Load saved state from file (but keep hardcoded config)
       if (fs.existsSync(this.configPath)) {
         const data = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
-        Object.assign(this.config, data.config || {});
-        Object.assign(this.state, data.state || {});
-      }
-
-      // Override from environment
-      if (process.env.TUNNEL_RELAY_URL) {
-        this.config.relayUrl = process.env.TUNNEL_RELAY_URL;
-      }
-      if (process.env.TUNNEL_RELAY_ENABLED) {
-        this.config.enabled = process.env.TUNNEL_RELAY_ENABLED === 'true';
+        // Only restore state, not config (config is hardcoded)
+        if (data.state) {
+          Object.assign(this.state, data.state);
+        }
       }
 
       // Generate client ID if not set
@@ -119,10 +117,11 @@ class TunnelRelayService extends EventEmitter {
         this.config.hostname = require('os').hostname();
       }
 
-      this.state.configured = !!(this.config.enabled && this.config.relayUrl);
+      // Always configured with hardcoded URL
+      this.state.configured = true;
 
     } catch (error) {
-      console.error('[TunnelRelayService] Failed to load config:', error.message);
+      console.error('[TunnelRelayService] Failed to load state:', error.message);
     }
   }
 

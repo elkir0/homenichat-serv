@@ -27,23 +27,14 @@ import {
   Security as SecurityIcon,
   Speed as SpeedIcon,
   Notifications as NotificationsIcon,
-  Public as PublicIcon,
   ContentCopy as CopyIcon,
   OpenInNew as OpenInNewIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Router as RouterIcon,
   Warning as WarningIcon,
-} from '@mui/icons-material';
-import { configApi, tunnelApi, tunnelRelayApi, upnpApi, firebaseApi, pushRelayApi } from '../services/api';
-import {
   VpnLock as VpnIcon,
-} from '@mui/icons-material';
-import {
-  CloudUpload as CloudUploadIcon,
   Delete as DeleteIcon,
-  Android as AndroidIcon,
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
   Send as SendIcon,
@@ -52,36 +43,7 @@ import {
   Visibility as VisibilityIcon,
   VisibilityOff as VisibilityOffIcon,
 } from '@mui/icons-material';
-
-interface TunnelStatus {
-  available: boolean;
-  enabled: boolean;
-  status: 'disconnected' | 'connecting' | 'connected' | 'error';
-  url: string | null;
-  connectedAt: number | null;
-  uptime: number | null;
-  lastError: string | null;
-  totalConnections: number;
-}
-
-interface UpnpStatus {
-  installed: boolean;
-  enabled: boolean;
-  available: boolean;
-  externalIp?: string;
-  router?: string;
-  localIp?: string;
-  mappings?: {
-    sip: boolean;
-    sipPort: number;
-    rtpCount: number;
-    rtpTotal: number;
-    rtpStart: number;
-    rtpEnd: number;
-  };
-  error?: string | null;
-  hint?: string;
-}
+import { configApi, tunnelRelayApi, pushRelayApi } from '../services/api';
 
 interface ServerConfig {
   server: {
@@ -102,15 +64,6 @@ interface ServerConfig {
     email: string;
     alertOnError: boolean;
   };
-}
-
-interface FirebaseStatus {
-  configured: boolean;
-  configPath: string | null;
-  initialized: boolean;
-  projectId: string | null;
-  registeredDevices: number;
-  registeredUsers: number;
 }
 
 interface PushRelayStatus {
@@ -157,81 +110,11 @@ export default function SettingsPage() {
   const theme = useTheme();
   const queryClient = useQueryClient();
   const [hasChanges, setHasChanges] = useState(false);
-  const [copySuccess, setCopySuccess] = useState(false);
 
   const { data: config, isLoading } = useQuery<ServerConfig>({
     queryKey: ['config'],
     queryFn: configApi.get,
   });
-
-  // Firebase status query
-  const { data: firebaseStatus, refetch: refetchFirebase } = useQuery<FirebaseStatus>({
-    queryKey: ['firebaseStatus'],
-    queryFn: firebaseApi.getStatus,
-  });
-
-  // Firebase state
-  const [firebaseFile, setFirebaseFile] = useState<File | null>(null);
-  const [firebaseUploadError, setFirebaseUploadError] = useState<string | null>(null);
-  const [firebaseTestResult, setFirebaseTestResult] = useState<string | null>(null);
-
-  // Firebase upload mutation
-  const firebaseUploadMutation = useMutation({
-    mutationFn: async (fileContent: string) => {
-      return firebaseApi.upload(fileContent);
-    },
-    onSuccess: (data) => {
-      refetchFirebase();
-      setFirebaseFile(null);
-      setFirebaseUploadError(null);
-      setFirebaseTestResult(`Configuration sauvegardee! Projet: ${data.projectId}`);
-    },
-    onError: (error: Error & { response?: { data?: { error?: string; hint?: string } } }) => {
-      setFirebaseUploadError(error.response?.data?.error || error.message);
-    },
-  });
-
-  // Firebase delete mutation
-  const firebaseDeleteMutation = useMutation({
-    mutationFn: firebaseApi.delete,
-    onSuccess: () => {
-      refetchFirebase();
-      setFirebaseTestResult('Configuration Firebase supprimee');
-    },
-  });
-
-  // Firebase test mutation
-  const firebaseTestMutation = useMutation({
-    mutationFn: firebaseApi.test,
-    onSuccess: (data) => {
-      setFirebaseTestResult(data.message);
-    },
-    onError: (error: Error & { response?: { data?: { error?: string; hint?: string } } }) => {
-      setFirebaseTestResult(error.response?.data?.error || error.message);
-    },
-  });
-
-  const handleFirebaseFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      setFirebaseFile(file);
-      setFirebaseUploadError(null);
-      setFirebaseTestResult(null);
-    }
-  };
-
-  const handleFirebaseUpload = async () => {
-    if (!firebaseFile) return;
-
-    try {
-      const content = await firebaseFile.text();
-      // Validate JSON
-      JSON.parse(content);
-      firebaseUploadMutation.mutate(content);
-    } catch {
-      setFirebaseUploadError('Fichier JSON invalide');
-    }
-  };
 
   // Push Relay status query
   const { data: pushRelayStatus, refetch: refetchPushRelay } = useQuery<PushRelayStatus>({
@@ -308,63 +191,7 @@ export default function SettingsPage() {
     });
   };
 
-  // Tunnel status query
-  const { data: tunnelStatus } = useQuery<TunnelStatus>({
-    queryKey: ['tunnelStatus'],
-    queryFn: tunnelApi.getStatus,
-    refetchInterval: 5000, // Poll every 5 seconds when tunnel is connecting
-  });
-
-  // Tunnel toggle mutation
-  const tunnelToggleMutation = useMutation({
-    mutationFn: tunnelApi.toggle,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tunnelStatus'] });
-    },
-  });
-
-  // UPnP status query
-  const { data: upnpStatus } = useQuery<UpnpStatus>({
-    queryKey: ['upnpStatus'],
-    queryFn: upnpApi.getStatus,
-    refetchInterval: 30000, // Refresh every 30 seconds
-  });
-
-  // UPnP enable mutation
-  const upnpEnableMutation = useMutation({
-    mutationFn: upnpApi.enable,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['upnpStatus'] });
-    },
-  });
-
-  // UPnP disable mutation
-  const upnpDisableMutation = useMutation({
-    mutationFn: upnpApi.disable,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['upnpStatus'] });
-    },
-  });
-
-  // UPnP refresh mutation
-  const upnpRefreshMutation = useMutation({
-    mutationFn: upnpApi.refresh,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['upnpStatus'] });
-    },
-  });
-
-  const handleUpnpToggle = () => {
-    if (upnpStatus?.enabled) {
-      upnpDisableMutation.mutate();
-    } else {
-      upnpEnableMutation.mutate();
-    }
-  };
-
-  const isUpnpMutating = upnpEnableMutation.isPending || upnpDisableMutation.isPending || upnpRefreshMutation.isPending;
-
-  // Tunnel Relay status query (WireGuard + TURN)
+  // Tunnel Relay status query (WireGuard + TURN - AUTO-CONFIGURED)
   const { data: tunnelRelayStatus, refetch: refetchTunnelRelay } = useQuery<TunnelRelayStatus>({
     queryKey: ['tunnelRelayStatus'],
     queryFn: tunnelRelayApi.getStatus,
@@ -468,14 +295,6 @@ export default function SettingsPage() {
     tunnelRelayConnectMutation.isPending ||
     tunnelRelayDisconnectMutation.isPending ||
     tunnelRelayTestMutation.isPending;
-
-  const handleCopyUrl = async () => {
-    if (tunnelStatus?.url) {
-      await navigator.clipboard.writeText(tunnelStatus.url);
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
-    }
-  };
 
   const formatUptime = (ms: number | null) => {
     if (!ms) return '-';
@@ -807,163 +626,7 @@ export default function SettingsPage() {
           </Card>
         </Grid>
 
-        {/* Remote Access / Tunnel */}
-        <Grid item xs={12}>
-          <Card
-            sx={{
-              border: tunnelStatus?.status === 'connected' ? '1px solid' : 'none',
-              borderColor: 'success.main',
-            }}
-          >
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                  <PublicIcon sx={{ mr: 1, color: tunnelStatus?.status === 'connected' ? 'success.main' : 'text.secondary' }} />
-                  <Typography variant="h6" fontWeight={600}>
-                    Acces distant (tunnl.gg)
-                  </Typography>
-                  <Chip
-                    label="Gratuit"
-                    size="small"
-                    color="success"
-                    variant="outlined"
-                    sx={{ ml: 1 }}
-                  />
-                </Box>
-
-                {/* Toggle Switch */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  {tunnelToggleMutation.isPending && (
-                    <CircularProgress size={20} />
-                  )}
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        checked={tunnelStatus?.enabled ?? false}
-                        onChange={() => tunnelToggleMutation.mutate()}
-                        disabled={!tunnelStatus?.available || tunnelToggleMutation.isPending}
-                      />
-                    }
-                    label={tunnelStatus?.enabled ? 'Active' : 'Desactive'}
-                    labelPlacement="start"
-                  />
-                </Box>
-              </Box>
-
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                Exposez votre serveur Homenichat sur Internet sans configuration reseau.
-                Ideal pour connecter l'application mobile depuis n'importe ou.
-              </Typography>
-
-              {!tunnelStatus?.available && (
-                <Alert severity="warning" sx={{ mb: 2 }}>
-                  SSH n'est pas disponible sur ce systeme. Installez OpenSSH pour utiliser le tunnel.
-                </Alert>
-              )}
-
-              {tunnelStatus?.lastError && (
-                <Alert severity="error" sx={{ mb: 2 }}>
-                  {tunnelStatus.lastError}
-                </Alert>
-              )}
-
-              {tunnelStatus?.status === 'connecting' && (
-                <Box sx={{ mb: 2 }}>
-                  <Alert severity="info" icon={<CircularProgress size={16} />}>
-                    Connexion au tunnel en cours...
-                  </Alert>
-                </Box>
-              )}
-
-              {tunnelStatus?.status === 'connected' && tunnelStatus?.url && (
-                <Box
-                  sx={{
-                    p: 2,
-                    borderRadius: 2,
-                    backgroundColor: alpha(theme.palette.success.main, 0.08),
-                    border: '1px solid',
-                    borderColor: alpha(theme.palette.success.main, 0.3),
-                  }}
-                >
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
-                      URL publique
-                    </Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Chip
-                        label="Connecte"
-                        size="small"
-                        color="success"
-                      />
-                      <Typography variant="caption" color="text.secondary">
-                        Uptime: {formatUptime(tunnelStatus.uptime)}
-                      </Typography>
-                    </Box>
-                  </Box>
-
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Link
-                      href={tunnelStatus.url}
-                      target="_blank"
-                      rel="noopener"
-                      sx={{
-                        fontFamily: 'monospace',
-                        fontSize: '1.1rem',
-                        fontWeight: 500,
-                        color: 'success.main',
-                        textDecoration: 'none',
-                        '&:hover': { textDecoration: 'underline' },
-                      }}
-                    >
-                      {tunnelStatus.url}
-                    </Link>
-                    <Tooltip title={copySuccess ? 'Copie!' : 'Copier l\'URL'}>
-                      <IconButton size="small" onClick={handleCopyUrl}>
-                        <CopyIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Ouvrir dans un nouvel onglet">
-                      <IconButton
-                        size="small"
-                        component="a"
-                        href={tunnelStatus.url}
-                        target="_blank"
-                        rel="noopener"
-                      >
-                        <OpenInNewIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                    Utilisez cette URL dans l'application mobile pour vous connecter depuis Internet.
-                  </Typography>
-                </Box>
-              )}
-
-              {tunnelStatus?.enabled && tunnelStatus?.status === 'disconnected' && (
-                <Alert severity="warning">
-                  Le tunnel est active mais deconnecte. Une reconnexion automatique est en cours...
-                </Alert>
-              )}
-
-              <Divider sx={{ my: 2 }} />
-
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Typography variant="caption" color="text.secondary">
-                  Propulse par tunnl.gg - Tunnel SSH gratuit et securise
-                </Typography>
-                {tunnelStatus && (
-                  <Typography variant="caption" color="text.secondary">
-                    Total connexions: {tunnelStatus.totalConnections}
-                  </Typography>
-                )}
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        {/* Tunnel Relay - WireGuard + TURN */}
+        {/* Tunnel Relay - WireGuard + TURN (AUTO-CONFIGURED) */}
         <Grid item xs={12}>
           <Card
             sx={{
@@ -1199,166 +862,6 @@ export default function SettingsPage() {
           </Card>
         </Grid>
 
-        {/* UPnP Port Forwarding */}
-        <Grid item xs={12}>
-          <Card
-            sx={{
-              border: upnpStatus?.enabled && upnpStatus?.mappings?.sip ? '1px solid' : 'none',
-              borderColor: 'warning.main',
-            }}
-          >
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                  <RouterIcon sx={{ mr: 1, color: upnpStatus?.enabled ? 'warning.main' : 'text.secondary' }} />
-                  <Typography variant="h6" fontWeight={600}>
-                    UPnP Port Forwarding
-                  </Typography>
-                  <Chip
-                    label="Desactive par defaut"
-                    size="small"
-                    color="default"
-                    variant="outlined"
-                    sx={{ ml: 1 }}
-                  />
-                </Box>
-
-                {/* Toggle Switch */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  {isUpnpMutating && (
-                    <CircularProgress size={20} />
-                  )}
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        checked={upnpStatus?.enabled ?? false}
-                        onChange={handleUpnpToggle}
-                        disabled={!upnpStatus?.installed || !upnpStatus?.available || isUpnpMutating}
-                        color="warning"
-                      />
-                    }
-                    label={upnpStatus?.enabled ? 'Active' : 'Desactive'}
-                    labelPlacement="start"
-                  />
-                </Box>
-              </Box>
-
-              {/* Warning Banner */}
-              <Alert
-                severity="warning"
-                icon={<WarningIcon />}
-                sx={{ mb: 3 }}
-              >
-                <Typography variant="body2" fontWeight={500}>
-                  Attention: Cette fonctionnalite expose votre serveur VoIP a Internet.
-                </Typography>
-                <Typography variant="caption">
-                  N'activez que si vous avez besoin d'appels depuis l'exterieur de votre reseau local.
-                  Assurez-vous d'utiliser des mots de passe forts pour les extensions SIP.
-                </Typography>
-              </Alert>
-
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                Ouvre automatiquement les ports necessaires sur votre routeur via UPnP:
-                <br />
-                • <strong>5061/TCP</strong> - SIP TLS (signalisation chiffree)
-                <br />
-                • <strong>10000-10100/UDP</strong> - RTP (flux audio/video)
-              </Typography>
-
-              {!upnpStatus?.installed && (
-                <Alert severity="error" sx={{ mb: 2 }}>
-                  UPnP n'est pas installe. Executez le script d'installation ou installez miniupnpc manuellement.
-                </Alert>
-              )}
-
-              {upnpStatus?.installed && !upnpStatus?.available && (
-                <Alert severity="warning" sx={{ mb: 2 }}>
-                  {upnpStatus?.error || 'Aucun routeur UPnP detecte. Verifiez que UPnP est active sur votre routeur.'}
-                  {upnpStatus?.hint && (
-                    <Typography variant="caption" display="block" sx={{ mt: 1 }}>
-                      Conseil: {upnpStatus.hint}
-                    </Typography>
-                  )}
-                </Alert>
-              )}
-
-              {upnpStatus?.enabled && upnpStatus?.available && (
-                <Box
-                  sx={{
-                    p: 2,
-                    borderRadius: 2,
-                    backgroundColor: alpha(theme.palette.warning.main, 0.08),
-                    border: '1px solid',
-                    borderColor: alpha(theme.palette.warning.main, 0.3),
-                    mb: 2,
-                  }}
-                >
-                  <Grid container spacing={2}>
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
-                        Informations Reseau
-                      </Typography>
-                      <Box sx={{ mt: 1 }}>
-                        <Typography variant="body2">
-                          <strong>IP Externe:</strong> {upnpStatus.externalIp || 'N/A'}
-                        </Typography>
-                        <Typography variant="body2">
-                          <strong>IP Locale:</strong> {upnpStatus.localIp || 'N/A'}
-                        </Typography>
-                        <Typography variant="body2">
-                          <strong>Routeur:</strong> {upnpStatus.router || 'N/A'}
-                        </Typography>
-                      </Box>
-                    </Grid>
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
-                        Ports Mappes
-                      </Typography>
-                      <Box sx={{ mt: 1 }}>
-                        <Typography variant="body2">
-                          <strong>SIP ({upnpStatus.mappings?.sipPort || 5160}):</strong>{' '}
-                          {upnpStatus.mappings?.sip ? (
-                            <Chip label="OK" size="small" color="success" sx={{ ml: 1 }} />
-                          ) : (
-                            <Chip label="Non mappe" size="small" color="error" sx={{ ml: 1 }} />
-                          )}
-                        </Typography>
-                        <Typography variant="body2">
-                          <strong>RTP ({upnpStatus.mappings?.rtpStart || 10000}-{upnpStatus.mappings?.rtpEnd || 10100}):</strong>{' '}
-                          {upnpStatus.mappings?.rtpCount === upnpStatus.mappings?.rtpTotal ? (
-                            <Chip label={`OK (${upnpStatus.mappings?.rtpCount}/${upnpStatus.mappings?.rtpTotal})`} size="small" color="success" sx={{ ml: 1 }} />
-                          ) : (
-                            <Chip label={`${upnpStatus.mappings?.rtpCount || 0}/${upnpStatus.mappings?.rtpTotal || 101}`} size="small" color="warning" sx={{ ml: 1 }} />
-                          )}
-                        </Typography>
-                      </Box>
-                    </Grid>
-                  </Grid>
-
-                  <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end' }}>
-                    <Button
-                      size="small"
-                      startIcon={<RefreshIcon />}
-                      onClick={() => upnpRefreshMutation.mutate()}
-                      disabled={isUpnpMutating}
-                    >
-                      Rafraichir les mappings
-                    </Button>
-                  </Box>
-                </Box>
-              )}
-
-              <Divider sx={{ my: 2 }} />
-
-              <Typography variant="caption" color="text.secondary">
-                UPnP (Universal Plug and Play) permet l'ouverture automatique des ports sur les routeurs compatibles.
-                Le bail est renouvele automatiquement toutes les heures.
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
         {/* Push Relay - Recommended method for push notifications */}
         <Grid item xs={12}>
           <Card>
@@ -1573,174 +1076,6 @@ export default function SettingsPage() {
           </Card>
         </Grid>
 
-        {/* Firebase Push Notifications (Legacy/Fallback) */}
-        <Grid item xs={12}>
-          <Card sx={{ opacity: pushRelayStatus?.configured ? 0.7 : 1 }}>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                <AndroidIcon sx={{ mr: 1, color: '#34A853' }} />
-                <Typography variant="h6" fontWeight={600}>
-                  Push Notifications (Firebase) - Fallback
-                </Typography>
-                {firebaseStatus?.configured ? (
-                  <Chip
-                    icon={<CheckCircleIcon />}
-                    label="Configure"
-                    color="success"
-                    size="small"
-                    sx={{ ml: 2 }}
-                  />
-                ) : (
-                  <Chip
-                    label="Non configure"
-                    color="default"
-                    size="small"
-                    sx={{ ml: 2 }}
-                  />
-                )}
-                {pushRelayStatus?.configured && (
-                  <Chip
-                    label="Relay actif - Firebase desactive"
-                    color="info"
-                    size="small"
-                    variant="outlined"
-                    sx={{ ml: 1 }}
-                  />
-                )}
-              </Box>
-
-              {!pushRelayStatus?.configured && (
-                <Alert severity="info" sx={{ mb: 2 }}>
-                  <Typography variant="caption">
-                    Firebase est utilise uniquement si le Push Relay n'est pas configure.
-                    Il est recommande d'utiliser le Push Relay pour une configuration simplifiee.
-                  </Typography>
-                </Alert>
-              )}
-
-              {pushRelayStatus?.configured ? (
-                <Typography variant="body2" color="text.secondary">
-                  Le Push Relay est configure et actif. Firebase n'est pas utilise.
-                  {firebaseStatus?.configured && ' Vous pouvez supprimer la configuration Firebase si vous le souhaitez.'}
-                </Typography>
-              ) : (
-                <Grid container spacing={3}>
-                  <Grid item xs={12} md={6}>
-                    {firebaseStatus?.configured ? (
-                      <Box
-                        sx={{
-                          p: 2,
-                          borderRadius: 2,
-                          backgroundColor: alpha(theme.palette.success.main, 0.08),
-                          border: '1px solid',
-                          borderColor: alpha(theme.palette.success.main, 0.3),
-                          mb: 2,
-                        }}
-                      >
-                        <Typography variant="body2">
-                          <strong>Projet:</strong> {firebaseStatus.projectId}
-                        </Typography>
-                        <Typography variant="body2">
-                          <strong>Appareils:</strong> {firebaseStatus.registeredDevices}
-                        </Typography>
-                      </Box>
-                    ) : (
-                      <Alert severity="warning" sx={{ mb: 2 }}>
-                        Firebase non configure. Configurez le Push Relay ci-dessus (recommande)
-                        ou uploadez un fichier firebase-service-account.json.
-                      </Alert>
-                    )}
-
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Button
-                          variant="outlined"
-                          component="label"
-                          startIcon={<CloudUploadIcon />}
-                          size="small"
-                        >
-                          Choisir fichier
-                          <input
-                            type="file"
-                            hidden
-                            accept=".json"
-                            onChange={handleFirebaseFileChange}
-                          />
-                        </Button>
-                        {firebaseFile && (
-                          <Typography variant="body2" color="text.secondary">
-                            {firebaseFile.name}
-                          </Typography>
-                        )}
-                      </Box>
-
-                      {firebaseFile && (
-                        <Button
-                          variant="contained"
-                          color="primary"
-                          size="small"
-                          startIcon={<CloudUploadIcon />}
-                          onClick={handleFirebaseUpload}
-                          disabled={firebaseUploadMutation.isPending}
-                        >
-                          Uploader
-                        </Button>
-                      )}
-
-                      {firebaseUploadError && (
-                        <Alert severity="error" sx={{ py: 0 }}>
-                          {firebaseUploadError}
-                        </Alert>
-                      )}
-
-                      {firebaseTestResult && (
-                        <Alert severity={firebaseTestResult.includes('erreur') || firebaseTestResult.includes('Error') ? 'error' : 'success'} sx={{ py: 0 }}>
-                          {firebaseTestResult}
-                        </Alert>
-                      )}
-
-                      {firebaseStatus?.configured && (
-                        <Box sx={{ display: 'flex', gap: 1 }}>
-                          <Button
-                            variant="outlined"
-                            size="small"
-                            startIcon={<SendIcon />}
-                            onClick={() => firebaseTestMutation.mutate()}
-                            disabled={firebaseTestMutation.isPending}
-                          >
-                            Tester
-                          </Button>
-                          <Button
-                            variant="outlined"
-                            color="error"
-                            size="small"
-                            startIcon={<DeleteIcon />}
-                            onClick={() => firebaseDeleteMutation.mutate()}
-                            disabled={firebaseDeleteMutation.isPending}
-                          >
-                            Supprimer
-                          </Button>
-                        </Box>
-                      )}
-                    </Box>
-                  </Grid>
-
-                  <Grid item xs={12} md={6}>
-                    <Typography variant="caption" color="text.secondary">
-                      Pour configurer Firebase manuellement:
-                      <ol style={{ margin: '8px 0', paddingLeft: 20 }}>
-                        <li>Aller sur Firebase Console</li>
-                        <li>Project Settings → Service Accounts</li>
-                        <li>Generate new private key</li>
-                        <li>Uploader le fichier JSON ici</li>
-                      </ol>
-                    </Typography>
-                  </Grid>
-                </Grid>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
       </Grid>
     </Box>
   );

@@ -1,81 +1,37 @@
 /**
  * PushRelayService - Client for Homenichat Push Relay
  *
- * Sends push notifications via the centralized relay server
- * instead of directly to FCM/APNs.
- *
- * Configuration can come from:
- * 1. Config file: DATA_DIR/push-relay.json (priority)
- * 2. Environment variables: PUSH_RELAY_URL, PUSH_RELAY_API_KEY (fallback)
+ * Sends push notifications via the centralized Homenichat relay server.
+ * Configuration is automatic - no user setup required.
  */
 
 const logger = require('../utils/logger');
-const fs = require('fs');
-const path = require('path');
+
+// Hardcoded Homenichat Push Relay configuration
+const PUSH_RELAY_URL = 'https://push.homenichat.com';
+const PUSH_RELAY_API_KEY = 'hpr_330b321fc948475b5c5b87b57bc2e5204d765a5d0feb761f718302b3335848fd';
 
 class PushRelayService {
   constructor() {
-    this.relayUrl = null;
-    this.apiKey = null;
+    this.relayUrl = PUSH_RELAY_URL;
+    this.apiKey = PUSH_RELAY_API_KEY;
     this.initialized = false;
   }
 
   /**
-   * Load configuration from file or environment
-   */
-  loadConfig() {
-    // Try to load from config file first
-    const dataDir = process.env.DATA_DIR || '/var/lib/homenichat';
-    const configPath = path.join(dataDir, 'push-relay.json');
-
-    if (fs.existsSync(configPath)) {
-      try {
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        if (config.relayUrl && config.apiKey) {
-          this.relayUrl = config.relayUrl;
-          this.apiKey = config.apiKey;
-          logger.info('[PushRelay] Config loaded from file');
-          return true;
-        }
-      } catch (e) {
-        logger.warn('[PushRelay] Failed to load config file:', e.message);
-      }
-    }
-
-    // Fallback to environment variables
-    this.relayUrl = process.env.PUSH_RELAY_URL || null;
-    this.apiKey = process.env.PUSH_RELAY_API_KEY || null;
-
-    return !!(this.relayUrl && this.apiKey);
-  }
-
-  /**
-   * Initialize the service
+   * Initialize the service (auto-configured)
    */
   initialize() {
-    // Load config if not already set
-    if (!this.relayUrl || !this.apiKey) {
-      this.loadConfig();
-    }
-
-    if (!this.relayUrl || !this.apiKey) {
-      logger.warn('[PushRelay] PUSH_RELAY_URL or PUSH_RELAY_API_KEY not configured');
-      logger.warn('[PushRelay] Push notifications via relay will be disabled');
-      return false;
-    }
-
-    // Remove trailing slash if present
-    this.relayUrl = this.relayUrl.replace(/\/$/, '');
     this.initialized = true;
     logger.info(`[PushRelay] Initialized with relay: ${this.relayUrl}`);
     return true;
   }
 
   /**
-   * Check if relay is configured
+   * Check if relay is configured (always true)
    */
   isConfigured() {
-    return this.initialized;
+    return true;
   }
 
   /**
@@ -83,7 +39,7 @@ class PushRelayService {
    */
   async _request(endpoint, method = 'GET', body = null) {
     if (!this.initialized) {
-      throw new Error('Push relay not initialized');
+      this.initialize();
     }
 
     const url = `${this.relayUrl}${endpoint}`;
@@ -224,36 +180,6 @@ class PushRelayService {
   }
 
   /**
-   * Broadcast to all devices
-   */
-  async broadcast(type, data, notification = null) {
-    try {
-      const payload = { type, data };
-      if (notification) {
-        payload.notification = notification;
-      }
-
-      const result = await this._request('/push/send/all', 'POST', payload);
-      logger.info(`[PushRelay] Broadcast sent: type=${type} sent=${result.sent}`);
-      return result;
-    } catch (error) {
-      logger.error(`[PushRelay] Broadcast failed:`, error.message);
-      return { success: false, sent: 0, error: error.message };
-    }
-  }
-
-  /**
-   * Get stats from relay
-   */
-  async getStats() {
-    try {
-      return await this._request('/push/stats', 'GET');
-    } catch (error) {
-      return { error: error.message };
-    }
-  }
-
-  /**
    * Get registered devices
    */
   async getDevices() {
@@ -281,8 +207,8 @@ class PushRelayService {
    */
   getStatus() {
     return {
-      configured: this.initialized,
-      relayUrl: this.relayUrl || null,
+      configured: true,
+      relayUrl: this.relayUrl,
     };
   }
 }

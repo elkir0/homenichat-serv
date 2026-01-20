@@ -561,30 +561,7 @@ export const systemApi = {
   },
 };
 
-// API Admin - Tunnel (tunnl.gg)
-export const tunnelApi = {
-  getStatus: async () => {
-    const response = await api.get('/api/admin/tunnel/status');
-    return response.data;
-  },
-
-  start: async () => {
-    const response = await api.post('/api/admin/tunnel/start');
-    return response.data;
-  },
-
-  stop: async () => {
-    const response = await api.post('/api/admin/tunnel/stop');
-    return response.data;
-  },
-
-  toggle: async () => {
-    const response = await api.post('/api/admin/tunnel/toggle');
-    return response.data;
-  },
-};
-
-// API Admin - Tunnel Relay (WireGuard + TURN)
+// API Admin - Tunnel Relay (WireGuard + TURN - AUTO-CONFIGURED)
 export const tunnelRelayApi = {
   getStatus: async () => {
     const response = await api.get('/api/admin/tunnel-relay/status');
@@ -622,58 +599,7 @@ export const tunnelRelayApi = {
   },
 };
 
-// API Admin - UPnP (Port Forwarding)
-export const upnpApi = {
-  getStatus: async () => {
-    const response = await api.get('/api/admin/upnp/status');
-    return response.data;
-  },
-
-  enable: async () => {
-    const response = await api.post('/api/admin/upnp/enable');
-    return response.data;
-  },
-
-  disable: async () => {
-    const response = await api.post('/api/admin/upnp/disable');
-    return response.data;
-  },
-
-  refresh: async () => {
-    const response = await api.post('/api/admin/upnp/refresh');
-    return response.data;
-  },
-};
-
-// API Admin - Firebase Push Notifications (fallback/legacy)
-export const firebaseApi = {
-  getStatus: async () => {
-    const response = await api.get('/api/admin/firebase/status');
-    return response.data;
-  },
-
-  upload: async (serviceAccount: string) => {
-    const response = await api.post('/api/admin/firebase/upload', { serviceAccount });
-    return response.data;
-  },
-
-  delete: async () => {
-    const response = await api.delete('/api/admin/firebase/config');
-    return response.data;
-  },
-
-  test: async () => {
-    const response = await api.post('/api/admin/firebase/test');
-    return response.data;
-  },
-
-  getDevices: async () => {
-    const response = await api.get('/api/admin/firebase/devices');
-    return response.data;
-  },
-};
-
-// API Admin - Push Relay (recommended for iOS/Android push notifications)
+// API Admin - Push Relay (AUTO-CONFIGURED)
 export const pushRelayApi = {
   getStatus: async () => {
     const response = await api.get('/api/admin/push-relay/status');
