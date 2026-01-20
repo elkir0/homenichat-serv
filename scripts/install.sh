@@ -675,19 +675,181 @@ install_wireguard() {
     # when the user enables and configures it from the admin UI
 }
 
+# ============================================================================
+# Asterisk Installation from Source (for ARM64 / Raspberry Pi)
+# ============================================================================
+
+install_asterisk_source() {
+    # Check if Asterisk is already installed
+    if command -v asterisk &>/dev/null; then
+        info "Asterisk already installed: $(asterisk -V 2>/dev/null || echo 'unknown version')"
+        return 0
+    fi
+
+    info "Installing Asterisk from source (this takes 15-25 minutes on Raspberry Pi)..."
+
+    # Asterisk version - use 22 LTS for stability
+    local AST_VERSION="22.2.0"
+    local AST_URL="https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${AST_VERSION}.tar.gz"
+
+    # Install build dependencies
+    info "Installing Asterisk build dependencies..."
+    apt_install build-essential wget curl git \
+        libncurses5-dev libssl-dev libxml2-dev libsqlite3-dev \
+        uuid-dev libjansson-dev libedit-dev libsrtp2-dev \
+        libspeex-dev libspeexdsp-dev libogg-dev libvorbis-dev \
+        libopus-dev libcurl4-openssl-dev libpq-dev unixodbc-dev \
+        libsystemd-dev pkg-config autoconf automake libtool \
+        libspandsp-dev libiksemel-dev libgsm1-dev libcodec2-dev \
+        sox || {
+        error "Failed to install Asterisk build dependencies"
+        return 1
+    }
+
+    cd /usr/src
+
+    # Download Asterisk
+    info "Downloading Asterisk ${AST_VERSION}..."
+    if [ -d "asterisk-${AST_VERSION}" ]; then
+        info "Asterisk source already exists, removing old version..."
+        rm -rf "asterisk-${AST_VERSION}"
+    fi
+
+    wget -q --show-progress "${AST_URL}" -O "asterisk-${AST_VERSION}.tar.gz" || {
+        error "Failed to download Asterisk"
+        return 1
+    }
+
+    tar xzf "asterisk-${AST_VERSION}.tar.gz"
+    rm -f "asterisk-${AST_VERSION}.tar.gz"
+    cd "asterisk-${AST_VERSION}"
+
+    # Install MP3 support (optional but useful)
+    info "Installing MP3 source..."
+    contrib/scripts/get_mp3_source.sh >> "$LOG_FILE" 2>&1 || true
+
+    # Configure Asterisk
+    info "Configuring Asterisk (this takes a few minutes)..."
+    ./configure --with-pjproject-bundled --with-jansson-bundled \
+        >> "$LOG_FILE" 2>&1 || {
+        error "Asterisk configure failed - check $LOG_FILE"
+        return 1
+    }
+
+    # Select modules to build (menuselect with defaults)
+    info "Selecting Asterisk modules..."
+    make menuselect.makeopts >> "$LOG_FILE" 2>&1 || true
+
+    # Enable useful modules
+    menuselect/menuselect --enable chan_pjsip menuselect.makeopts 2>/dev/null || true
+    menuselect/menuselect --enable res_pjsip menuselect.makeopts 2>/dev/null || true
+    menuselect/menuselect --enable codec_opus menuselect.makeopts 2>/dev/null || true
+    menuselect/menuselect --enable format_mp3 menuselect.makeopts 2>/dev/null || true
+
+    # Compile Asterisk
+    info "Compiling Asterisk (this takes 10-20 minutes on Raspberry Pi)..."
+    local CORES=$(nproc)
+    make -j${CORES} >> "$LOG_FILE" 2>&1 || {
+        error "Asterisk compilation failed - check $LOG_FILE"
+        return 1
+    }
+
+    # Install Asterisk
+    info "Installing Asterisk..."
+    make install >> "$LOG_FILE" 2>&1 || {
+        error "Asterisk installation failed"
+        return 1
+    }
+
+    # Install sample configs
+    info "Installing Asterisk sample configuration..."
+    make samples >> "$LOG_FILE" 2>&1 || true
+
+    # Install init scripts
+    make config >> "$LOG_FILE" 2>&1 || true
+
+    # Install logrotate config
+    make install-logrotate >> "$LOG_FILE" 2>&1 || true
+
+    # Create asterisk user
+    if ! id asterisk &>/dev/null; then
+        info "Creating asterisk user..."
+        useradd -r -d /var/lib/asterisk -s /sbin/nologin asterisk
+    fi
+
+    # Create required directories
+    mkdir -p /var/lib/asterisk
+    mkdir -p /var/log/asterisk
+    mkdir -p /var/spool/asterisk
+    mkdir -p /var/run/asterisk
+    mkdir -p /etc/asterisk
+
+    # Set ownership
+    chown -R asterisk:asterisk /var/lib/asterisk
+    chown -R asterisk:asterisk /var/log/asterisk
+    chown -R asterisk:asterisk /var/spool/asterisk
+    chown -R asterisk:asterisk /var/run/asterisk
+    chown -R asterisk:asterisk /etc/asterisk
+
+    # Add asterisk to audio and dialout groups
+    usermod -aG audio,dialout asterisk 2>/dev/null || true
+
+    # Create systemd service if not exists
+    if [ ! -f /etc/systemd/system/asterisk.service ]; then
+        info "Creating Asterisk systemd service..."
+        cat > /etc/systemd/system/asterisk.service << 'ASTSERVICE'
+[Unit]
+Description=Asterisk PBX
+After=network.target
+
+[Service]
+Type=simple
+User=asterisk
+Group=asterisk
+ExecStart=/usr/sbin/asterisk -f -C /etc/asterisk/asterisk.conf
+ExecReload=/usr/sbin/asterisk -rx 'core reload'
+ExecStop=/usr/sbin/asterisk -rx 'core stop gracefully'
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+ASTSERVICE
+        systemctl daemon-reload
+    fi
+
+    # Enable and start Asterisk
+    systemctl enable asterisk >> "$LOG_FILE" 2>&1 || true
+    systemctl start asterisk >> "$LOG_FILE" 2>&1 || true
+
+    # Verify installation
+    sleep 2
+    if command -v asterisk &>/dev/null && systemctl is-active --quiet asterisk; then
+        success "Asterisk $(asterisk -V 2>/dev/null) installed and running"
+    else
+        warning "Asterisk installed but may not be running - check: systemctl status asterisk"
+    fi
+
+    # Cleanup
+    cd /usr/src
+    rm -rf "asterisk-${AST_VERSION}"
+
+    return 0
+}
+
 install_chan_quectel() {
     [ "$INSTALL_MODEMS" != true ] && return
 
-    # chan_quectel requires FreePBX (which installs Asterisk 22)
-    if [ "$INSTALL_FREEPBX" != true ]; then
-        warning "Skipping chan_quectel - FreePBX not selected"
-        warning "GSM modems require FreePBX for VoIP functionality"
-        return
-    fi
-
-    # Wait for Asterisk to be available (FreePBX installs it)
+    # chan_quectel requires Asterisk to be installed
+    # (either via FreePBX on AMD64, or from source on ARM64)
     if ! command -v asterisk &>/dev/null; then
-        warning "Asterisk not found - FreePBX installation may have failed"
+        warning "Asterisk not found - skipping chan_quectel installation"
+        warning "GSM modems require Asterisk for VoIP functionality"
+        warning "Enable FreePBX/VoIP option to install Asterisk"
         return
     fi
 
@@ -1247,7 +1409,20 @@ MODEM_SERVICE
 }
 
 configure_asterisk_audio() {
+    # Only run if FreePBX was requested (includes ARM64 with Asterisk-only)
     [ "$INSTALL_FREEPBX" != true ] && return
+
+    # Check if Asterisk is actually installed
+    if ! command -v asterisk &>/dev/null; then
+        warning "Asterisk not found - skipping audio configuration"
+        return
+    fi
+
+    # Check if /etc/asterisk directory exists
+    if [ ! -d /etc/asterisk ]; then
+        warning "/etc/asterisk directory not found - skipping audio configuration"
+        return
+    fi
 
     info "Configuring Asterisk audio for WebRTC ↔ GSM bridge..."
 
@@ -1370,20 +1545,29 @@ install_freepbx() {
         echo ""
 
         if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
-            echo -e "${BOLD}Options for Raspberry Pi / ARM64:${NC}"
+            # ARM64: Install Asterisk from source first
+            info "ARM64 detected - Installing Asterisk from source..."
+            install_asterisk_source || {
+                error "Failed to install Asterisk from source"
+                return 1
+            }
+
             echo ""
-            echo "  1. ${BOLD}Run our FreePBX ARM installer${NC} (recommended)"
-            echo "     After this installation completes, run:"
+            echo -e "${BOLD}Asterisk is now installed. Options for FreePBX:${NC}"
+            echo ""
+            echo "  1. ${BOLD}Run FreePBX ARM installer${NC} (recommended for full GUI)"
             echo "     ${CYAN}sudo /opt/homenichat/scripts/install-freepbx-arm.sh${NC}"
             echo ""
             echo "  2. ${BOLD}Use external FreePBX${NC}"
             echo "     Connect to an existing FreePBX server via AMI."
             echo "     Configure in /etc/homenichat/providers.yaml"
             echo ""
-            echo "  3. ${BOLD}Use Asterisk directly${NC}"
-            echo "     Asterisk is installed. Configure SIP trunks"
-            echo "     and extensions via config files."
+            echo "  3. ${BOLD}Use Asterisk directly (current setup)${NC}"
+            echo "     Asterisk is installed and running. Configure SIP"
+            echo "     trunks and extensions via /etc/asterisk/ config files."
             echo ""
+
+            success "Asterisk installed successfully on ARM64"
         else
             echo "Options:"
             echo "  1. Use an external FreePBX server"
@@ -1391,7 +1575,7 @@ install_freepbx() {
             echo ""
         fi
 
-        warning "Skipping FreePBX installation"
+        info "Skipping FreePBX Sangoma installer (not compatible with this system)"
 
         # Create example external FreePBX config
         mkdir -p "$CONFIG_DIR"
