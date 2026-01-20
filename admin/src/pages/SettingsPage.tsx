@@ -38,7 +38,7 @@ import {
 } from '@mui/icons-material';
 import { configApi, tunnelApi, tunnelRelayApi, upnpApi, firebaseApi, pushRelayApi } from '../services/api';
 import {
-  Vpn as VpnIcon,
+  VpnLock as VpnIcon,
 } from '@mui/icons-material';
 import {
   CloudUpload as CloudUploadIcon,
