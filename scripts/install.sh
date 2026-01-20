@@ -645,6 +645,36 @@ UPNP_CONF
     success "UPnP support installed (disabled by default)"
 }
 
+install_wireguard() {
+    info "Installing WireGuard tools..."
+
+    # WireGuard is built into Linux kernel 5.6+
+    # We just need the tools
+    apt_install wireguard-tools || {
+        warning "WireGuard tools not available in repositories"
+        warning "Tunnel Relay will work in TURN-only mode"
+        return
+    }
+
+    # Verify wg command is available
+    if command -v wg &>/dev/null; then
+        success "WireGuard tools installed"
+        info "WireGuard version: $(wg --version)"
+    else
+        warning "wg command not found after installation"
+    fi
+
+    # Enable IP forwarding (needed for VPN)
+    if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf 2>/dev/null; then
+        echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+        sysctl -p 2>/dev/null || true
+        info "IP forwarding enabled"
+    fi
+
+    # Note: WireGuard configuration will be created by TunnelRelayService
+    # when the user enables and configures it from the admin UI
+}
+
 install_chan_quectel() {
     [ "$INSTALL_MODEMS" != true ] && return
 
@@ -1872,6 +1902,7 @@ main() {
     disable_modemmanager
     install_gammu
     install_upnp
+    install_wireguard
     install_freepbx
     install_chan_quectel
     configure_asterisk_audio

@@ -36,7 +36,10 @@ import {
   Router as RouterIcon,
   Warning as WarningIcon,
 } from '@mui/icons-material';
-import { configApi, tunnelApi, upnpApi, firebaseApi, pushRelayApi } from '../services/api';
+import { configApi, tunnelApi, tunnelRelayApi, upnpApi, firebaseApi, pushRelayApi } from '../services/api';
+import {
+  Vpn as VpnIcon,
+} from '@mui/icons-material';
 import {
   CloudUpload as CloudUploadIcon,
   Delete as DeleteIcon,
@@ -118,6 +121,36 @@ interface PushRelayStatus {
     totalDevices?: number;
     totalSent?: number;
   } | null;
+}
+
+interface TunnelRelayStatus {
+  enabled: boolean;
+  configured: boolean;
+  registered: boolean;
+  connected: boolean;
+  wireguardAvailable: boolean;
+  relayUrl: string;
+  clientId: string;
+  hostname: string;
+  publicKey: string | null;
+  subdomain?: string;
+  publicUrl?: string;
+  wireguard?: {
+    clientIP: string;
+    serverEndpoint: string;
+  };
+  turn?: {
+    urls: string[];
+    expiresAt: string;
+  };
+  tunnel?: {
+    interface: string;
+    lastHandshake: string | null;
+    bytesReceived: string;
+    bytesSent: string;
+  };
+  lastError: string | null;
+  lastRefresh: number | null;
 }
 
 export default function SettingsPage() {
@@ -330,6 +363,111 @@ export default function SettingsPage() {
   };
 
   const isUpnpMutating = upnpEnableMutation.isPending || upnpDisableMutation.isPending || upnpRefreshMutation.isPending;
+
+  // Tunnel Relay status query (WireGuard + TURN)
+  const { data: tunnelRelayStatus, refetch: refetchTunnelRelay } = useQuery<TunnelRelayStatus>({
+    queryKey: ['tunnelRelayStatus'],
+    queryFn: tunnelRelayApi.getStatus,
+    refetchInterval: 10000, // Refresh every 10 seconds
+  });
+
+  // Tunnel Relay state
+  const [relayServerUrl, setRelayServerUrl] = useState('');
+  const [relayHostname, setRelayHostname] = useState('');
+  const [tunnelRelayError, setTunnelRelayError] = useState<string | null>(null);
+  const [tunnelRelayResult, setTunnelRelayResult] = useState<string | null>(null);
+  const [copyRelayUrlSuccess, setCopyRelayUrlSuccess] = useState(false);
+
+  // Load existing config when status is fetched
+  useEffect(() => {
+    if (tunnelRelayStatus?.relayUrl) {
+      setRelayServerUrl(tunnelRelayStatus.relayUrl);
+    }
+    if (tunnelRelayStatus?.hostname) {
+      setRelayHostname(tunnelRelayStatus.hostname);
+    }
+  }, [tunnelRelayStatus]);
+
+  // Tunnel Relay configure mutation
+  const tunnelRelayConfigureMutation = useMutation({
+    mutationFn: (config: { enabled?: boolean; relayUrl?: string; hostname?: string }) =>
+      tunnelRelayApi.configure(config),
+    onSuccess: () => {
+      refetchTunnelRelay();
+      setTunnelRelayResult('Configuration sauvegardee');
+      setTunnelRelayError(null);
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      setTunnelRelayError(error.response?.data?.error || error.message);
+    },
+  });
+
+  // Tunnel Relay connect mutation
+  const tunnelRelayConnectMutation = useMutation({
+    mutationFn: tunnelRelayApi.connect,
+    onSuccess: () => {
+      refetchTunnelRelay();
+      setTunnelRelayResult('Connexion reussie');
+      setTunnelRelayError(null);
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      setTunnelRelayError(error.response?.data?.error || error.message);
+    },
+  });
+
+  // Tunnel Relay disconnect mutation
+  const tunnelRelayDisconnectMutation = useMutation({
+    mutationFn: tunnelRelayApi.disconnect,
+    onSuccess: () => {
+      refetchTunnelRelay();
+      setTunnelRelayResult('Deconnexion reussie');
+    },
+  });
+
+  // Tunnel Relay test mutation
+  const tunnelRelayTestMutation = useMutation({
+    mutationFn: () => tunnelRelayApi.test(relayServerUrl),
+    onSuccess: (data) => {
+      if (data.success) {
+        setTunnelRelayResult('Connexion au serveur relay reussie');
+        setTunnelRelayError(null);
+      } else {
+        setTunnelRelayError(data.error || 'Echec du test');
+      }
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      setTunnelRelayError(error.response?.data?.error || error.message);
+    },
+  });
+
+  const handleTunnelRelayToggle = () => {
+    if (tunnelRelayStatus?.enabled) {
+      tunnelRelayConfigureMutation.mutate({ enabled: false });
+    } else {
+      if (!relayServerUrl) {
+        setTunnelRelayError('URL du serveur relay requise');
+        return;
+      }
+      tunnelRelayConfigureMutation.mutate({
+        enabled: true,
+        relayUrl: relayServerUrl,
+        hostname: relayHostname || undefined,
+      });
+    }
+  };
+
+  const handleCopyRelayUrl = async () => {
+    if (tunnelRelayStatus?.publicUrl) {
+      await navigator.clipboard.writeText(tunnelRelayStatus.publicUrl);
+      setCopyRelayUrlSuccess(true);
+      setTimeout(() => setCopyRelayUrlSuccess(false), 2000);
+    }
+  };
+
+  const isTunnelRelayMutating = tunnelRelayConfigureMutation.isPending ||
+    tunnelRelayConnectMutation.isPending ||
+    tunnelRelayDisconnectMutation.isPending ||
+    tunnelRelayTestMutation.isPending;
 
   const handleCopyUrl = async () => {
     if (tunnelStatus?.url) {
@@ -818,6 +956,242 @@ export default function SettingsPage() {
                 {tunnelStatus && (
                   <Typography variant="caption" color="text.secondary">
                     Total connexions: {tunnelStatus.totalConnections}
+                  </Typography>
+                )}
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Tunnel Relay - WireGuard + TURN */}
+        <Grid item xs={12}>
+          <Card
+            sx={{
+              border: tunnelRelayStatus?.connected ? '1px solid' : 'none',
+              borderColor: 'primary.main',
+            }}
+          >
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <VpnIcon sx={{ mr: 1, color: tunnelRelayStatus?.connected ? 'primary.main' : 'text.secondary' }} />
+                  <Typography variant="h6" fontWeight={600}>
+                    Tunnel Relay (WireGuard + TURN)
+                  </Typography>
+                  <Chip
+                    label="Recommande"
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                    sx={{ ml: 1 }}
+                  />
+                </Box>
+
+                {/* Toggle Switch */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  {isTunnelRelayMutating && (
+                    <CircularProgress size={20} />
+                  )}
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={tunnelRelayStatus?.enabled ?? false}
+                        onChange={handleTunnelRelayToggle}
+                        disabled={isTunnelRelayMutating}
+                        color="primary"
+                      />
+                    }
+                    label={tunnelRelayStatus?.enabled ? 'Active' : 'Desactive'}
+                    labelPlacement="start"
+                  />
+                </Box>
+              </Box>
+
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                Acces distant securise via VPN WireGuard. Inclut un serveur TURN pour les appels WebRTC
+                meme derriere des NAT restrictifs. Ideal pour une configuration zero-config.
+              </Typography>
+
+              {tunnelRelayError && (
+                <Alert severity="error" sx={{ mb: 2 }} onClose={() => setTunnelRelayError(null)}>
+                  {tunnelRelayError}
+                </Alert>
+              )}
+
+              {tunnelRelayResult && (
+                <Alert severity="success" sx={{ mb: 2 }} onClose={() => setTunnelRelayResult(null)}>
+                  {tunnelRelayResult}
+                </Alert>
+              )}
+
+              {tunnelRelayStatus?.lastError && !tunnelRelayError && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  Derniere erreur: {tunnelRelayStatus.lastError}
+                </Alert>
+              )}
+
+              {/* Configuration Form */}
+              <Box sx={{ mb: 3 }}>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={8}>
+                    <TextField
+                      fullWidth
+                      label="URL du serveur relay"
+                      placeholder="https://relay.homenichat.com/api"
+                      value={relayServerUrl}
+                      onChange={(e) => setRelayServerUrl(e.target.value)}
+                      disabled={tunnelRelayStatus?.enabled}
+                      size="small"
+                      helperText="URL de l'API du serveur relay Homenichat"
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <TextField
+                      fullWidth
+                      label="Hostname (optionnel)"
+                      placeholder="mon-serveur"
+                      value={relayHostname}
+                      onChange={(e) => setRelayHostname(e.target.value)}
+                      disabled={tunnelRelayStatus?.enabled}
+                      size="small"
+                      helperText="Utilise pour generer le subdomain"
+                    />
+                  </Grid>
+                </Grid>
+
+                <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => tunnelRelayTestMutation.mutate()}
+                    disabled={isTunnelRelayMutating || !relayServerUrl}
+                  >
+                    Tester la connexion
+                  </Button>
+                  {!tunnelRelayStatus?.enabled && (
+                    <Button
+                      variant="contained"
+                      size="small"
+                      onClick={() => tunnelRelayConfigureMutation.mutate({
+                        relayUrl: relayServerUrl,
+                        hostname: relayHostname || undefined,
+                      })}
+                      disabled={isTunnelRelayMutating || !relayServerUrl}
+                    >
+                      Sauvegarder
+                    </Button>
+                  )}
+                </Box>
+              </Box>
+
+              {/* Connected Status */}
+              {tunnelRelayStatus?.enabled && tunnelRelayStatus?.registered && (
+                <Box
+                  sx={{
+                    p: 2,
+                    borderRadius: 2,
+                    backgroundColor: tunnelRelayStatus.connected
+                      ? alpha(theme.palette.success.main, 0.08)
+                      : alpha(theme.palette.warning.main, 0.08),
+                    border: '1px solid',
+                    borderColor: tunnelRelayStatus.connected
+                      ? alpha(theme.palette.success.main, 0.3)
+                      : alpha(theme.palette.warning.main, 0.3),
+                    mb: 2,
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
+                      URL publique
+                    </Typography>
+                    <Chip
+                      label={tunnelRelayStatus.connected ? 'Connecte' : 'Enregistre'}
+                      size="small"
+                      color={tunnelRelayStatus.connected ? 'success' : 'warning'}
+                    />
+                  </Box>
+
+                  {tunnelRelayStatus.publicUrl && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Link
+                        href={tunnelRelayStatus.publicUrl}
+                        target="_blank"
+                        rel="noopener"
+                        sx={{
+                          fontFamily: 'monospace',
+                          fontSize: '1.1rem',
+                          fontWeight: 500,
+                          color: tunnelRelayStatus.connected ? 'success.main' : 'warning.main',
+                          textDecoration: 'none',
+                          '&:hover': { textDecoration: 'underline' },
+                        }}
+                      >
+                        {tunnelRelayStatus.publicUrl}
+                      </Link>
+                      <Tooltip title={copyRelayUrlSuccess ? 'Copie!' : "Copier l'URL"}>
+                        <IconButton size="small" onClick={handleCopyRelayUrl}>
+                          <CopyIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Ouvrir dans un nouvel onglet">
+                        <IconButton
+                          size="small"
+                          component="a"
+                          href={tunnelRelayStatus.publicUrl}
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          <OpenInNewIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  )}
+
+                  {/* WireGuard Info */}
+                  {tunnelRelayStatus.wireguard && (
+                    <Box sx={{ mt: 2 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        IP WireGuard: <strong>{tunnelRelayStatus.wireguard.clientIP}</strong>
+                      </Typography>
+                      {tunnelRelayStatus.tunnel?.lastHandshake && (
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                          Dernier handshake: {tunnelRelayStatus.tunnel.lastHandshake}
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
+
+                  {/* TURN Info */}
+                  {tunnelRelayStatus.turn && (
+                    <Box sx={{ mt: 1 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        TURN: {tunnelRelayStatus.turn.urls.length} serveurs configures
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        Credentials expirent: {new Date(tunnelRelayStatus.turn.expiresAt).toLocaleString()}
+                      </Typography>
+                    </Box>
+                  )}
+                </Box>
+              )}
+
+              {/* WireGuard availability warning */}
+              {!tunnelRelayStatus?.wireguardAvailable && tunnelRelayStatus?.enabled && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  WireGuard n'est pas installe. Le service fonctionne en mode TURN uniquement.
+                  Pour une latence optimale, installez WireGuard: <code>apt install wireguard</code>
+                </Alert>
+              )}
+
+              <Divider sx={{ my: 2 }} />
+
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Typography variant="caption" color="text.secondary">
+                  Propulse par Homenichat Relay - VPN WireGuard + TURN securise
+                </Typography>
+                {tunnelRelayStatus?.publicKey && (
+                  <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                    {tunnelRelayStatus.publicKey.substring(0, 12)}...
                   </Typography>
                 )}
               </Box>

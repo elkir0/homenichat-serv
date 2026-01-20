@@ -584,6 +584,44 @@ export const tunnelApi = {
   },
 };
 
+// API Admin - Tunnel Relay (WireGuard + TURN)
+export const tunnelRelayApi = {
+  getStatus: async () => {
+    const response = await api.get('/api/admin/tunnel-relay/status');
+    return response.data;
+  },
+
+  configure: async (config: { enabled?: boolean; relayUrl?: string; hostname?: string; autoConnect?: boolean }) => {
+    const response = await api.post('/api/admin/tunnel-relay/configure', config);
+    return response.data;
+  },
+
+  connect: async () => {
+    const response = await api.post('/api/admin/tunnel-relay/connect');
+    return response.data;
+  },
+
+  disconnect: async () => {
+    const response = await api.post('/api/admin/tunnel-relay/disconnect');
+    return response.data;
+  },
+
+  test: async (relayUrl?: string) => {
+    const response = await api.post('/api/admin/tunnel-relay/test', { relayUrl });
+    return response.data;
+  },
+
+  getCredentials: async () => {
+    const response = await api.get('/api/admin/tunnel-relay/credentials');
+    return response.data;
+  },
+
+  refreshCredentials: async () => {
+    const response = await api.post('/api/admin/tunnel-relay/refresh-credentials');
+    return response.data;
+  },
+};
+
 // API Admin - UPnP (Port Forwarding)
 export const upnpApi = {
   getStatus: async () => {

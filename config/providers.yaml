@@ -211,6 +211,26 @@ compliance:
           message: "Ajout automatique mention STOP"
 
 # ============================================================
+# TUNNEL RELAY - WireGuard + TURN pour accès distant zero-config
+# ============================================================
+
+tunnel_relay:
+  # Activer le service de tunnel relay
+  enabled: false
+
+  # URL du serveur relay Homenichat
+  relay_url: "${TUNNEL_RELAY_URL:https://relay.homenichat.com/api}"
+
+  # Hostname affiché (utilisé pour le subdomain)
+  hostname: "${TUNNEL_RELAY_HOSTNAME}"
+
+  # Connexion automatique au démarrage
+  auto_connect: true
+
+  # Intervalle de rafraîchissement des credentials TURN (ms)
+  refresh_interval_ms: 43200000  # 12 heures
+
+# ============================================================
 # ADVANCED - Options avancees
 # ============================================================
 

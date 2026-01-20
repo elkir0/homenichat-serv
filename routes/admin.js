@@ -29,6 +29,9 @@ let tunnelService = null;
 const InstallerService = require('../services/InstallerService');
 let installerService = null;
 
+// Import TunnelRelayService (WireGuard + TURN)
+const tunnelRelayService = require('../services/TunnelRelayService');
+
 /**
  * Initialise les routes avec les services nécessaires
  */
@@ -54,6 +57,12 @@ function initAdminRoutes(services) {
   // Initialize InstallerService
   installerService = new InstallerService({
     logger: console,
+  });
+
+  // Initialize TunnelRelayService (WireGuard + TURN)
+  tunnelRelayService.dataDir = services.dataDir || '/var/lib/homenichat';
+  tunnelRelayService.initialize().catch(err => {
+    console.error('[Admin] TunnelRelayService initialization error:', err.message);
   });
 
   return router;
@@ -3202,6 +3211,188 @@ router.post('/tunnel/toggle', async (req, res) => {
     });
   } catch (error) {
     console.error('[Admin] Tunnel toggle error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
+// TUNNEL RELAY - WireGuard + TURN pour accès distant zero-config
+// =============================================================================
+
+/**
+ * GET /api/admin/tunnel-relay/status
+ * Récupère le statut du service de tunnel relay
+ */
+router.get('/tunnel-relay/status', async (req, res) => {
+  try {
+    const status = await tunnelRelayService.getStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('[Admin] Tunnel relay status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/tunnel-relay/configure
+ * Configure le service de tunnel relay
+ */
+router.post('/tunnel-relay/configure', async (req, res) => {
+  try {
+    const { enabled, relayUrl, hostname, autoConnect } = req.body;
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'tunnel_relay_configure', {
+        category: 'system',
+        username: req.user.username,
+        enabled,
+        relayUrl,
+      }, req);
+    }
+
+    const status = await tunnelRelayService.configure({
+      enabled,
+      relayUrl,
+      hostname,
+      autoConnect,
+    });
+
+    res.json({
+      success: true,
+      ...status,
+    });
+  } catch (error) {
+    console.error('[Admin] Tunnel relay configure error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/tunnel-relay/connect
+ * Connecte le tunnel relay
+ */
+router.post('/tunnel-relay/connect', async (req, res) => {
+  try {
+    if (!tunnelRelayService.isConfigured()) {
+      return res.status(400).json({ error: 'Service non configuré' });
+    }
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'tunnel_relay_connect', {
+        category: 'system',
+        username: req.user.username,
+      }, req);
+    }
+
+    await tunnelRelayService.connect();
+    const status = await tunnelRelayService.getStatus();
+
+    res.json({
+      success: true,
+      ...status,
+    });
+  } catch (error) {
+    console.error('[Admin] Tunnel relay connect error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/tunnel-relay/disconnect
+ * Déconnecte le tunnel relay
+ */
+router.post('/tunnel-relay/disconnect', async (req, res) => {
+  try {
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'tunnel_relay_disconnect', {
+        category: 'system',
+        username: req.user.username,
+      }, req);
+    }
+
+    await tunnelRelayService.disconnect();
+    const status = await tunnelRelayService.getStatus();
+
+    res.json({
+      success: true,
+      ...status,
+    });
+  } catch (error) {
+    console.error('[Admin] Tunnel relay disconnect error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/tunnel-relay/test
+ * Teste la connexion au serveur relay
+ */
+router.post('/tunnel-relay/test', async (req, res) => {
+  try {
+    const { relayUrl } = req.body;
+
+    // Temporarily set URL for testing
+    const originalUrl = tunnelRelayService.config.relayUrl;
+    if (relayUrl) {
+      tunnelRelayService.config.relayUrl = relayUrl;
+    }
+
+    const result = await tunnelRelayService.testConnection();
+
+    // Restore original URL
+    tunnelRelayService.config.relayUrl = originalUrl;
+
+    res.json(result);
+  } catch (error) {
+    console.error('[Admin] Tunnel relay test error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/tunnel-relay/credentials
+ * Récupère les credentials TURN actuels
+ */
+router.get('/tunnel-relay/credentials', async (req, res) => {
+  try {
+    if (!tunnelRelayService.isConfigured()) {
+      return res.status(400).json({ error: 'Service non configuré' });
+    }
+
+    const turn = await tunnelRelayService.getTurnCredentials();
+    const iceServers = await tunnelRelayService.getIceServers();
+
+    res.json({
+      turn,
+      iceServers,
+    });
+  } catch (error) {
+    console.error('[Admin] Tunnel relay credentials error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/tunnel-relay/refresh-credentials
+ * Force le rafraîchissement des credentials TURN
+ */
+router.post('/tunnel-relay/refresh-credentials', async (req, res) => {
+  try {
+    if (!tunnelRelayService.isConfigured()) {
+      return res.status(400).json({ error: 'Service non configuré' });
+    }
+
+    const turn = await tunnelRelayService.refreshTurnCredentials();
+
+    res.json({
+      success: true,
+      turn,
+    });
+  } catch (error) {
+    console.error('[Admin] Tunnel relay refresh credentials error:', error);
     res.status(500).json({ error: error.message });
   }
 });
