@@ -1010,8 +1010,6 @@ usecallingpres=yes
 callingpres=allowed_passed_screen
 ; Audio format: SIM7600 requires 16kHz (slin16=yes), EC25 uses 8kHz (slin16=no)
 slin16=${SLIN16}
-; EC25 USB Audio Class (UAC) mode: set uac=ext and alsadev=hw:X per modem
-; UAC provides better audio quality than TTY audio mode
 QUECTEL_CONF
 
     # Auto-detect and configure modems based on ttyUSB ports
@@ -1037,81 +1035,14 @@ MODEM_CONF
             fi
         done
     elif [ "$MODEM_TYPE" = "EC25" ]; then
-        # EC25 modems support two audio modes:
-        # 1. TTY audio: audio=/dev/ttyUSBx (legacy mode)
-        # 2. USB Audio Class (UAC): uac=ext, alsadev=hw:X (better quality, recommended)
-        #
-        # USB Audio Class detection:
-        # - Check if modem exposes ALSA sound card (arecord -l | grep -i quectel)
-        # - If found, use UAC mode with alsadev parameter
-
+        # EC25 uses: ttyUSB2 (AT), ttyUSB1 (audio) - TTY audio mode only
+        # Note: EC25 requires IchthysMaranatha fork of chan_quectel (not RoEdAl)
         local MODEM_NUM=1
-        local USE_UAC=false
-        local UAC_DEVICES=()
-
-        # Detect USB Audio Class devices from Quectel modems
-        # Look for ALSA capture devices (modem presents as USB sound card)
-        info "Checking for USB Audio Class (UAC) devices..."
-        if command -v arecord &>/dev/null; then
-            # arecord -l shows capture devices, look for Quectel/EC25
-            # Format: "card X: Quectel ... device Y: ..."
-            while IFS= read -r line; do
-                if [[ "$line" =~ ^card\ ([0-9]+):.*[Qq]uectel|[Ee][Cc]25|USB\ Audio ]]; then
-                    local CARD_NUM="${BASH_REMATCH[1]}"
-                    UAC_DEVICES+=("hw:${CARD_NUM}")
-                    USE_UAC=true
-                    info "Found USB Audio device: hw:${CARD_NUM}"
-                fi
-            done < <(arecord -l 2>/dev/null | grep -iE "card [0-9]+:.*quectel|ec25|usb audio" || true)
-        fi
-
-        # Fallback: check /proc/asound/cards for Quectel devices
-        if [ "$USE_UAC" = false ] && [ -f /proc/asound/cards ]; then
-            while IFS= read -r line; do
-                if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+.*[Qq]uectel|[Ee][Cc]25 ]]; then
-                    local CARD_NUM="${BASH_REMATCH[1]}"
-                    UAC_DEVICES+=("hw:${CARD_NUM}")
-                    USE_UAC=true
-                    info "Found USB Audio device from /proc/asound: hw:${CARD_NUM}"
-                fi
-            done < <(grep -iE "quectel|ec25" /proc/asound/cards 2>/dev/null || true)
-        fi
-
-        if [ "$USE_UAC" = true ]; then
-            info "EC25 USB Audio Class (UAC) mode enabled - better audio quality"
-
-            # Configure modems with UAC
-            for ALSA_DEV in "${UAC_DEVICES[@]}"; do
-                # Find corresponding AT command port (ttyUSB2, ttyUSB7, etc.)
-                # EC25 USB ports: ttyUSB0=DM, ttyUSB1=GPS, ttyUSB2=AT, ttyUSB3=PPP
-                for BASE in 0 5 10 15; do
-                    DATA_PORT="/dev/ttyUSB$((BASE + 2))"
-                    if [ -e "$DATA_PORT" ]; then
-                        cat >> /etc/asterisk/quectel.conf << MODEM_CONF
-
-[modem-${MODEM_NUM}]
-data=${DATA_PORT}
-; USB Audio Class mode (better quality than TTY audio)
-uac=ext
-alsadev=${ALSA_DEV}
-context=from-gsm
-slin16=no
-txgain=-15
-MODEM_CONF
-                        info "Configured modem-${MODEM_NUM}: data=$DATA_PORT, alsadev=$ALSA_DEV (UAC mode)"
-                        MODEM_NUM=$((MODEM_NUM + 1))
-                        break
-                    fi
-                done
-            done
-        else
-            # Fallback to TTY audio mode
-            info "EC25 TTY audio mode (legacy) - USB Audio Class not detected"
-            for BASE in 0 5 10 15; do
-                DATA_PORT="/dev/ttyUSB$((BASE + 2))"
-                AUDIO_PORT="/dev/ttyUSB$((BASE + 1))"
-                if [ -e "$DATA_PORT" ] && [ -e "$AUDIO_PORT" ]; then
-                    cat >> /etc/asterisk/quectel.conf << MODEM_CONF
+        for BASE in 0 5 10 15; do
+            DATA_PORT="/dev/ttyUSB$((BASE + 2))"
+            AUDIO_PORT="/dev/ttyUSB$((BASE + 1))"
+            if [ -e "$DATA_PORT" ] && [ -e "$AUDIO_PORT" ]; then
+                cat >> /etc/asterisk/quectel.conf << MODEM_CONF
 
 [modem-${MODEM_NUM}]
 data=${DATA_PORT}
@@ -1120,19 +1051,18 @@ context=from-gsm
 slin16=no
 txgain=-15
 MODEM_CONF
-                    info "Configured modem-${MODEM_NUM}: data=$DATA_PORT, audio=$AUDIO_PORT (TTY mode)"
-                    MODEM_NUM=$((MODEM_NUM + 1))
-                fi
-            done
-        fi
+                info "Configured modem-${MODEM_NUM}: data=$DATA_PORT, audio=$AUDIO_PORT"
+                MODEM_NUM=$((MODEM_NUM + 1))
+            fi
+        done
     else
-        # No modem detected - add template with both TTY and UAC examples
+        # No modem detected - add template
         cat >> /etc/asterisk/quectel.conf << 'MODEM_TEMPLATE'
 
 ; No modems detected during installation
 ; Uncomment and configure when modem is connected:
 
-; === SIM7600 Example (TTY audio) ===
+; === SIM7600 Example (16kHz audio, slin16=yes) ===
 ;[modem-sim7600]
 ;data=/dev/ttyUSB2
 ;audio=/dev/ttyUSB4
@@ -1140,20 +1070,11 @@ MODEM_CONF
 ;slin16=yes
 ;txgain=-18
 
-; === EC25 Example (TTY audio - legacy) ===
-;[modem-ec25-tty]
+; === EC25 Example (8kHz TTY audio, slin16=no) ===
+; EC25 requires IchthysMaranatha fork of chan_quectel
+;[modem-ec25]
 ;data=/dev/ttyUSB2
 ;audio=/dev/ttyUSB1
-;context=from-gsm
-;slin16=no
-;txgain=-15
-
-; === EC25 Example (USB Audio Class - recommended) ===
-; Better audio quality, use 'arecord -l' to find hw:X device
-;[modem-ec25-uac]
-;data=/dev/ttyUSB2
-;uac=ext
-;alsadev=hw:3
 ;context=from-gsm
 ;slin16=no
 ;txgain=-15
@@ -1197,9 +1118,11 @@ UDEV_RULES
 
     # =========================================================================
     # COMPILATION SECTION - May fail, but configuration is already done
+    # Different forks required for different modem types:
+    # - EC25:    IchthysMaranatha fork (autoconf) - TTY audio only
+    # - SIM7600: RoEdAl fork @ 37b566f (CMake) - UAC/ALSA support
     # =========================================================================
 
-    # Clone chan_quectel (RoEdAl fork - the one that works)
     if [ -d "asterisk-chan-quectel" ]; then
         rm -rf asterisk-chan-quectel
     fi
@@ -1207,52 +1130,96 @@ UDEV_RULES
     # Track if compilation succeeds
     local CHAN_QUECTEL_COMPILED=false
 
-    info "Cloning chan_quectel (RoEdAl fork)..."
-    if run_cmd "Cloning chan_quectel" git clone https://github.com/RoEdAl/asterisk-chan-quectel.git; then
-        cd asterisk-chan-quectel
+    # Detect modem type to choose correct fork
+    local DETECTED_MODEM=""
+    if lsusb 2>/dev/null | grep -q "2c7c:"; then
+        DETECTED_MODEM="EC25"
+    elif lsusb 2>/dev/null | grep -q "1e0e:"; then
+        DETECTED_MODEM="SIM7600"
+    fi
 
-        # Use specific commit that works (from user's VM500 setup)
-        run_cmd "Checkout commit 37b566f" git checkout 37b566f || {
-            warning "Could not checkout known working commit, using latest"
-        }
+    if [ "$DETECTED_MODEM" = "EC25" ]; then
+        # EC25 requires IchthysMaranatha fork with autoconf build system
+        info "EC25 modem detected - using IchthysMaranatha fork (TTY audio)"
 
-        info "Building chan_quectel with CMake (Release mode)..."
-        mkdir -p build && cd build
+        if run_cmd "Cloning chan_quectel (IchthysMaranatha)" git clone https://github.com/IchthysMaranatha/asterisk-chan-quectel.git; then
+            cd asterisk-chan-quectel
 
-        # Run cmake with error checking
-        info "Running cmake..."
-        if run_cmd "CMake configure" cmake -DCMAKE_BUILD_TYPE=Release ..; then
-            # Run make with error checking
-            info "Running make (this may take a few minutes)..."
-            if run_cmd "Make build" make -j$(nproc); then
-                # Install
-                info "Installing chan_quectel module..."
-                if run_cmd "Make install" make install; then
-                    CHAN_QUECTEL_COMPILED=true
-                    success "chan_quectel compiled and installed successfully"
+            # Get Asterisk version for configure
+            local AST_VER=$(asterisk -V 2>/dev/null | sed 's/Asterisk //' | cut -d. -f1-2 || echo "22")
+            info "Asterisk version: $AST_VER"
+
+            # Build with autoconf
+            info "Running bootstrap..."
+            if run_cmd "Bootstrap" ./bootstrap; then
+                info "Running configure..."
+                if run_cmd "Configure" ./configure --with-astversion="$AST_VER"; then
+                    info "Running make (this may take a few minutes)..."
+                    if run_cmd "Make build" make -j$(nproc); then
+                        info "Installing chan_quectel module..."
+                        if run_cmd "Make install" make install; then
+                            CHAN_QUECTEL_COMPILED=true
+                            success "chan_quectel (IchthysMaranatha) compiled and installed"
+                        else
+                            warning "make install failed"
+                        fi
+                    else
+                        warning "make failed"
+                    fi
                 else
-                    warning "make install failed"
+                    warning "configure failed"
                 fi
             else
-                error "make failed! Check $LOG_FILE for details"
-                warning "chan_quectel compilation failed at make stage"
+                warning "bootstrap failed"
             fi
+            cd /usr/src
         else
-            error "cmake failed! Check $LOG_FILE for details"
-            echo "=== CMAKE ERROR ===" >> "$LOG_FILE"
-            run_cmd "CMake retry" cmake -DCMAKE_BUILD_TYPE=Release .. || true
-            warning "chan_quectel compilation failed at cmake stage"
+            warning "Could not clone IchthysMaranatha fork"
         fi
-
-        cd /usr/src
     else
-        warning "Could not clone chan_quectel - check network connectivity"
+        # SIM7600 (or no modem detected) - use RoEdAl fork with CMake
+        info "Using RoEdAl fork @ 37b566f (CMake build)"
+
+        if run_cmd "Cloning chan_quectel (RoEdAl)" git clone https://github.com/RoEdAl/asterisk-chan-quectel.git; then
+            cd asterisk-chan-quectel
+
+            # Use specific commit that works
+            run_cmd "Checkout commit 37b566f" git checkout 37b566f || {
+                warning "Could not checkout known working commit, using latest"
+            }
+
+            info "Building chan_quectel with CMake (Release mode)..."
+            mkdir -p build && cd build
+
+            info "Running cmake..."
+            if run_cmd "CMake configure" cmake -DCMAKE_BUILD_TYPE=Release ..; then
+                info "Running make (this may take a few minutes)..."
+                if run_cmd "Make build" make -j$(nproc); then
+                    info "Installing chan_quectel module..."
+                    if run_cmd "Make install" make install; then
+                        CHAN_QUECTEL_COMPILED=true
+                        success "chan_quectel (RoEdAl) compiled and installed"
+                    else
+                        warning "make install failed"
+                    fi
+                else
+                    warning "make failed"
+                fi
+            else
+                warning "cmake failed"
+            fi
+            cd /usr/src
+        else
+            warning "Could not clone RoEdAl fork"
+        fi
     fi
 
     # Continue with module installation even if compilation failed
     # (user can manually compile later)
 
-    # CMake installs to /usr/local/lib/*/asterisk/modules/ - copy to correct location
+    # Different forks install to different locations:
+    # - CMake (RoEdAl): /usr/local/lib/ARCH/asterisk/modules/
+    # - Autoconf (IchthysMaranatha): /usr/lib/asterisk/modules/ or /usr/local/lib/asterisk/modules/
     ARCH=$(uname -m)
     if [ "$ARCH" = "aarch64" ]; then
         LIB_ARCH="aarch64-linux-gnu"
@@ -1262,32 +1229,37 @@ UDEV_RULES
         LIB_ARCH="$ARCH-linux-gnu"
     fi
 
-    # Find the compiled module
-    CHAN_QUECTEL_SO="/usr/local/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so"
+    # Find the compiled module in various possible locations
+    CHAN_QUECTEL_SO=""
+    for SEARCH_PATH in \
+        "/usr/local/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so" \
+        "/usr/local/lib/asterisk/modules/chan_quectel.so" \
+        "/usr/lib/asterisk/modules/chan_quectel.so" \
+        "/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so"; do
+        if [ -f "$SEARCH_PATH" ]; then
+            CHAN_QUECTEL_SO="$SEARCH_PATH"
+            info "Found chan_quectel.so at: $CHAN_QUECTEL_SO"
+            break
+        fi
+    done
 
-    # Copy to all possible Asterisk module locations
-    # FreePBX uses /lib/x86_64-linux-gnu/asterisk/modules/
-    # Standalone uses /usr/lib/asterisk/modules/
-    if [ -f "$CHAN_QUECTEL_SO" ]; then
+    # Copy to all possible Asterisk module locations for compatibility
+    if [ -n "$CHAN_QUECTEL_SO" ]; then
         # FreePBX location (Debian packages)
         mkdir -p "/lib/${LIB_ARCH}/asterisk/modules" 2>/dev/null || true
         cp "$CHAN_QUECTEL_SO" "/lib/${LIB_ARCH}/asterisk/modules/" 2>/dev/null || true
 
-        # Standard location - copy the file
+        # Standard location
         mkdir -p /usr/lib/asterisk/modules 2>/dev/null || true
         cp "$CHAN_QUECTEL_SO" /usr/lib/asterisk/modules/ 2>/dev/null || true
 
-        # Create symlinks for maximum compatibility (bug #12)
-        # Homenichat may check different paths depending on setup
-        if [ -f "/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so" ]; then
-            # Symlink from /usr/lib to /lib location
-            ln -sf "/lib/${LIB_ARCH}/asterisk/modules/chan_quectel.so" \
-                   /usr/lib/asterisk/modules/chan_quectel.so 2>/dev/null || true
-        fi
+        # /usr/local location
+        mkdir -p /usr/local/lib/asterisk/modules 2>/dev/null || true
+        cp "$CHAN_QUECTEL_SO" /usr/local/lib/asterisk/modules/ 2>/dev/null || true
 
         info "chan_quectel.so copied to Asterisk module directories"
     else
-        warning "chan_quectel.so not found at expected location"
+        warning "chan_quectel.so not found - compilation may have failed"
     fi
 
     cd /usr/src
