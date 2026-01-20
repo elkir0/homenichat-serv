@@ -1010,6 +1010,8 @@ usecallingpres=yes
 callingpres=allowed_passed_screen
 ; Audio format: SIM7600 requires 16kHz (slin16=yes), EC25 uses 8kHz (slin16=no)
 slin16=${SLIN16}
+; EC25 USB Audio Class (UAC) mode: set uac=ext and alsadev=hw:X per modem
+; UAC provides better audio quality than TTY audio mode
 QUECTEL_CONF
 
     # Auto-detect and configure modems based on ttyUSB ports
@@ -1035,36 +1037,126 @@ MODEM_CONF
             fi
         done
     elif [ "$MODEM_TYPE" = "EC25" ]; then
-        # EC25 uses: ttyUSB2 (AT), ttyUSB1 (audio) per modem
+        # EC25 modems support two audio modes:
+        # 1. TTY audio: audio=/dev/ttyUSBx (legacy mode)
+        # 2. USB Audio Class (UAC): uac=ext, alsadev=hw:X (better quality, recommended)
+        #
+        # USB Audio Class detection:
+        # - Check if modem exposes ALSA sound card (arecord -l | grep -i quectel)
+        # - If found, use UAC mode with alsadev parameter
+
         local MODEM_NUM=1
-        for BASE in 0 5 10 15; do
-            DATA_PORT="/dev/ttyUSB$((BASE + 2))"
-            AUDIO_PORT="/dev/ttyUSB$((BASE + 1))"
-            if [ -e "$DATA_PORT" ] && [ -e "$AUDIO_PORT" ]; then
-                cat >> /etc/asterisk/quectel.conf << MODEM_CONF
+        local USE_UAC=false
+        local UAC_DEVICES=()
+
+        # Detect USB Audio Class devices from Quectel modems
+        # Look for ALSA capture devices (modem presents as USB sound card)
+        info "Checking for USB Audio Class (UAC) devices..."
+        if command -v arecord &>/dev/null; then
+            # arecord -l shows capture devices, look for Quectel/EC25
+            # Format: "card X: Quectel ... device Y: ..."
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^card\ ([0-9]+):.*[Qq]uectel|[Ee][Cc]25|USB\ Audio ]]; then
+                    local CARD_NUM="${BASH_REMATCH[1]}"
+                    UAC_DEVICES+=("hw:${CARD_NUM}")
+                    USE_UAC=true
+                    info "Found USB Audio device: hw:${CARD_NUM}"
+                fi
+            done < <(arecord -l 2>/dev/null | grep -iE "card [0-9]+:.*quectel|ec25|usb audio" || true)
+        fi
+
+        # Fallback: check /proc/asound/cards for Quectel devices
+        if [ "$USE_UAC" = false ] && [ -f /proc/asound/cards ]; then
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+.*[Qq]uectel|[Ee][Cc]25 ]]; then
+                    local CARD_NUM="${BASH_REMATCH[1]}"
+                    UAC_DEVICES+=("hw:${CARD_NUM}")
+                    USE_UAC=true
+                    info "Found USB Audio device from /proc/asound: hw:${CARD_NUM}"
+                fi
+            done < <(grep -iE "quectel|ec25" /proc/asound/cards 2>/dev/null || true)
+        fi
+
+        if [ "$USE_UAC" = true ]; then
+            info "EC25 USB Audio Class (UAC) mode enabled - better audio quality"
+
+            # Configure modems with UAC
+            for ALSA_DEV in "${UAC_DEVICES[@]}"; do
+                # Find corresponding AT command port (ttyUSB2, ttyUSB7, etc.)
+                # EC25 USB ports: ttyUSB0=DM, ttyUSB1=GPS, ttyUSB2=AT, ttyUSB3=PPP
+                for BASE in 0 5 10 15; do
+                    DATA_PORT="/dev/ttyUSB$((BASE + 2))"
+                    if [ -e "$DATA_PORT" ]; then
+                        cat >> /etc/asterisk/quectel.conf << MODEM_CONF
+
+[modem-${MODEM_NUM}]
+data=${DATA_PORT}
+; USB Audio Class mode (better quality than TTY audio)
+uac=ext
+alsadev=${ALSA_DEV}
+context=from-gsm
+slin16=no
+txgain=-15
+MODEM_CONF
+                        info "Configured modem-${MODEM_NUM}: data=$DATA_PORT, alsadev=$ALSA_DEV (UAC mode)"
+                        MODEM_NUM=$((MODEM_NUM + 1))
+                        break
+                    fi
+                done
+            done
+        else
+            # Fallback to TTY audio mode
+            info "EC25 TTY audio mode (legacy) - USB Audio Class not detected"
+            for BASE in 0 5 10 15; do
+                DATA_PORT="/dev/ttyUSB$((BASE + 2))"
+                AUDIO_PORT="/dev/ttyUSB$((BASE + 1))"
+                if [ -e "$DATA_PORT" ] && [ -e "$AUDIO_PORT" ]; then
+                    cat >> /etc/asterisk/quectel.conf << MODEM_CONF
 
 [modem-${MODEM_NUM}]
 data=${DATA_PORT}
 audio=${AUDIO_PORT}
 context=from-gsm
 slin16=no
+txgain=-15
 MODEM_CONF
-                info "Configured modem-${MODEM_NUM}: data=$DATA_PORT, audio=$AUDIO_PORT"
-                MODEM_NUM=$((MODEM_NUM + 1))
-            fi
-        done
+                    info "Configured modem-${MODEM_NUM}: data=$DATA_PORT, audio=$AUDIO_PORT (TTY mode)"
+                    MODEM_NUM=$((MODEM_NUM + 1))
+                fi
+            done
+        fi
     else
-        # No modem detected - add template
+        # No modem detected - add template with both TTY and UAC examples
         cat >> /etc/asterisk/quectel.conf << 'MODEM_TEMPLATE'
 
 ; No modems detected during installation
 ; Uncomment and configure when modem is connected:
-;[modem-1]
+
+; === SIM7600 Example (TTY audio) ===
+;[modem-sim7600]
 ;data=/dev/ttyUSB2
 ;audio=/dev/ttyUSB4
 ;context=from-gsm
 ;slin16=yes
 ;txgain=-18
+
+; === EC25 Example (TTY audio - legacy) ===
+;[modem-ec25-tty]
+;data=/dev/ttyUSB2
+;audio=/dev/ttyUSB1
+;context=from-gsm
+;slin16=no
+;txgain=-15
+
+; === EC25 Example (USB Audio Class - recommended) ===
+; Better audio quality, use 'arecord -l' to find hw:X device
+;[modem-ec25-uac]
+;data=/dev/ttyUSB2
+;uac=ext
+;alsadev=hw:3
+;context=from-gsm
+;slin16=no
+;txgain=-15
 MODEM_TEMPLATE
     fi
 
