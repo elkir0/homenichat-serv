@@ -3489,7 +3489,8 @@ router.post('/homenichat-cloud/login', [
     });
   } catch (error) {
     console.error('[Admin] Homenichat Cloud login error:', error);
-    res.status(401).json({ error: error.message });
+    // Use 400 instead of 401 to avoid triggering admin session redirect
+    res.status(400).json({ error: error.message });
   }
 });
 
