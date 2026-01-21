@@ -519,11 +519,39 @@ if (process.env.NODE_ENV === 'production') {
     res.sendFile(path.join(__dirname, 'admin/dist', 'index.html'));
   });
 
-  // Frontend principal
-  app.use(express.static(path.join(__dirname, '../frontend/build')));
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../frontend/build', 'index.html'));
-  });
+  // Frontend principal (PWA) - optionnel
+  const frontendPath = path.join(__dirname, '../frontend/build');
+  const frontendExists = fs.existsSync(frontendPath);
+
+  if (frontendExists) {
+    app.use(express.static(frontendPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(frontendPath, 'index.html'));
+    });
+  } else {
+    // Sans frontend PWA, rediriger vers l'admin ou retourner une réponse API
+    app.get('/', (req, res) => {
+      // Si requête API ou pas de frontend, retourner status JSON
+      if (req.headers.accept?.includes('application/json') || req.path.startsWith('/api')) {
+        return res.json({
+          service: 'homenichat-serv',
+          status: 'running',
+          admin: '/admin',
+          api: '/api'
+        });
+      }
+      // Sinon rediriger vers l'admin panel
+      res.redirect('/admin');
+    });
+
+    // Catch-all pour les routes non-API
+    app.get('*', (req, res) => {
+      if (req.path.startsWith('/api')) {
+        return res.status(404).json({ error: 'Endpoint not found' });
+      }
+      res.redirect('/admin');
+    });
+  }
 }
 
 // WebSocket pour le temps réel
