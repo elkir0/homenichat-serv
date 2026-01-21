@@ -26,7 +26,7 @@ const { router: adminRouter, initAdminRoutes } = require('./routes/admin');
 const { router: discoveryRouter, initDiscoveryRoutes } = require('./routes/discovery');
 // const MessagePoller = require('./messagePoller');
 // const { logWebhook } = require('./webhookDebugger');
-const { verifyToken, verifyWebSocketToken } = require('./middleware/auth');
+const { verifyToken, verifyWebSocketToken, optionalVerifyToken } = require('./middleware/auth');
 const providerManager = require('./services/ProviderManager');
 const sessionManager = require('./services/SessionManager');
 const pushService = require('./services/PushService');
@@ -306,12 +306,12 @@ app.use('/api/config', configRoutes); // Configuration YAML multi-provider
 // Routes Admin (protégées par auth + admin only)
 app.use('/api/admin', verifyToken, adminOnlyMiddleware(securityService), adminRouter);
 
-// Routes Discovery pour l'app mobile (protégées par auth simple)
-// Health check sans auth, autres routes avec auth
+// Routes Discovery pour l'app mobile (auth optionnelle)
+// Permet l'accès sans token (pour cloud) mais retourne plus d'infos avec token (voipCredentials)
 app.get('/api/discovery/health', (req, res) => {
   res.json({ status: 'ok', server: 'Homenichat-serv', timestamp: Date.now() });
 });
-app.use('/api/discovery', verifyToken, discoveryRouter);
+app.use('/api/discovery', optionalVerifyToken, discoveryRouter);
 
 // Routes de compatibilité pour les apps mobiles (iOS/Android)
 // Ces routes fournissent des alias vers les endpoints v2 avec le format attendu par les apps

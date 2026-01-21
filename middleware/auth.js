@@ -72,6 +72,43 @@ const isAdmin = (req, res, next) => {
   }
 };
 
+// Middleware optionnel - parse le token si présent mais n'échoue pas si absent
+// Utile pour les endpoints qui fonctionnent avec ou sans auth
+const optionalVerifyToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    let token = authHeader && authHeader.split(' ')[1];
+
+    if (!token && req.query.token) {
+      token = req.query.token;
+    }
+
+    if (!token) {
+      // Pas de token = pas d'utilisateur, mais on continue
+      req.user = null;
+      return next();
+    }
+
+    // Vérifier le token JWT
+    jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+      if (err) {
+        // Token invalide = pas d'utilisateur, mais on continue
+        req.user = null;
+        return next();
+      }
+
+      // Récupérer l'utilisateur depuis la base
+      const user = db.getUserById(decoded.id);
+      req.user = user || null;
+      next();
+    });
+  } catch (error) {
+    // Erreur = pas d'utilisateur, mais on continue
+    req.user = null;
+    next();
+  }
+};
+
 // Middleware pour WebSocket
 const verifyWebSocketToken = async (token) => {
   try {
@@ -92,6 +129,7 @@ const verifyWebSocketToken = async (token) => {
 module.exports = {
   generateToken,
   verifyToken,
+  optionalVerifyToken,
   isAdmin,
   requireAdmin: isAdmin, // Alias pour la cohérence
   verifyWebSocketToken,
