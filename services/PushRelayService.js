@@ -2,24 +2,32 @@
  * PushRelayService - Client for Homenichat Push Relay
  *
  * Sends push notifications via the centralized Homenichat relay server.
- * Configuration is automatic - no user setup required.
+ * Uses the API token from HomenichatCloudService for authentication.
  */
 
 const logger = require('../utils/logger');
 
-// Hardcoded Homenichat Push Relay configuration
+// Push Relay URL
 const PUSH_RELAY_URL = 'https://push.homenichat.com';
-const PUSH_RELAY_API_KEY = 'hpr_330b321fc948475b5c5b87b57bc2e5204d765a5d0feb761f718302b3335848fd';
+
+// Lazy load to avoid circular dependencies
+let homenichatCloudService = null;
+
+const getCloudService = () => {
+  if (!homenichatCloudService) {
+    homenichatCloudService = require('./HomenichatCloudService');
+  }
+  return homenichatCloudService;
+};
 
 class PushRelayService {
   constructor() {
     this.relayUrl = PUSH_RELAY_URL;
-    this.apiKey = PUSH_RELAY_API_KEY;
     this.initialized = false;
   }
 
   /**
-   * Initialize the service (auto-configured)
+   * Initialize the service
    */
   initialize() {
     this.initialized = true;
@@ -28,10 +36,19 @@ class PushRelayService {
   }
 
   /**
-   * Check if relay is configured (always true)
+   * Check if relay is configured (cloud service is logged in)
    */
   isConfigured() {
-    return true;
+    const cloud = getCloudService();
+    return cloud.isLoggedIn();
+  }
+
+  /**
+   * Get API token from cloud service
+   */
+  getApiToken() {
+    const cloud = getCloudService();
+    return cloud.auth?.apiToken || null;
   }
 
   /**
@@ -42,11 +59,16 @@ class PushRelayService {
       this.initialize();
     }
 
+    const apiToken = this.getApiToken();
+    if (!apiToken) {
+      throw new Error('Not logged in to Homenichat Cloud');
+    }
+
     const url = `${this.relayUrl}${endpoint}`;
     const options = {
       method,
       headers: {
-        'X-API-Key': this.apiKey,
+        'Authorization': `Bearer ${apiToken}`,
         'Content-Type': 'application/json',
       },
     };
@@ -109,7 +131,8 @@ class PushRelayService {
   }
 
   /**
-   * Send push notification to a user
+   * Send push notification to current user's devices
+   * Uses the logged-in user's ID automatically
    */
   async sendToUser(userId, type, data, notification = null) {
     try {
@@ -130,6 +153,48 @@ class PushRelayService {
     } catch (error) {
       logger.error(`[PushRelay] Push send failed:`, error.message);
       return { success: false, sent: 0, error: error.message };
+    }
+  }
+
+  /**
+   * Broadcast push notification to all devices registered with current user
+   * This is the main method for server-to-app notifications
+   */
+  async broadcast(type, data, notification = null) {
+    try {
+      // Get user ID from cloud service
+      const cloud = getCloudService();
+      const userId = cloud.auth?.userId;
+
+      if (!userId) {
+        logger.warn('[PushRelay] Cannot broadcast: no user ID');
+        return { success: false, sent: 0, error: 'Not logged in' };
+      }
+
+      const payload = {
+        type,
+        data,
+      };
+
+      if (notification) {
+        payload.notification = notification;
+      }
+
+      // Send to all devices for this user
+      const result = await this._request('/push/send', 'POST', {
+        userId: String(userId),
+        ...payload,
+      });
+
+      logger.info(`[PushRelay] Broadcast: type=${type} userId=${userId} sent=${result.sent || 0}`);
+      return {
+        success: true,
+        sent: result.sent || 0,
+        failed: result.failed || 0,
+      };
+    } catch (error) {
+      logger.error(`[PushRelay] Broadcast failed:`, error.message);
+      return { success: false, sent: 0, failed: 0, error: error.message };
     }
   }
 
@@ -180,7 +245,7 @@ class PushRelayService {
   }
 
   /**
-   * Get registered devices
+   * Get registered devices for current user
    */
   async getDevices() {
     try {
@@ -207,8 +272,9 @@ class PushRelayService {
    */
   getStatus() {
     return {
-      configured: true,
+      configured: this.isConfigured(),
       relayUrl: this.relayUrl,
+      loggedIn: this.isConfigured(),
     };
   }
 }

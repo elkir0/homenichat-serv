@@ -219,6 +219,26 @@ app.post('/api/internal/sms/incoming', async (req, res) => {
 
     console.log(`[SMS] ChatId: ${chatId} (local: ${normalizedLocal}, remote: ${normalizedFrom})`);
 
+    // 2.5. Deduplication: Check if identical message received in last 60 seconds
+    const timestampSec = Math.floor(timestamp / 1000);
+    const dedupeWindow = 60; // seconds
+    const existingMsg = db.prepare(`
+      SELECT id FROM messages
+      WHERE chat_id = ? AND content = ? AND from_me = 0
+        AND timestamp > ?
+      LIMIT 1
+    `).get(chatId, text, timestampSec - dedupeWindow);
+
+    if (existingMsg) {
+      console.log(`[SMS] Duplicate detected (existing: ${existingMsg.id}), skipping`);
+      return res.json({
+        success: true,
+        duplicate: true,
+        existingId: existingMsg.id,
+        message: 'Duplicate SMS ignored'
+      });
+    }
+
     // 3. Create/update chat in database
     const chatStmt = db.prepare(`
       INSERT INTO chats (id, name, provider, timestamp, local_phone_number)
@@ -227,14 +247,14 @@ app.post('/api/internal/sms/incoming', async (req, res) => {
         timestamp = excluded.timestamp,
         unread_count = unread_count + 1
     `);
-    chatStmt.run(chatId, normalizedFrom, Math.floor(timestamp / 1000), normalizedLocal || device);
+    chatStmt.run(chatId, normalizedFrom, timestampSec, normalizedLocal || device);
 
     // 3. Store message in database
     const msgStmt = db.prepare(`
       INSERT INTO messages (id, chat_id, sender_id, from_me, type, content, timestamp, status)
       VALUES (?, ?, ?, 0, 'text', ?, ?, 'received')
     `);
-    msgStmt.run(messageId, chatId, from, text, Math.floor(timestamp / 1000));
+    msgStmt.run(messageId, chatId, from, text, timestampSec);
 
     console.log(`[SMS] Stored in DB: messageId=${messageId}, chatId=${chatId}`);
 
