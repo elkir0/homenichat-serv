@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 const WebSocket = require('ws');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 // Import des routes
