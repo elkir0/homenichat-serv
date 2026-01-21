@@ -394,9 +394,8 @@ class HomenichatCloudService extends EventEmitter {
       throw new Error('Not logged in');
     }
 
-    if (!this.tunnel.publicKey) {
-      await this.ensureKeys();
-    }
+    // Always ensure keys are loaded (both public and private)
+    await this.ensureKeys();
 
     logger.info('[HomenichatCloud] Registering with tunnel relay...');
 
@@ -454,6 +453,9 @@ class HomenichatCloudService extends EventEmitter {
     if (!this.tunnel.registered || !this.tunnel.registration) {
       await this.registerTunnel();
     }
+
+    // Ensure keys are loaded (privateKey is needed for config)
+    await this.ensureKeys();
 
     // Create WireGuard config
     await this.createWireGuardConfig();
