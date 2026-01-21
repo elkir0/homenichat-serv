@@ -18,22 +18,34 @@ async function validateCloudToken(token) {
   // Check cache first
   const cached = cloudTokenCache.get(token);
   if (cached && Date.now() - cached.timestamp < CLOUD_TOKEN_CACHE_TTL) {
+    console.log('[Auth] Cloud token found in cache, user:', cached.user.username);
     return cached.user;
   }
 
+  const validationUrl = `${CLOUD_PROVISIONING_URL}/api/auth/validate-token`;
+  console.log('[Auth] Validating cloud token against:', validationUrl);
+  console.log('[Auth] Token prefix:', token.substring(0, 10) + '...');
+
   try {
-    const response = await fetch(`${CLOUD_PROVISIONING_URL}/api/auth/validate-token`, {
+    const response = await fetch(validationUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token }),
     });
 
+    console.log('[Auth] Validation response status:', response.status);
+
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[Auth] Validation failed:', response.status, errorText);
       return null;
     }
 
     const data = await response.json();
+    console.log('[Auth] Validation response:', JSON.stringify(data));
+
     if (!data.valid) {
+      console.error('[Auth] Token marked as invalid by provisioning server');
       return null;
     }
 
@@ -49,10 +61,12 @@ async function validateCloudToken(token) {
 
     // Cache the result
     cloudTokenCache.set(token, { user: cloudUser, timestamp: Date.now() });
+    console.log('[Auth] Cloud token validated and cached for user:', cloudUser.username);
 
     return cloudUser;
   } catch (error) {
     console.error('[Auth] Cloud token validation error:', error.message);
+    console.error('[Auth] Full error:', error);
     return null;
   }
 }
