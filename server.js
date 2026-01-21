@@ -189,8 +189,37 @@ app.post('/api/internal/sms/incoming', async (req, res) => {
     const webPushService = require('./services/WebPushService');
     const pushRelayService = require('./services/PushRelayService');
 
-    // 2. Create/update chat in database
-    const chatId = `sms-${from.replace(/[^0-9+]/g, '')}`;
+    // 2. Get modem's phone number for consistent chatId format
+    let localPhoneNumber = '';
+    try {
+      const ModemService = require('./services/ModemService');
+      const modemSvc = new ModemService();
+      const modemsConfig = modemSvc.getModemsConfig ? modemSvc.getModemsConfig() : modemSvc.modemsConfig;
+      if (modemsConfig && modemsConfig.modems && modemsConfig.modems[device]) {
+        localPhoneNumber = modemsConfig.modems[device].phoneNumber || '';
+      }
+      // Fallback: try modem-1 if device not found
+      if (!localPhoneNumber && modemsConfig && modemsConfig.modems) {
+        const firstModem = Object.values(modemsConfig.modems)[0];
+        if (firstModem) {
+          localPhoneNumber = firstModem.phoneNumber || '';
+        }
+      }
+    } catch (e) {
+      console.warn('[SMS] Could not get modem phone number:', e.message);
+    }
+
+    // Normalize phone numbers
+    const normalizedFrom = from.replace(/[^0-9+]/g, '');
+    const normalizedLocal = localPhoneNumber.replace(/[^0-9+]/g, '');
+
+    // ChatId format: sms_+localNumber_+remoteNumber (same as iOS app outgoing format)
+    // This ensures incoming and outgoing messages are in the same conversation
+    const chatId = normalizedLocal ? `sms_${normalizedLocal}_${normalizedFrom}` : `sms_${normalizedFrom}`;
+
+    console.log(`[SMS] ChatId: ${chatId} (local: ${normalizedLocal}, remote: ${normalizedFrom})`);
+
+    // 3. Create/update chat in database
     const chatStmt = db.prepare(`
       INSERT INTO chats (id, name, provider, timestamp, local_phone_number)
       VALUES (?, ?, 'sms', ?, ?)
@@ -198,7 +227,7 @@ app.post('/api/internal/sms/incoming', async (req, res) => {
         timestamp = excluded.timestamp,
         unread_count = unread_count + 1
     `);
-    chatStmt.run(chatId, from, Math.floor(timestamp / 1000), device);
+    chatStmt.run(chatId, normalizedFrom, Math.floor(timestamp / 1000), normalizedLocal || device);
 
     // 3. Store message in database
     const msgStmt = db.prepare(`

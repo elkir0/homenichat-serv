@@ -93,6 +93,11 @@ router.post('/sms/send', verifyToken, async (req, res) => {
     const modemSvc = getModemService();
     const modemsConfig = modemSvc.getModemsConfig ? modemSvc.getModemsConfig() : modemSvc.modemsConfig;
 
+    let actualFromNumber = from;
+    let sendResult = null;
+    let provider = null;
+    let modemId = null;
+
     if (modemsConfig && modemsConfig.modems && Object.keys(modemsConfig.modems).length > 0) {
       // We have modems configured, try to send via modem
       const modemIds = Object.keys(modemsConfig.modems);
@@ -100,41 +105,98 @@ router.post('/sms/send', verifyToken, async (req, res) => {
 
       // If 'from' matches a modem's phone number, use that modem
       if (from) {
-        for (const [modemId, config] of Object.entries(modemsConfig.modems)) {
+        for (const [mId, config] of Object.entries(modemsConfig.modems)) {
           if (config.phoneNumber && config.phoneNumber.replace(/\D/g, '') === from.replace(/\D/g, '')) {
-            targetModem = modemId;
+            targetModem = mId;
+            actualFromNumber = config.phoneNumber;
             break;
           }
         }
       }
 
-      logger.info(`[Mobile SMS] Using modem: ${targetModem}`);
+      // Get the from number from modem config if not provided
+      if (!actualFromNumber && modemsConfig.modems[targetModem]?.phoneNumber) {
+        actualFromNumber = modemsConfig.modems[targetModem].phoneNumber;
+      }
+
+      logger.info(`[Mobile SMS] Using modem: ${targetModem}, from: ${actualFromNumber}`);
 
       try {
-        const result = await modemSvc.sendSms(targetModem, to, message);
-        return res.json({
-          success: true,
-          messageId: result.messageId || `sms_${Date.now()}`,
-          provider: 'modem',
-          modemId: targetModem
-        });
+        sendResult = await modemSvc.sendSms(targetModem, to, message);
+        provider = 'modem';
+        modemId = targetModem;
       } catch (modemError) {
         logger.warn(`[Mobile SMS] Modem send failed: ${modemError.message}, trying cloud providers...`);
         // Fall through to SmsRoutingService
       }
     }
 
-    // Fall back to SmsRoutingService (cloud providers)
-    const smsRouting = getSmsRoutingService();
-    const result = await smsRouting.sendMessage(to, message, {
-      from,
-      providerId: req.body.providerId
-    });
+    // Fall back to SmsRoutingService (cloud providers) if modem failed
+    if (!sendResult) {
+      const smsRouting = getSmsRoutingService();
+      sendResult = await smsRouting.sendMessage(to, message, {
+        from,
+        providerId: req.body.providerId
+      });
+      provider = sendResult.providerId || 'cloud';
+    }
+
+    // Store outgoing message in database
+    if (sendResult && (sendResult.success !== false)) {
+      try {
+        const db = require('../services/DatabaseService');
+        const timestamp = Date.now();
+        const messageId = sendResult.messageId || `sms_${timestamp}_${Math.random().toString(36).substring(7)}`;
+
+        // Normalize phone numbers for chatId (consistent format)
+        const normalizedFrom = (actualFromNumber || from || '').replace(/[^0-9+]/g, '');
+        const normalizedTo = to.replace(/[^0-9+]/g, '');
+
+        // ChatId format: sms_+fromNumber_+toNumber (same as iOS app)
+        const chatId = `sms_${normalizedFrom}_${normalizedTo}`;
+
+        // Create/update chat
+        const chatStmt = db.prepare(`
+          INSERT INTO chats (id, name, provider, timestamp, local_phone_number)
+          VALUES (?, ?, 'sms', ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            timestamp = excluded.timestamp
+        `);
+        chatStmt.run(chatId, normalizedTo, Math.floor(timestamp / 1000), normalizedFrom);
+
+        // Store message
+        const msgStmt = db.prepare(`
+          INSERT INTO messages (id, chat_id, sender_id, from_me, type, content, timestamp, status)
+          VALUES (?, ?, ?, 1, 'text', ?, ?, 'sent')
+        `);
+        msgStmt.run(messageId, chatId, normalizedFrom, message, Math.floor(timestamp / 1000));
+
+        logger.info(`[Mobile SMS] Stored in DB: messageId=${messageId}, chatId=${chatId}`);
+
+        return res.json({
+          success: true,
+          messageId: messageId,
+          chatId: chatId,
+          provider: provider,
+          modemId: modemId
+        });
+      } catch (dbError) {
+        logger.error('[Mobile SMS] DB storage failed:', dbError.message);
+        // Still return success since SMS was sent
+        return res.json({
+          success: true,
+          messageId: sendResult.messageId || `sms_${Date.now()}`,
+          provider: provider,
+          modemId: modemId,
+          warning: 'Message sent but not stored in database'
+        });
+      }
+    }
 
     res.json({
-      success: result.success,
-      messageId: result.messageId,
-      error: result.error
+      success: sendResult?.success || false,
+      messageId: sendResult?.messageId,
+      error: sendResult?.error
     });
   } catch (error) {
     logger.error('[Mobile SMS] Error:', error);
