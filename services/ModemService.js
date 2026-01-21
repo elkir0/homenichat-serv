@@ -888,7 +888,7 @@ class ModemService {
     // Essayer d'abord via Asterisk (config VM500 style)
     try {
       const safeMessage = message.replace(/"/g, '\\"').replace(/'/g, "\\'");
-      const result = await this.asteriskCmd(`quectel sms send ${modemId} ${to} "${safeMessage}"`);
+      const result = await this.asteriskCmd(`quectel sms ${modemId} ${to} "${safeMessage}"`);
 
       if (result && result.includes('queued')) {
         this.logger.info(`[ModemService] SMS queued via Asterisk ${modemId} to ${to}`);
