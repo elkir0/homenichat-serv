@@ -248,10 +248,12 @@ class HomenichatCloudService extends EventEmitter {
    */
   async login(email, password) {
     try {
+      logger.info('[HomenichatCloud] Attempting login', { email, passwordLength: password?.length });
       const response = await this.apiRequest('POST', '/api/auth/login', {
         email,
         password,
       });
+      logger.info('[HomenichatCloud] Login response', { success: response.success, error: response.error });
 
       if (!response.success) {
         throw new Error(response.error || 'Login failed');
