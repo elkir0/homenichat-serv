@@ -627,4 +627,80 @@ export const pushRelayApi = {
   },
 };
 
+// API Admin - Homenichat Cloud (UNIFIED: Push + Tunnel with email/password)
+export interface HomenichatCloudStatus {
+  loggedIn: boolean;
+  email: string | null;
+  userId: string | null;
+  services: {
+    push: { enabled: boolean; url: string };
+    tunnel: {
+      enabled: boolean;
+      url: string;
+      configured: boolean;
+      registered: boolean;
+      connected: boolean;
+      wireguardAvailable: boolean;
+    };
+  };
+  clientId: string;
+  hostname: string;
+  publicKey: string | null;
+  subdomain?: string;
+  publicUrl?: string;
+  wireguard?: { clientIP: string; serverEndpoint: string };
+  turn?: { urls: string[]; expiresAt: string };
+  tunnelStats?: { interface: string; lastHandshake: string | null; bytesReceived: string; bytesSent: string };
+  lastError: string | null;
+  lastRefresh: number | null;
+  lastHeartbeat: number | null;
+}
+
+export const homenichatCloudApi = {
+  getStatus: async (): Promise<HomenichatCloudStatus> => {
+    const response = await api.get('/api/admin/homenichat-cloud/status');
+    return response.data;
+  },
+
+  register: async (email: string, password: string, name?: string) => {
+    const response = await api.post('/api/admin/homenichat-cloud/register', { email, password, name });
+    return response.data;
+  },
+
+  login: async (email: string, password: string) => {
+    const response = await api.post('/api/admin/homenichat-cloud/login', { email, password });
+    return response.data;
+  },
+
+  logout: async () => {
+    const response = await api.post('/api/admin/homenichat-cloud/logout');
+    return response.data;
+  },
+
+  connect: async () => {
+    const response = await api.post('/api/admin/homenichat-cloud/connect');
+    return response.data;
+  },
+
+  disconnect: async () => {
+    const response = await api.post('/api/admin/homenichat-cloud/disconnect');
+    return response.data;
+  },
+
+  test: async () => {
+    const response = await api.post('/api/admin/homenichat-cloud/test');
+    return response.data;
+  },
+
+  getCredentials: async () => {
+    const response = await api.get('/api/admin/homenichat-cloud/credentials');
+    return response.data;
+  },
+
+  configure: async (config: { hostname?: string; autoConnect?: boolean }) => {
+    const response = await api.post('/api/admin/homenichat-cloud/configure', config);
+    return response.data;
+  },
+};
+
 export default api;

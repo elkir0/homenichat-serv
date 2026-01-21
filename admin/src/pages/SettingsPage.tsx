@@ -43,7 +43,7 @@ import {
   Visibility as VisibilityIcon,
   VisibilityOff as VisibilityOffIcon,
 } from '@mui/icons-material';
-import { configApi, tunnelRelayApi, pushRelayApi } from '../services/api';
+import { configApi, tunnelRelayApi, pushRelayApi, homenichatCloudApi, HomenichatCloudStatus } from '../services/api';
 
 interface ServerConfig {
   server: {
@@ -191,6 +191,127 @@ export default function SettingsPage() {
       relayUrl: relayUrl || null,
       apiKey: relayApiKey || null,
     });
+  };
+
+  // Homenichat Cloud status query (UNIFIED: Push + Tunnel with email/password)
+  const { data: cloudStatus, refetch: refetchCloud } = useQuery<HomenichatCloudStatus>({
+    queryKey: ['homenichatCloudStatus'],
+    queryFn: homenichatCloudApi.getStatus,
+    refetchInterval: 10000,
+  });
+
+  // Cloud auth state
+  const [cloudEmail, setCloudEmail] = useState('');
+  const [cloudPassword, setCloudPassword] = useState('');
+  const [cloudName, setCloudName] = useState('');
+  const [showCloudPassword, setShowCloudPassword] = useState(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const [cloudResult, setCloudResult] = useState<string | null>(null);
+  const [isRegistering, setIsRegistering] = useState(false);
+
+  // Cloud mutations
+  const cloudLoginMutation = useMutation({
+    mutationFn: ({ email, password }: { email: string; password: string }) =>
+      homenichatCloudApi.login(email, password),
+    onSuccess: () => {
+      refetchCloud();
+      setCloudResult('Connexion reussie a Homenichat Cloud');
+      setCloudError(null);
+      setCloudEmail('');
+      setCloudPassword('');
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      setCloudError(error.response?.data?.error || error.message);
+    },
+  });
+
+  const cloudRegisterMutation = useMutation({
+    mutationFn: ({ email, password, name }: { email: string; password: string; name?: string }) =>
+      homenichatCloudApi.register(email, password, name),
+    onSuccess: () => {
+      refetchCloud();
+      setCloudResult('Compte cree et connecte a Homenichat Cloud');
+      setCloudError(null);
+      setCloudEmail('');
+      setCloudPassword('');
+      setCloudName('');
+      setIsRegistering(false);
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      setCloudError(error.response?.data?.error || error.message);
+    },
+  });
+
+  const cloudLogoutMutation = useMutation({
+    mutationFn: homenichatCloudApi.logout,
+    onSuccess: () => {
+      refetchCloud();
+      setCloudResult('Deconnecte de Homenichat Cloud');
+    },
+  });
+
+  const cloudConnectMutation = useMutation({
+    mutationFn: homenichatCloudApi.connect,
+    onSuccess: () => {
+      refetchCloud();
+      setCloudResult('Tunnel connecte');
+      setCloudError(null);
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      setCloudError(error.response?.data?.error || error.message);
+    },
+  });
+
+  const cloudDisconnectMutation = useMutation({
+    mutationFn: homenichatCloudApi.disconnect,
+    onSuccess: () => {
+      refetchCloud();
+      setCloudResult('Tunnel deconnecte');
+    },
+  });
+
+  const cloudTestMutation = useMutation({
+    mutationFn: homenichatCloudApi.test,
+    onSuccess: (data) => {
+      if (data.success) {
+        setCloudResult('Connexion au serveur relay reussie');
+        setCloudError(null);
+      } else {
+        setCloudError(data.error || 'Echec du test');
+      }
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      setCloudError(error.response?.data?.error || error.message);
+    },
+  });
+
+  const isCloudMutating = cloudLoginMutation.isPending ||
+    cloudRegisterMutation.isPending ||
+    cloudLogoutMutation.isPending ||
+    cloudConnectMutation.isPending ||
+    cloudDisconnectMutation.isPending ||
+    cloudTestMutation.isPending;
+
+  const handleCloudLogin = () => {
+    if (!cloudEmail || !cloudPassword) {
+      setCloudError('Email et mot de passe requis');
+      return;
+    }
+    setCloudError(null);
+    cloudLoginMutation.mutate({ email: cloudEmail, password: cloudPassword });
+  };
+
+  const handleCloudRegister = () => {
+    if (!cloudEmail || !cloudPassword) {
+      setCloudError('Email et mot de passe requis');
+      return;
+    }
+    if (cloudPassword.length < 8) {
+      setCloudError('Mot de passe: minimum 8 caracteres');
+      return;
+    }
+    setCloudError(null);
+    cloudRegisterMutation.mutate({ email: cloudEmail, password: cloudPassword, name: cloudName });
   };
 
   // Tunnel Relay status query (WireGuard + TURN - AUTO-CONFIGURED)
@@ -384,6 +505,323 @@ export default function SettingsPage() {
       )}
 
       <Grid container spacing={3}>
+        {/* Homenichat Cloud - UNIFIED Push + Tunnel with email/password */}
+        <Grid item xs={12}>
+          <Card
+            sx={{
+              border: cloudStatus?.loggedIn ? '2px solid' : 'none',
+              borderColor: 'primary.main',
+              background: cloudStatus?.loggedIn
+                ? `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.05)} 0%, ${alpha(theme.palette.success.main, 0.05)} 100%)`
+                : undefined,
+            }}
+          >
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <CloudIcon sx={{ mr: 1, color: cloudStatus?.loggedIn ? 'primary.main' : 'text.secondary', fontSize: 32 }} />
+                  <Box>
+                    <Typography variant="h6" fontWeight={600}>
+                      Homenichat Cloud
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Push Notifications + Tunnel VPN - Configuration unifiee
+                    </Typography>
+                  </Box>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  {isCloudMutating && <CircularProgress size={20} />}
+                  {cloudStatus?.loggedIn ? (
+                    <Chip label="Connecte" color="success" icon={<CheckCircleIcon />} />
+                  ) : (
+                    <Chip label="Non connecte" color="default" variant="outlined" />
+                  )}
+                </Box>
+              </Box>
+
+              <Alert severity="info" sx={{ mb: 3 }}>
+                <Typography variant="body2" fontWeight={500}>
+                  Un seul compte pour tout: Push Notifications iOS/Android + Tunnel VPN securise
+                </Typography>
+                <Typography variant="caption">
+                  Connectez-vous avec votre compte Homenichat Cloud pour activer automatiquement tous les services.
+                </Typography>
+              </Alert>
+
+              {cloudError && (
+                <Alert severity="error" sx={{ mb: 2 }} onClose={() => setCloudError(null)}>
+                  {cloudError}
+                </Alert>
+              )}
+
+              {cloudResult && (
+                <Alert severity="success" sx={{ mb: 2 }} onClose={() => setCloudResult(null)}>
+                  {cloudResult}
+                </Alert>
+              )}
+
+              {!cloudStatus?.loggedIn ? (
+                // Login/Register Form
+                <Box sx={{ maxWidth: 500 }}>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                    {isRegistering ? 'Creer un compte Homenichat Cloud' : 'Se connecter a Homenichat Cloud'}
+                  </Typography>
+
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
+                    {isRegistering && (
+                      <TextField
+                        fullWidth
+                        size="small"
+                        label="Nom (optionnel)"
+                        value={cloudName}
+                        onChange={(e) => setCloudName(e.target.value)}
+                        placeholder="Votre nom ou celui de votre entreprise"
+                      />
+                    )}
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label="Email"
+                      type="email"
+                      value={cloudEmail}
+                      onChange={(e) => setCloudEmail(e.target.value)}
+                      placeholder="votre@email.com"
+                    />
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label="Mot de passe"
+                      type={showCloudPassword ? 'text' : 'password'}
+                      value={cloudPassword}
+                      onChange={(e) => setCloudPassword(e.target.value)}
+                      placeholder={isRegistering ? 'Minimum 8 caracteres' : 'Votre mot de passe'}
+                      InputProps={{
+                        endAdornment: (
+                          <IconButton
+                            size="small"
+                            onClick={() => setShowCloudPassword(!showCloudPassword)}
+                          >
+                            {showCloudPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                          </IconButton>
+                        ),
+                      }}
+                    />
+
+                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                      <Button
+                        variant="contained"
+                        onClick={isRegistering ? handleCloudRegister : handleCloudLogin}
+                        disabled={isCloudMutating || !cloudEmail || !cloudPassword}
+                        startIcon={isCloudMutating ? <CircularProgress size={20} color="inherit" /> : undefined}
+                      >
+                        {isRegistering ? 'Creer le compte' : 'Se connecter'}
+                      </Button>
+                      <Button
+                        variant="text"
+                        onClick={() => {
+                          setIsRegistering(!isRegistering);
+                          setCloudError(null);
+                        }}
+                      >
+                        {isRegistering ? 'Deja un compte?' : 'Creer un compte'}
+                      </Button>
+                    </Box>
+                  </Box>
+
+                  <Divider sx={{ my: 3 }} />
+
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => cloudTestMutation.mutate()}
+                    disabled={isCloudMutating}
+                  >
+                    Tester la connexion au serveur
+                  </Button>
+                </Box>
+              ) : (
+                // Logged in - Show status
+                <Box>
+                  <Box
+                    sx={{
+                      p: 2,
+                      borderRadius: 2,
+                      backgroundColor: alpha(theme.palette.success.main, 0.08),
+                      border: '1px solid',
+                      borderColor: alpha(theme.palette.success.main, 0.3),
+                      mb: 3,
+                    }}
+                  >
+                    <Grid container spacing={2}>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
+                          Compte
+                        </Typography>
+                        <Typography variant="body1" fontWeight={500}>
+                          {cloudStatus.email}
+                        </Typography>
+                      </Grid>
+                      {cloudStatus.publicUrl && (
+                        <Grid item xs={12} md={6}>
+                          <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
+                            URL Publique
+                          </Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Link
+                              href={cloudStatus.publicUrl}
+                              target="_blank"
+                              rel="noopener"
+                              sx={{ fontFamily: 'monospace', fontWeight: 500 }}
+                            >
+                              {cloudStatus.publicUrl}
+                            </Link>
+                            <IconButton
+                              size="small"
+                              component="a"
+                              href={cloudStatus.publicUrl}
+                              target="_blank"
+                              rel="noopener"
+                            >
+                              <OpenInNewIcon fontSize="small" />
+                            </IconButton>
+                          </Box>
+                        </Grid>
+                      )}
+                    </Grid>
+                  </Box>
+
+                  {/* Services Status */}
+                  <Grid container spacing={2} sx={{ mb: 3 }}>
+                    <Grid item xs={12} md={6}>
+                      <Box
+                        sx={{
+                          p: 2,
+                          borderRadius: 1,
+                          backgroundColor: cloudStatus.services?.push?.enabled
+                            ? alpha(theme.palette.success.main, 0.05)
+                            : alpha(theme.palette.grey[500], 0.05),
+                          border: '1px solid',
+                          borderColor: cloudStatus.services?.push?.enabled
+                            ? alpha(theme.palette.success.main, 0.2)
+                            : alpha(theme.palette.grey[500], 0.2),
+                        }}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                            <NotificationsIcon sx={{ mr: 1, color: cloudStatus.services?.push?.enabled ? 'success.main' : 'text.secondary' }} />
+                            <Typography variant="subtitle2">Push Notifications</Typography>
+                          </Box>
+                          {cloudStatus.services?.push?.enabled ? (
+                            <CheckCircleIcon color="success" />
+                          ) : (
+                            <ErrorIcon color="disabled" />
+                          )}
+                        </Box>
+                        <Typography variant="caption" color="text.secondary">
+                          iOS (APNs) + Android (FCM)
+                        </Typography>
+                      </Box>
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <Box
+                        sx={{
+                          p: 2,
+                          borderRadius: 1,
+                          backgroundColor: cloudStatus.services?.tunnel?.connected
+                            ? alpha(theme.palette.success.main, 0.05)
+                            : cloudStatus.services?.tunnel?.enabled
+                            ? alpha(theme.palette.warning.main, 0.05)
+                            : alpha(theme.palette.grey[500], 0.05),
+                          border: '1px solid',
+                          borderColor: cloudStatus.services?.tunnel?.connected
+                            ? alpha(theme.palette.success.main, 0.2)
+                            : cloudStatus.services?.tunnel?.enabled
+                            ? alpha(theme.palette.warning.main, 0.2)
+                            : alpha(theme.palette.grey[500], 0.2),
+                        }}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                            <VpnIcon sx={{ mr: 1, color: cloudStatus.services?.tunnel?.connected ? 'success.main' : 'text.secondary' }} />
+                            <Typography variant="subtitle2">Tunnel VPN</Typography>
+                          </Box>
+                          {cloudStatus.services?.tunnel?.connected ? (
+                            <CheckCircleIcon color="success" />
+                          ) : cloudStatus.services?.tunnel?.enabled ? (
+                            <Chip label="Enregistre" size="small" color="warning" />
+                          ) : (
+                            <ErrorIcon color="disabled" />
+                          )}
+                        </Box>
+                        <Typography variant="caption" color="text.secondary">
+                          WireGuard + TURN WebRTC
+                        </Typography>
+                        {cloudStatus.wireguard && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                            IP: {cloudStatus.wireguard.clientIP}
+                          </Typography>
+                        )}
+                      </Box>
+                    </Grid>
+                  </Grid>
+
+                  {/* Actions */}
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                    {!cloudStatus.services?.tunnel?.connected && cloudStatus.services?.tunnel?.enabled && (
+                      <Button
+                        variant="contained"
+                        onClick={() => cloudConnectMutation.mutate()}
+                        disabled={isCloudMutating}
+                        startIcon={<VpnIcon />}
+                      >
+                        Connecter le tunnel
+                      </Button>
+                    )}
+                    {cloudStatus.services?.tunnel?.connected && (
+                      <Button
+                        variant="outlined"
+                        onClick={() => cloudDisconnectMutation.mutate()}
+                        disabled={isCloudMutating}
+                      >
+                        Deconnecter le tunnel
+                      </Button>
+                    )}
+                    <Button
+                      variant="outlined"
+                      onClick={() => cloudTestMutation.mutate()}
+                      disabled={isCloudMutating}
+                    >
+                      Tester
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      color="error"
+                      onClick={() => cloudLogoutMutation.mutate()}
+                      disabled={isCloudMutating}
+                    >
+                      Deconnexion
+                    </Button>
+                  </Box>
+
+                  {/* TURN Credentials Info */}
+                  {cloudStatus.turn && (
+                    <Box sx={{ mt: 2 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        TURN: {cloudStatus.turn.urls.length} serveur(s) - Expire: {new Date(cloudStatus.turn.expiresAt).toLocaleString()}
+                      </Typography>
+                    </Box>
+                  )}
+                </Box>
+              )}
+
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="caption" color="text.secondary">
+                Propulse par Homenichat Cloud - relay.homenichat.com
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
         {/* Server Settings */}
         <Grid item xs={12} md={6}>
           <Card>

@@ -4,10 +4,16 @@ const webPushService = require('../services/WebPushService');
 const voipPushService = require('../services/VoIPPushService');
 const fcmPushService = require('../services/FCMPushService');
 const pushRelayService = require('../services/PushRelayService');
+const homenichatCloudService = require('../services/HomenichatCloudService');
 const { verifyToken } = require('../middleware/auth');
 
 // Initialize push relay on module load
 pushRelayService.initialize();
+
+// Helper to check if we should use Homenichat Cloud for push
+function useCloudPush() {
+  return homenichatCloudService.isLoggedIn() && homenichatCloudService.services.push.enabled;
+}
 
 /**
  * GET /api/notifications/vapid-public-key
@@ -202,7 +208,7 @@ router.post('/voip-test', verifyToken, async (req, res) => {
 /**
  * POST /api/notifications/fcm-token
  * Enregistre un token FCM pour l'utilisateur (Android app)
- * Uses Push Relay if configured, otherwise falls back to local FCM
+ * Uses Homenichat Cloud if logged in, Push Relay if configured, or local FCM
  */
 router.post('/fcm-token', verifyToken, async (req, res) => {
     console.log('[FCM] Token registration request from user:', req.user?.id, req.user?.username);
@@ -216,7 +222,22 @@ router.post('/fcm-token', verifyToken, async (req, res) => {
         const actualDeviceId = deviceId || `device-${Date.now()}`;
         const actualPlatform = platform || 'android';
 
-        // Use Push Relay if configured
+        // Use Homenichat Cloud if logged in (preferred)
+        if (useCloudPush()) {
+            const result = await homenichatCloudService.registerDevice(
+                req.user.id,
+                actualDeviceId,
+                actualPlatform,
+                token
+            );
+            return res.json({
+                success: true,
+                message: 'FCM token registered via Homenichat Cloud',
+                cloud: true
+            });
+        }
+
+        // Fallback to legacy Push Relay if configured
         if (pushRelayService.isConfigured()) {
             const result = await pushRelayService.registerDevice(
                 req.user.id,
@@ -262,7 +283,13 @@ router.delete('/fcm-token', verifyToken, async (req, res) => {
             return res.status(400).json({ error: 'Device ID required' });
         }
 
-        // Use Push Relay if configured
+        // Use Homenichat Cloud if logged in (preferred)
+        if (useCloudPush()) {
+            await homenichatCloudService.unregisterDevice(req.user.id, deviceId);
+            return res.json({ success: true, message: 'FCM token unregistered via Homenichat Cloud' });
+        }
+
+        // Fallback to legacy Push Relay if configured
         if (pushRelayService.isConfigured()) {
             await pushRelayService.unregisterDevice(req.user.id, deviceId);
             return res.json({ success: true, message: 'FCM token unregistered via relay' });
@@ -284,7 +311,20 @@ router.delete('/fcm-token', verifyToken, async (req, res) => {
  */
 router.get('/fcm-status', verifyToken, async (req, res) => {
     try {
-        // Check Push Relay first
+        // Check Homenichat Cloud first (preferred)
+        if (useCloudPush()) {
+            const cloudStatus = await homenichatCloudService.getStatus();
+            return res.json({
+                mode: 'cloud',
+                loggedIn: cloudStatus.loggedIn,
+                email: cloudStatus.email,
+                pushEnabled: cloudStatus.services?.push?.enabled,
+                tunnelEnabled: cloudStatus.services?.tunnel?.enabled,
+                publicUrl: cloudStatus.publicUrl
+            });
+        }
+
+        // Fallback to legacy Push Relay
         if (pushRelayService.isConfigured()) {
             const relayStatus = pushRelayService.getStatus();
             const stats = await pushRelayService.getStats();
@@ -313,7 +353,22 @@ router.get('/fcm-status', verifyToken, async (req, res) => {
  */
 router.post('/fcm-test', verifyToken, async (req, res) => {
     try {
-        // Use Push Relay if configured
+        // Use Homenichat Cloud if logged in (preferred)
+        if (useCloudPush()) {
+            const result = await homenichatCloudService.sendPush(req.user.id, 'test', {
+                timestamp: Date.now().toString()
+            }, {
+                title: 'Test Homenichat Cloud',
+                body: 'Les notifications via Homenichat Cloud fonctionnent !'
+            });
+            return res.json({
+                success: result.success,
+                devicesSent: result.sent || 0,
+                mode: 'cloud'
+            });
+        }
+
+        // Fallback to legacy Push Relay if configured
         if (pushRelayService.isConfigured()) {
             const result = await pushRelayService.sendTest(req.user.id);
             return res.json({

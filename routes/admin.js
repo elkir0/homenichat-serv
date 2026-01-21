@@ -28,6 +28,9 @@ let installerService = null;
 // Import TunnelRelayService (WireGuard + TURN)
 const tunnelRelayService = require('../services/TunnelRelayService');
 
+// Import HomenichatCloudService (Unified Push + Tunnel with email/password auth)
+const homenichatCloudService = require('../services/HomenichatCloudService');
+
 /**
  * Initialise les routes avec les services nécessaires
  */
@@ -49,10 +52,16 @@ function initAdminRoutes(services) {
     logger: console,
   });
 
-  // Initialize TunnelRelayService (WireGuard + TURN)
+  // Initialize TunnelRelayService (WireGuard + TURN) - Legacy
   tunnelRelayService.dataDir = services.dataDir || '/var/lib/homenichat';
   tunnelRelayService.initialize().catch(err => {
     console.error('[Admin] TunnelRelayService initialization error:', err.message);
+  });
+
+  // Initialize HomenichatCloudService (Unified Push + Tunnel)
+  homenichatCloudService.dataDir = services.dataDir || '/var/lib/homenichat';
+  homenichatCloudService.initialize().catch(err => {
+    console.error('[Admin] HomenichatCloudService initialization error:', err.message);
   });
 
   return router;
@@ -3397,6 +3406,239 @@ router.post('/device-tokens/cleanup', [
     res.json({ success: true, deleted, message: `${deleted} stale tokens cleaned up` });
   } catch (error) {
     console.error('[Admin] Cleanup device tokens error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
+// HOMENICHAT CLOUD - Unified Push + Tunnel with email/password auth
+// =============================================================================
+
+/**
+ * GET /api/admin/homenichat-cloud/status
+ * Get unified cloud service status
+ */
+router.get('/homenichat-cloud/status', async (req, res) => {
+  try {
+    const status = await homenichatCloudService.getStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('[Admin] Homenichat Cloud status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/homenichat-cloud/register
+ * Register a new Homenichat Cloud account
+ */
+router.post('/homenichat-cloud/register', [
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 8 }),
+  body('name').optional().isString()
+], validate, async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'homenichat_cloud_register', {
+        category: 'system',
+        username: req.user.username,
+        email,
+      }, req);
+    }
+
+    const result = await homenichatCloudService.register(email, password, name);
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error('[Admin] Homenichat Cloud register error:', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/homenichat-cloud/login
+ * Login to Homenichat Cloud with email/password
+ */
+router.post('/homenichat-cloud/login', [
+  body('email').isEmail().normalizeEmail(),
+  body('password').notEmpty()
+], validate, async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'homenichat_cloud_login', {
+        category: 'system',
+        username: req.user.username,
+        email,
+      }, req);
+    }
+
+    const result = await homenichatCloudService.login(email, password);
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error('[Admin] Homenichat Cloud login error:', error);
+    res.status(401).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/homenichat-cloud/logout
+ * Logout from Homenichat Cloud
+ */
+router.post('/homenichat-cloud/logout', async (req, res) => {
+  try {
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'homenichat_cloud_logout', {
+        category: 'system',
+        username: req.user.username,
+      }, req);
+    }
+
+    await homenichatCloudService.logout();
+
+    res.json({ success: true, message: 'Logged out from Homenichat Cloud' });
+  } catch (error) {
+    console.error('[Admin] Homenichat Cloud logout error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/homenichat-cloud/connect
+ * Connect to tunnel relay (must be logged in)
+ */
+router.post('/homenichat-cloud/connect', async (req, res) => {
+  try {
+    if (!homenichatCloudService.isLoggedIn()) {
+      return res.status(400).json({ error: 'Not logged in to Homenichat Cloud' });
+    }
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'homenichat_cloud_connect', {
+        category: 'system',
+        username: req.user.username,
+      }, req);
+    }
+
+    await homenichatCloudService.connectTunnel();
+    const status = await homenichatCloudService.getStatus();
+
+    res.json({
+      success: true,
+      message: 'Connected to Homenichat Cloud',
+      status,
+    });
+  } catch (error) {
+    console.error('[Admin] Homenichat Cloud connect error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/homenichat-cloud/disconnect
+ * Disconnect from tunnel relay
+ */
+router.post('/homenichat-cloud/disconnect', async (req, res) => {
+  try {
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'homenichat_cloud_disconnect', {
+        category: 'system',
+        username: req.user.username,
+      }, req);
+    }
+
+    await homenichatCloudService.disconnectTunnel();
+    const status = await homenichatCloudService.getStatus();
+
+    res.json({
+      success: true,
+      message: 'Disconnected from Homenichat Cloud',
+      status,
+    });
+  } catch (error) {
+    console.error('[Admin] Homenichat Cloud disconnect error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/homenichat-cloud/test
+ * Test connection to relay server
+ */
+router.post('/homenichat-cloud/test', async (req, res) => {
+  try {
+    const result = await homenichatCloudService.testConnection();
+    res.json(result);
+  } catch (error) {
+    console.error('[Admin] Homenichat Cloud test error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/homenichat-cloud/credentials
+ * Get TURN credentials (must be logged in and registered)
+ */
+router.get('/homenichat-cloud/credentials', async (req, res) => {
+  try {
+    if (!homenichatCloudService.isLoggedIn()) {
+      return res.status(400).json({ error: 'Not logged in to Homenichat Cloud' });
+    }
+
+    const turn = await homenichatCloudService.getTurnCredentials();
+    const iceServers = await homenichatCloudService.getIceServers();
+
+    res.json({
+      turn,
+      iceServers,
+    });
+  } catch (error) {
+    console.error('[Admin] Homenichat Cloud credentials error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/homenichat-cloud/configure
+ * Configure the service (hostname, autoConnect)
+ */
+router.post('/homenichat-cloud/configure', async (req, res) => {
+  try {
+    const { hostname, autoConnect } = req.body;
+
+    // Log action
+    if (securityService && req.user) {
+      await securityService.logAction(req.user.id, 'homenichat_cloud_configure', {
+        category: 'system',
+        username: req.user.username,
+        hostname,
+        autoConnect,
+      }, req);
+    }
+
+    const status = await homenichatCloudService.configure({ hostname, autoConnect });
+
+    res.json({
+      success: true,
+      status,
+    });
+  } catch (error) {
+    console.error('[Admin] Homenichat Cloud configure error:', error);
     res.status(500).json({ error: error.message });
   }
 });
