@@ -4,6 +4,59 @@ const db = require('../services/DatabaseService');
 // Clé secrète pour JWT (à mettre dans les variables d'environnement)
 const JWT_SECRET = process.env.JWT_SECRET || 'lekip-chat-secret-key-change-this-in-production';
 
+// Homenichat Cloud provisioning server URL
+const CLOUD_PROVISIONING_URL = process.env.CLOUD_PROVISIONING_URL || 'https://relay.homenichat.com';
+
+// Cache for validated cloud tokens (5 min TTL)
+const cloudTokenCache = new Map();
+const CLOUD_TOKEN_CACHE_TTL = 5 * 60 * 1000;
+
+/**
+ * Validate a Homenichat Cloud token (hc_xxx) against the provisioning server
+ */
+async function validateCloudToken(token) {
+  // Check cache first
+  const cached = cloudTokenCache.get(token);
+  if (cached && Date.now() - cached.timestamp < CLOUD_TOKEN_CACHE_TTL) {
+    return cached.user;
+  }
+
+  try {
+    const response = await fetch(`${CLOUD_PROVISIONING_URL}/api/auth/validate-token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    if (!data.valid) {
+      return null;
+    }
+
+    // Create a pseudo-user for cloud-authenticated requests
+    const cloudUser = {
+      id: `cloud_${data.userId}`,
+      username: `cloud_user_${data.userId.substring(0, 8)}`,
+      role: 'user', // Cloud users get standard user role
+      isCloudUser: true,
+      cloudUserId: data.userId,
+      services: data.services,
+    };
+
+    // Cache the result
+    cloudTokenCache.set(token, { user: cloudUser, timestamp: Date.now() });
+
+    return cloudUser;
+  } catch (error) {
+    console.error('[Auth] Cloud token validation error:', error.message);
+    return null;
+  }
+}
+
 // Générer un token JWT
 const generateToken = (user) => {
   // Token valable 30 jours pour le confort mobile
@@ -32,6 +85,16 @@ const verifyToken = async (req, res, next) => {
 
     if (!token) {
       return res.status(401).json({ error: 'Token manquant' });
+    }
+
+    // Check if it's a Homenichat Cloud token (hc_xxx)
+    if (token.startsWith('hc_')) {
+      const cloudUser = await validateCloudToken(token);
+      if (cloudUser) {
+        req.user = cloudUser;
+        return next();
+      }
+      return res.status(401).json({ error: 'Cloud token invalide' });
     }
 
     // Vérifier si le token est dans la base (session valide)
@@ -89,6 +152,13 @@ const optionalVerifyToken = async (req, res, next) => {
       return next();
     }
 
+    // Check if it's a Homenichat Cloud token (hc_xxx)
+    if (token.startsWith('hc_')) {
+      const cloudUser = await validateCloudToken(token);
+      req.user = cloudUser || null;
+      return next();
+    }
+
     // Vérifier le token JWT
     jwt.verify(token, JWT_SECRET, async (err, decoded) => {
       if (err) {
@@ -130,6 +200,7 @@ module.exports = {
   generateToken,
   verifyToken,
   optionalVerifyToken,
+  validateCloudToken,
   isAdmin,
   requireAdmin: isAdmin, // Alias pour la cohérence
   verifyWebSocketToken,
