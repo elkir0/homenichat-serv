@@ -35,7 +35,8 @@ function getSmsRoutingService() {
 
 function getModemService() {
   if (!modemService) {
-    modemService = require('../services/ModemService');
+    const ModemService = require('../services/ModemService');
+    modemService = new ModemService();
   }
   return modemService;
 }
