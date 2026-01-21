@@ -3433,7 +3433,7 @@ router.get('/homenichat-cloud/status', async (req, res) => {
  * Register a new Homenichat Cloud account
  */
 router.post('/homenichat-cloud/register', [
-  body('email').isEmail().normalizeEmail(),
+  body('email').isEmail().normalizeEmail({ gmail_remove_dots: false }),
   body('password').isLength({ min: 8 }),
   body('name').optional().isString()
 ], validate, async (req, res) => {
@@ -3466,7 +3466,7 @@ router.post('/homenichat-cloud/register', [
  * Login to Homenichat Cloud with email/password
  */
 router.post('/homenichat-cloud/login', [
-  body('email').isEmail().normalizeEmail(),
+  body('email').isEmail().normalizeEmail({ gmail_remove_dots: false }),
   body('password').notEmpty()
 ], validate, async (req, res) => {
   try {
