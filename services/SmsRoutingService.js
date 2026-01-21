@@ -85,6 +85,10 @@ class SmsRoutingService extends EventEmitter {
         case 'sms_bridge':
           ProviderClass = require('../providers/sms/SmsBridgeProvider');
           break;
+        case 'gammu':
+        case 'modem':
+          ProviderClass = require('../providers/sms/modem/GammuModemProvider');
+          break;
         case 'plivo':
           // À implémenter
           logger.warn(`[SmsRouting] Provider type '${type}' not yet implemented`);

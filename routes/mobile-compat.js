@@ -24,12 +24,20 @@ const logger = require('../utils/logger');
 let smsRoutingService = null;
 let providerManager = null;
 let freepbxProvider = null;
+let modemService = null;
 
 function getSmsRoutingService() {
   if (!smsRoutingService) {
     smsRoutingService = require('../services/SmsRoutingService');
   }
   return smsRoutingService;
+}
+
+function getModemService() {
+  if (!modemService) {
+    modemService = require('../services/ModemService');
+  }
+  return modemService;
 }
 
 function getProviderManager() {
@@ -62,6 +70,10 @@ function getFreePBXProvider() {
  * POST /api/sms/send
  * Mobile app expects: { to, message, from }
  * v2 API expects: { to, text, providerId }
+ *
+ * Routing logic:
+ * 1. If modem is available and configured, use ModemService
+ * 2. Otherwise fall back to SmsRoutingService (cloud providers)
  */
 router.post('/sms/send', verifyToken, async (req, res) => {
   try {
@@ -74,10 +86,48 @@ router.post('/sms/send', verifyToken, async (req, res) => {
       });
     }
 
+    logger.info(`[Mobile SMS] Sending to: ${to}, from: ${from || 'default'}`);
+
+    // Try ModemService first (for GSM modems)
+    const modemSvc = getModemService();
+    const modemsConfig = modemSvc.getModemsConfig ? modemSvc.getModemsConfig() : modemSvc.modemsConfig;
+
+    if (modemsConfig && modemsConfig.modems && Object.keys(modemsConfig.modems).length > 0) {
+      // We have modems configured, try to send via modem
+      const modemIds = Object.keys(modemsConfig.modems);
+      let targetModem = modemIds[0]; // Default to first modem
+
+      // If 'from' matches a modem's phone number, use that modem
+      if (from) {
+        for (const [modemId, config] of Object.entries(modemsConfig.modems)) {
+          if (config.phoneNumber && config.phoneNumber.replace(/\D/g, '') === from.replace(/\D/g, '')) {
+            targetModem = modemId;
+            break;
+          }
+        }
+      }
+
+      logger.info(`[Mobile SMS] Using modem: ${targetModem}`);
+
+      try {
+        const result = await modemSvc.sendSms(targetModem, to, message);
+        return res.json({
+          success: true,
+          messageId: result.messageId || `sms_${Date.now()}`,
+          provider: 'modem',
+          modemId: targetModem
+        });
+      } catch (modemError) {
+        logger.warn(`[Mobile SMS] Modem send failed: ${modemError.message}, trying cloud providers...`);
+        // Fall through to SmsRoutingService
+      }
+    }
+
+    // Fall back to SmsRoutingService (cloud providers)
     const smsRouting = getSmsRoutingService();
     const result = await smsRouting.sendMessage(to, message, {
       from,
-      providerId: req.body.providerId // Optional: allow explicit provider
+      providerId: req.body.providerId
     });
 
     res.json({
