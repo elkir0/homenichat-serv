@@ -177,6 +177,17 @@ configure_apache() {
     a2enmod rewrite >> "$LOG_FILE" 2>&1 || true
     a2enmod headers >> "$LOG_FILE" 2>&1 || true
 
+    # BUG FIX 1: Remove default index.html files that block index.php
+    # Apache's DirectoryIndex gives priority to index.html over index.php
+    rm -f /var/www/html/index.html /var/www/html/index.nginx-debian.html 2>/dev/null || true
+    info "Removed default index.html files"
+
+    # BUG FIX 2: Run Apache as asterisk user (not www-data)
+    # FreePBX needs to edit asterisk's crontab, which fails if running as www-data
+    sed -i 's/APACHE_RUN_USER=www-data/APACHE_RUN_USER=asterisk/' /etc/apache2/envvars
+    sed -i 's/APACHE_RUN_GROUP=www-data/APACHE_RUN_GROUP=asterisk/' /etc/apache2/envvars
+    info "Apache configured to run as asterisk user"
+
     # FreePBX Apache config
     cat > /etc/apache2/sites-available/freepbx.conf << 'APACHE_CONF'
 <VirtualHost *:8080>
@@ -322,17 +333,49 @@ configure_freepbx() {
     fwconsole setting BROWSER_STATS 0 >> "$LOG_FILE" 2>&1 || true
     fwconsole setting AMPDISABLELOG 1 >> "$LOG_FILE" 2>&1 || true
 
-    # Fix permissions for Apache/PHP
+    # Fix permissions for Apache/PHP (Apache runs as asterisk user now)
     info "Fixing permissions..."
     chmod 644 /etc/freepbx.conf 2>/dev/null || true
     chown asterisk:asterisk /etc/freepbx.conf 2>/dev/null || true
-    chown -R www-data:www-data /var/lib/php/sessions 2>/dev/null || true
+    chown -R asterisk:asterisk /var/lib/php/sessions 2>/dev/null || true
     chmod 1733 /var/lib/php/sessions 2>/dev/null || true
-    chown -R asterisk:www-data /var/www/html 2>/dev/null || true
+    chown -R asterisk:asterisk /var/www/html 2>/dev/null || true
     chmod -R 775 /var/www/html 2>/dev/null || true
-    usermod -a -G asterisk www-data 2>/dev/null || true
+
+    # BUG FIX 3: jQuery Cookie Compatibility Shim
+    # FreePBX uses $.removeCookie() but ships with js-cookie 3.x which uses Cookies.remove()
+    info "Installing jQuery cookie compatibility shim..."
+    mkdir -p /var/www/html/admin/assets/js
+    cat > /var/www/html/admin/assets/js/jquery.cookie.compat.js << 'COOKIE_SHIM'
+(function($) {
+    "use strict";
+    if (typeof Cookies !== "undefined") {
+        $.cookie = function(name, value, options) {
+            if (value === undefined) return Cookies.get(name);
+            if (value === null) { Cookies.remove(name, options); return; }
+            Cookies.set(name, value, options);
+        };
+        $.removeCookie = function(name, options) {
+            Cookies.remove(name, options);
+            return true;
+        };
+    }
+})(jQuery);
+COOKIE_SHIM
+
+    # Include shim in footer.php (before </body>)
+    if [ -f /var/www/html/admin/views/footer.php ]; then
+        if ! grep -q "jquery.cookie.compat.js" /var/www/html/admin/views/footer.php; then
+            sed -i 's|</body>|<script src="/admin/assets/js/jquery.cookie.compat.js"></script>\n</body>|' /var/www/html/admin/views/footer.php
+            info "jQuery cookie shim added to footer.php"
+        fi
+    fi
+
+    # Set proper ownership after creating files
+    chown -R asterisk:asterisk /var/www/html 2>/dev/null || true
 
     # Reload configuration
+    fwconsole chown >> "$LOG_FILE" 2>&1 || true
     fwconsole reload >> "$LOG_FILE" 2>&1 || true
 
     # Restart services
