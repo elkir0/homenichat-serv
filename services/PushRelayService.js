@@ -7,8 +7,9 @@
 
 const logger = require('../utils/logger');
 
-// Push Relay URL
-const PUSH_RELAY_URL = 'https://push.homenichat.com';
+// Push Relay URL - Uses the unified relay.homenichat.com API
+// which accepts Bearer tokens (hc_xxx) from Homenichat Cloud auth
+const PUSH_RELAY_URL = 'https://relay.homenichat.com';
 
 // Lazy load to avoid circular dependencies
 let homenichatCloudService = null;
