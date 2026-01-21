@@ -16,7 +16,6 @@ import {
   alpha,
   useTheme,
   IconButton,
-  Tooltip,
   CircularProgress,
   Link,
 } from '@mui/material';
@@ -27,11 +26,7 @@ import {
   Security as SecurityIcon,
   Speed as SpeedIcon,
   Notifications as NotificationsIcon,
-  ContentCopy as CopyIcon,
   OpenInNew as OpenInNewIcon,
-} from '@mui/icons-material';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
   VpnLock as VpnIcon,
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
@@ -39,7 +34,9 @@ import {
   Visibility as VisibilityIcon,
   VisibilityOff as VisibilityOffIcon,
 } from '@mui/icons-material';
-import { configApi, homenichatCloudApi, HomenichatCloudStatus } from '../services/api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { configApi, homenichatCloudApi } from '../services/api';
+import type { HomenichatCloudStatus } from '../services/api';
 
 interface ServerConfig {
   server: {
