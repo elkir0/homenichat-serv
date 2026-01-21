@@ -120,11 +120,56 @@ router.get('/:chatId', async (req, res) => {
 /**
  * GET /api/chats/:chatId/messages
  * Récupère les messages d'une conversation
+ * Supports both WhatsApp (via provider) and SMS (via database)
  */
 router.get('/:chatId/messages', async (req, res) => {
   try {
     const { chatId } = req.params;
     const { limit = 50, before, after } = req.query;
+
+    // Check if this is an SMS chat (starts with sms_ or sms-)
+    if (chatId.startsWith('sms_') || chatId.startsWith('sms-')) {
+      // Fetch SMS messages directly from database
+      const db = require('../services/DatabaseService');
+      let query = `
+        SELECT id, chat_id, sender_id, from_me, type, content, timestamp, status
+        FROM messages
+        WHERE chat_id = ?
+      `;
+      const params = [chatId];
+
+      if (before) {
+        query += ' AND timestamp < ?';
+        params.push(Math.floor(before / 1000));
+      }
+      if (after) {
+        query += ' AND timestamp > ?';
+        params.push(Math.floor(after / 1000));
+      }
+
+      query += ' ORDER BY timestamp DESC LIMIT ?';
+      params.push(parseInt(limit) || 50);
+
+      const rows = db.prepare(query).all(...params);
+
+      const messages = rows.map(row => ({
+        id: row.id,
+        chatId: row.chat_id,
+        content: row.content,
+        timestamp: row.timestamp * 1000,
+        fromMe: row.from_me === 1,
+        status: row.status || 'delivered',
+        type: row.type || 'text',
+        sender: row.sender_id
+      })).reverse(); // Reverse to get chronological order
+
+      return res.json({
+        success: true,
+        messages: messages
+      });
+    }
+
+    // WhatsApp chats - use provider
     const activeProvider = getProviderForRequest(req);
 
     if (!activeProvider) {
