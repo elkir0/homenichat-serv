@@ -84,15 +84,21 @@ class HomenichatCloudService extends EventEmitter {
     try {
       await this.loadConfig();
 
-      if (this.auth.loggedIn && this.auth.apiToken) {
-        logger.info('[HomenichatCloud] Resuming session...');
+      // If we have an apiToken, try to verify and restore session
+      // (even if loggedIn was saved as false due to restart)
+      if (this.auth.apiToken) {
+        logger.info('[HomenichatCloud] Found saved token, verifying...');
 
         // Verify token is still valid
         const valid = await this.verifyToken();
         if (valid) {
+          this.auth.loggedIn = true;
+          logger.info('[HomenichatCloud] Token valid, session restored');
+
           if (this.services.tunnel.enabled && this.config.autoConnect) {
             await this.connectTunnel();
           }
+          this.saveConfig();
         } else {
           logger.warn('[HomenichatCloud] Saved token invalid, please re-login');
           this.auth.loggedIn = false;
