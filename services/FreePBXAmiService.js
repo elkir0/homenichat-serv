@@ -548,11 +548,37 @@ class FreePBXAmiService extends EventEmitter {
         endTime: Date.now()
       });
 
-      // Broadcast call ended
+      // Broadcast call ended via WebSocket
       pushService.broadcast('call_ended', {
         callId: callId,
         status: reason
       });
+
+      // CRITICAL: Send push notification to dismiss CallKit on mobile devices
+      // This handles cases where:
+      // - Caller hangs up before answer (cancel)
+      // - Call times out (missed/noanswer)
+      // - Another device answers (answered -> tells other devices to dismiss)
+      // - Call rejected/busy
+      if (reason === 'answered') {
+        // Call was answered - notify OTHER devices to dismiss their CallKit
+        // Use 'answered_elsewhere' so iOS knows to dismiss gracefully
+        pushService.broadcast(pushService.eventTypes.CALL_ANSWERED_ELSEWHERE, {
+          callId: callId,
+          reason: 'answered_elsewhere',
+          status: 'answered'
+        });
+        logger.info(`[AMI] 📵 Sent ANSWERED_ELSEWHERE push for ${callId}`);
+      } else {
+        // Call ended without being answered (cancel, missed, busy, rejected, etc.)
+        // Send CALL_CANCELLED push to dismiss CallKit on all devices
+        pushService.broadcast(pushService.eventTypes.CALL_CANCELLED, {
+          callId: callId,
+          reason: reason,
+          status: reason
+        });
+        logger.info(`[AMI] 📵 Sent CALL_CANCELLED push for ${callId}, reason: ${reason}`);
+      }
 
       this.ringingCalls.delete(callId);
     }

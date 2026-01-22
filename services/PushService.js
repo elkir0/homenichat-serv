@@ -53,6 +53,8 @@ class PushService {
       CALL_CREATED: 'call_created',
       CALL_ANSWERED: 'call_answered',
       CALL_ENDED: 'call_ended',
+      CALL_CANCELLED: 'call_cancelled',  // Appelant raccroche avant réponse
+      CALL_ANSWERED_ELSEWHERE: 'call_answered_elsewhere',  // Répondu sur un autre appareil
       MISSED_CALL: 'missed_call',
       CALL_HISTORY_UPDATE: 'call_history_update'
     };
@@ -102,6 +104,16 @@ class PushService {
     // For incoming calls, also send FCM push to wake up mobile apps
     if (eventType === this.eventTypes.INCOMING_CALL) {
       this.sendIncomingCallFCM(data);
+    }
+
+    // For call cancellation/end, send FCM push to dismiss CallKit on mobile apps
+    if (eventType === this.eventTypes.CALL_CANCELLED ||
+        eventType === this.eventTypes.CALL_ANSWERED_ELSEWHERE) {
+      const callId = data.callId || data.uniqueId || data.linkedId;
+      const reason = data.reason || data.status || 'cancel';
+      if (callId) {
+        this.sendCallCancelledFCM(callId, reason);
+      }
     }
 
     return sentCount;
@@ -169,6 +181,79 @@ class PushService {
       return sentCount;
     } catch (error) {
       logger.error('[Push] FCM incoming call error:', error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Send FCM push notification to cancel/end a call
+   * This dismisses the CallKit/incoming call UI on mobile apps
+   * Used when:
+   * - Caller hangs up before answer (cancel)
+   * - Call times out (missed/noanswer)
+   * - Another device answers (answered_elsewhere)
+   *
+   * @param {string} callId - The call ID to cancel
+   * @param {string} reason - One of: 'cancel', 'missed', 'answered', 'answered_elsewhere', 'busy', 'rejected'
+   */
+  async sendCallCancelledFCM(callId, reason = 'cancel') {
+    try {
+      logger.info(`[Push] 📵 Sending call cancelled push: callId=${callId}, reason=${reason}`);
+
+      // Determine the push type based on reason
+      let pushType = 'cancel';
+      if (reason === 'answered_elsewhere') {
+        pushType = 'answered_elsewhere';
+      } else if (reason === 'missed' || reason === 'noanswer') {
+        pushType = 'cancel'; // Treat missed as cancel for UI purposes
+      } else if (reason === 'busy' || reason === 'congestion') {
+        pushType = 'cancel';
+      }
+
+      const pushData = {
+        callId,
+        type: pushType,
+        reason,
+        timestamp: Date.now()
+      };
+
+      // Try Push Relay first (preferred method)
+      const relay = getPushRelayService();
+      if (relay.isConfigured()) {
+        const result = await relay.broadcast('call_cancelled', pushData);
+
+        if (result.sent > 0) {
+          logger.info(`[Push] 📵 Call cancelled sent via relay to ${result.sent} devices`);
+        }
+        return result.sent || 0;
+      }
+
+      // Fallback to local FCM - send silent data message
+      const fcm = getFCMService();
+
+      if (!fcm.initialized) {
+        await fcm.initialize();
+      }
+
+      if (!fcm.projectId) {
+        logger.debug('[Push] FCM not configured, skipping call cancelled push');
+        return 0;
+      }
+
+      // Send to all registered devices
+      const sentCount = await fcm.sendDataMessage({
+        type: 'call_cancelled',
+        callId,
+        reason: pushType
+      });
+
+      if (sentCount > 0) {
+        logger.info(`[Push] 📵 FCM call cancelled sent to ${sentCount} devices`);
+      }
+
+      return sentCount;
+    } catch (error) {
+      logger.error('[Push] FCM call cancelled error:', error.message);
       return 0;
     }
   }
