@@ -3,6 +3,21 @@
  *
  * Sends push notifications via the centralized Homenichat relay server.
  * Uses the API token from HomenichatCloudService for authentication.
+ *
+ * SECURITY MODEL:
+ * ---------------
+ * The relay server (relay.homenichat.com) enforces user isolation:
+ *
+ * 1. REGISTRATION: When registering a device token, the relay extracts
+ *    the userId from the Bearer token (hc_xxx), NOT from the request body.
+ *    This prevents spoofing - you can only register devices for your own account.
+ *
+ * 2. SENDING: When sending a push, the relay validates that the requested
+ *    userId matches the token's userId. Any mismatch returns 403.
+ *    This ensures servers can only send pushes to their own user's devices.
+ *
+ * 3. ISOLATION: Device tokens are stored per-user and only returned for
+ *    the authenticated user. No cross-user token access is possible.
  */
 
 const logger = require('../utils/logger');
@@ -95,17 +110,24 @@ class PushRelayService {
 
   /**
    * Register a device token
+   *
+   * @param {string} _userId - DEPRECATED: Kept for API compatibility but NOT sent to relay.
+   *                           The relay extracts userId from the Bearer token for security.
+   * @param {string} deviceId - Unique device identifier
+   * @param {string} platform - 'android' or 'ios'
+   * @param {string} token - FCM token (Android) or APNs token (iOS)
    */
-  async registerDevice(userId, deviceId, platform, token) {
+  async registerDevice(_userId, deviceId, platform, token) {
     try {
+      // Note: userId is NOT sent to relay - the relay extracts it from the Bearer token.
+      // This prevents spoofing (you can only register devices for your own account).
       const result = await this._request('/push/register', 'POST', {
-        userId: String(userId),
         deviceId,
         platform,
         token,
       });
 
-      logger.info(`[PushRelay] Device registered: user=${userId} device=${deviceId} platform=${platform}`);
+      logger.info(`[PushRelay] Device registered: device=${deviceId} platform=${platform}`);
       return result;
     } catch (error) {
       logger.error(`[PushRelay] Device registration failed:`, error.message);
@@ -115,15 +137,19 @@ class PushRelayService {
 
   /**
    * Unregister a device
+   *
+   * @param {string} _userId - DEPRECATED: Kept for API compatibility but NOT sent to relay.
+   *                           The relay extracts userId from the Bearer token for security.
+   * @param {string} deviceId - Device identifier to unregister
    */
-  async unregisterDevice(userId, deviceId) {
+  async unregisterDevice(_userId, deviceId) {
     try {
+      // Note: userId is NOT sent to relay - the relay extracts it from the Bearer token.
       const result = await this._request('/push/unregister', 'POST', {
-        userId: String(userId),
         deviceId,
       });
 
-      logger.info(`[PushRelay] Device unregistered: user=${userId} device=${deviceId}`);
+      logger.info(`[PushRelay] Device unregistered: device=${deviceId}`);
       return result;
     } catch (error) {
       logger.error(`[PushRelay] Device unregistration failed:`, error.message);
@@ -132,8 +158,16 @@ class PushRelayService {
   }
 
   /**
-   * Send push notification to current user's devices
-   * Uses the logged-in user's ID automatically
+   * Send push notification to a specific user's devices
+   *
+   * @param {string} userId - Target user ID (MUST match the Bearer token's userId)
+   *                          The relay validates this to prevent cross-user sending.
+   * @param {string} type - Notification type ('incoming_call', 'new_message', etc.)
+   * @param {object} data - Notification payload data
+   * @param {object} notification - Optional {title, body} for display notification
+   *
+   * Note: Unlike registration, userId IS sent here for explicit validation.
+   * The relay will return 403 if userId doesn't match the token's user.
    */
   async sendToUser(userId, type, data, notification = null) {
     try {
@@ -159,11 +193,16 @@ class PushRelayService {
 
   /**
    * Broadcast push notification to all devices registered with current user
-   * This is the main method for server-to-app notifications
+   *
+   * This is the main method for server-to-app notifications.
+   * It automatically uses the userId from the cloud service's authentication.
+   *
+   * The relay validates that this userId matches the Bearer token's userId,
+   * ensuring the server can only broadcast to its own user's devices.
    */
   async broadcast(type, data, notification = null) {
     try {
-      // Get user ID from cloud service
+      // Get user ID from cloud service (this is the Cloud userId, validated by relay)
       const cloud = getCloudService();
       const userId = cloud.auth?.userId;
 

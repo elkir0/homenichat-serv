@@ -606,11 +606,23 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
   // ==========================================
   // PUSH NOTIFICATIONS
   // ==========================================
+  //
+  // SECURITY MODEL:
+  // The relay server extracts userId from the Bearer token (hc_xxx) for security.
+  // - Registration: userId from token, NOT from request body (prevents spoofing)
+  // - Sending: userId in body is validated against token's userId (returns 403 if mismatch)
+  //
 
   /**
    * Register a device for push notifications
+   *
+   * @param {string} _userId - DEPRECATED: Kept for API compatibility but NOT sent to relay.
+   *                           The relay extracts userId from the Bearer token for security.
+   * @param {string} deviceId - Unique device identifier
+   * @param {string} platform - 'android' or 'ios'
+   * @param {string} token - FCM token (Android) or APNs token (iOS)
    */
-  async registerDevice(userId, deviceId, platform, token) {
+  async registerDevice(_userId, deviceId, platform, token) {
     if (!this.isLoggedIn()) {
       throw new Error('Not logged in');
     }
@@ -620,14 +632,15 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
     }
 
     try {
+      // Note: userId is NOT sent to relay - the relay extracts it from the Bearer token.
+      // This prevents spoofing (you can only register devices for your own account).
       const result = await this.pushRequest('POST', '/push/register', {
-        userId: String(userId),
         deviceId,
         platform,
         token,
       });
 
-      logger.info('[HomenichatCloud] Device registered for push', { userId, deviceId, platform });
+      logger.info('[HomenichatCloud] Device registered for push', { deviceId, platform });
       return result;
     } catch (error) {
       logger.error('[HomenichatCloud] Device registration failed:', error.message);
@@ -637,19 +650,23 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
 
   /**
    * Unregister a device
+   *
+   * @param {string} _userId - DEPRECATED: Kept for API compatibility but NOT sent to relay.
+   *                           The relay extracts userId from the Bearer token for security.
+   * @param {string} deviceId - Device identifier to unregister
    */
-  async unregisterDevice(userId, deviceId) {
+  async unregisterDevice(_userId, deviceId) {
     if (!this.isLoggedIn()) {
       throw new Error('Not logged in');
     }
 
     try {
+      // Note: userId is NOT sent to relay - the relay extracts it from the Bearer token.
       const result = await this.pushRequest('POST', '/push/unregister', {
-        userId: String(userId),
         deviceId,
       });
 
-      logger.info('[HomenichatCloud] Device unregistered', { userId, deviceId });
+      logger.info('[HomenichatCloud] Device unregistered', { deviceId });
       return result;
     } catch (error) {
       logger.error('[HomenichatCloud] Device unregistration failed:', error.message);
@@ -659,6 +676,15 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
 
   /**
    * Send push notification to a user
+   *
+   * @param {string} userId - Target user ID (MUST match the Bearer token's userId)
+   *                          The relay validates this to prevent cross-user sending.
+   * @param {string} type - Notification type ('incoming_call', 'new_message', etc.)
+   * @param {object} data - Notification payload data
+   * @param {object} notification - Optional {title, body} for display notification
+   *
+   * Note: Unlike registration, userId IS sent here for explicit validation.
+   * The relay will return 403 if userId doesn't match the token's user.
    */
   async sendPush(userId, type, data, notification = null) {
     if (!this.isLoggedIn()) {
@@ -671,7 +697,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
 
     try {
       const payload = {
-        userId: String(userId),
+        userId: String(userId),  // Required for relay validation
         type,
         data,
       };

@@ -204,6 +204,16 @@ router.post('/voip-test', verifyToken, async (req, res) => {
 // =====================================================
 // FCM Push (Android Firebase Cloud Messaging)
 // =====================================================
+//
+// SECURITY MODEL:
+// When using Homenichat Cloud or Push Relay, the relay server extracts
+// the userId from the Bearer token (hc_xxx), NOT from the request body.
+// This prevents spoofing - devices can only be registered for the
+// authenticated user's account.
+//
+// The req.user.id passed below is for API compatibility and local fallback,
+// but is ignored by Cloud/Relay services which use token-based identification.
+//
 
 /**
  * POST /api/notifications/fcm-token
@@ -223,9 +233,10 @@ router.post('/fcm-token', verifyToken, async (req, res) => {
         const actualPlatform = platform || 'android';
 
         // Use Homenichat Cloud if logged in (preferred)
+        // Note: userId parameter is kept for API compatibility but ignored by relay
         if (useCloudPush()) {
             const result = await homenichatCloudService.registerDevice(
-                req.user.id,
+                req.user.id,  // Deprecated: relay uses token-based userId
                 actualDeviceId,
                 actualPlatform,
                 token
@@ -238,9 +249,10 @@ router.post('/fcm-token', verifyToken, async (req, res) => {
         }
 
         // Fallback to legacy Push Relay if configured
+        // Note: userId parameter is kept for API compatibility but ignored by relay
         if (pushRelayService.isConfigured()) {
             const result = await pushRelayService.registerDevice(
-                req.user.id,
+                req.user.id,  // Deprecated: relay uses token-based userId
                 actualDeviceId,
                 actualPlatform,
                 token
@@ -252,9 +264,9 @@ router.post('/fcm-token', verifyToken, async (req, res) => {
             });
         }
 
-        // Fallback to local FCM service
+        // Fallback to local FCM service (deprecated, uses local storage)
         fcmPushService.registerDevice(
-            req.user.id,
+            req.user.id,  // Used for local Map storage
             token,
             actualDeviceId,
             actualPlatform
@@ -284,19 +296,21 @@ router.delete('/fcm-token', verifyToken, async (req, res) => {
         }
 
         // Use Homenichat Cloud if logged in (preferred)
+        // Note: userId parameter is kept for API compatibility but ignored by relay
         if (useCloudPush()) {
-            await homenichatCloudService.unregisterDevice(req.user.id, deviceId);
+            await homenichatCloudService.unregisterDevice(req.user.id, deviceId);  // userId ignored
             return res.json({ success: true, message: 'FCM token unregistered via Homenichat Cloud' });
         }
 
         // Fallback to legacy Push Relay if configured
+        // Note: userId parameter is kept for API compatibility but ignored by relay
         if (pushRelayService.isConfigured()) {
-            await pushRelayService.unregisterDevice(req.user.id, deviceId);
+            await pushRelayService.unregisterDevice(req.user.id, deviceId);  // userId ignored
             return res.json({ success: true, message: 'FCM token unregistered via relay' });
         }
 
-        // Fallback to local FCM service
-        fcmPushService.unregisterDevice(req.user.id, deviceId);
+        // Fallback to local FCM service (deprecated, uses local storage)
+        fcmPushService.unregisterDevice(req.user.id, deviceId);  // Used for local Map
         res.json({ success: true, message: 'FCM token unregistered' });
 
     } catch (error) {
