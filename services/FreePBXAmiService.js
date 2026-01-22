@@ -322,6 +322,40 @@ class FreePBXAmiService extends EventEmitter {
     });
 
     logger.info(`[AMI] New channel: ${channel} from ${callerIdNum} to ${exten} (trunk: ${trunkName || 'none'})`);
+
+    // EARLY PUSH DETECTION: For Quectel/GSM modem incoming calls, send push immediately
+    // This wakes up the iOS app BEFORE the dialplan tries to dial the extension
+    if (channel && channel.startsWith('Quectel/') && isExternalCaller && context === 'from-gsm') {
+      logger.info(`[AMI] 🚨 EARLY PUSH: Incoming Quectel call from ${callerIdNum}`);
+
+      // Format caller number
+      let formattedNumber = callerIdNum;
+      if (formattedNumber && formattedNumber.startsWith('+590')) {
+        formattedNumber = '0' + formattedNumber.substring(4);
+      }
+
+      const earlyCallData = {
+        callId: uniqueId,
+        callerNumber: formattedNumber || 'Inconnu',
+        callerName: callerIdName || null,
+        lineName: this.extractLineName(trunkName) || this.extractLineName(channel),
+        extension: '1001', // Default extension for incoming calls
+        channel: channel,
+        startTime: Date.now(),
+        direction: 'incoming',
+        status: 'ringing',
+        earlyPush: true // Flag to indicate this is an early push
+      };
+
+      // Emit the incoming call event immediately
+      this.emit('incomingCall', earlyCallData);
+
+      // Broadcast via PushService to wake up the app
+      const pushService = require('./PushService');
+      pushService.broadcast(pushService.eventTypes?.INCOMING_CALL || 'incoming_call', earlyCallData);
+
+      logger.info(`[AMI] 🚨 EARLY PUSH SENT for ${formattedNumber} -> waking up mobile apps`);
+    }
   }
 
   /**
