@@ -588,6 +588,14 @@ class FreePBXAmiService extends EventEmitter {
           status: reason
         });
         logger.info(`[AMI] 📵 Sent CALL_CANCELLED push for ${callId}, reason: ${reason}`);
+
+        // Also send missed_call push for badge update (alert push, not VoIP)
+        // This is separate from CALL_CANCELLED which is VoIP push for dismissing CallKit
+        const callerNumber = ringingCall.callData?.callerIdNum || ringingCall.callData?.callerNumber || '';
+        const callerName = ringingCall.callData?.callerIdName || ringingCall.callData?.callerName || '';
+        const lineName = ringingCall.callData?.lineName || '';
+        pushService.sendMissedCallPush(callId, callerNumber, callerName, lineName);
+        logger.info(`[AMI] 📵 Sent MISSED_CALL badge push for ${callId}`);
       }
 
       this.ringingCalls.delete(callId);

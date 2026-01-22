@@ -261,6 +261,77 @@ class PushService {
   }
 
   /**
+   * Send push notification for missed call (for badge update)
+   * This is a regular alert push (not VoIP) to update the app badge count
+   *
+   * @param {string} callId - The call ID
+   * @param {string} callerNumber - The caller's phone number
+   * @param {string} callerName - The caller's name (if available)
+   * @param {string} lineName - The line name (Chiro/Osteo)
+   */
+  async sendMissedCallPush(callId, callerNumber, callerName, lineName) {
+    try {
+      const displayName = callerName || callerNumber || 'Numéro inconnu';
+      logger.info(`[Push] 📵 Sending missed call push: ${displayName} (${callerNumber})`);
+
+      const pushData = {
+        callId,
+        callerNumber: callerNumber || '',
+        callerName: callerName || '',
+        lineName: lineName || '',
+        type: 'missed_call',
+        timestamp: Date.now()
+      };
+
+      const notification = {
+        title: 'Appel manqué',
+        body: lineName ? `${displayName} (${lineName})` : displayName
+      };
+
+      // Try Push Relay first (preferred method)
+      // Send as 'missed_call' type - this will be an alert push, not VoIP
+      const relay = getPushRelayService();
+      if (relay.isConfigured()) {
+        const result = await relay.broadcast('missed_call', pushData, notification);
+
+        if (result.sent > 0) {
+          logger.info(`[Push] 📵 Missed call push sent via relay to ${result.sent} devices`);
+        }
+        return result.sent || 0;
+      }
+
+      // Fallback to local FCM
+      const fcm = getFCMService();
+
+      if (!fcm.initialized) {
+        await fcm.initialize();
+      }
+
+      if (!fcm.projectId) {
+        logger.debug('[Push] FCM not configured, skipping missed call push');
+        return 0;
+      }
+
+      // Send notification push with badge
+      const sentCount = await fcm.sendMessageNotification(
+        callId,
+        notification.title,
+        notification.body,
+        { type: 'missed_call', ...pushData }
+      );
+
+      if (sentCount > 0) {
+        logger.info(`[Push] 📵 FCM missed call push sent to ${sentCount} devices`);
+      }
+
+      return sentCount;
+    } catch (error) {
+      logger.error('[Push] Missed call push error:', error.message);
+      return 0;
+    }
+  }
+
+  /**
    * Envoie un événement à un client spécifique
    */
   pushToClient(clientId, eventType, data) {
