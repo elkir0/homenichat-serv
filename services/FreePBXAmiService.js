@@ -351,6 +351,16 @@ class FreePBXAmiService extends EventEmitter {
         earlyPush: true // Flag to indicate this is an early push
       };
 
+      // CRITICAL: Register in ringingCalls so handleRingingCallEnd can send cancel push
+      this.ringingCalls.set(uniqueId, {
+        callData: earlyCallData,
+        channel: channel,
+        notifiedAt: Date.now(),
+        extensionsRinging: new Set(['1001']),
+        earlyPush: true
+      });
+      logger.info(`[AMI] 📝 Registered early push call in ringingCalls: ${uniqueId}`);
+
       // Emit the incoming call event immediately
       this.emit('incomingCall', earlyCallData);
 
@@ -830,8 +840,19 @@ class FreePBXAmiService extends EventEmitter {
     }
 
     // Stop ringing notification if call was still ringing
+    // Use the uniqueId stored in callInfo (from NewChannel) to match what's in ringingCalls
     const finalStatus = callInfo.answerTime ? 'answered' : 'missed';
-    this.handleRingingCallEnd(linkedId || uniqueId, finalStatus);
+    const callIdForRinging = callInfo.uniqueId || uniqueId;
+    logger.info(`[AMI] Looking up ringing call: uniqueId=${callIdForRinging}, linkedId=${linkedId}`);
+
+    // Try both the stored uniqueId and the linkedId
+    if (this.ringingCalls.has(callIdForRinging)) {
+      this.handleRingingCallEnd(callIdForRinging, finalStatus);
+    } else if (linkedId && this.ringingCalls.has(linkedId)) {
+      this.handleRingingCallEnd(linkedId, finalStatus);
+    } else {
+      logger.info(`[AMI] ⚠️ No ringing call found for uniqueId=${callIdForRinging} or linkedId=${linkedId}`);
+    }
 
     // Don't save here - let CDR event handle it with complete info
     // The CDR event fires shortly after Hangup with accurate source/destination
