@@ -603,19 +603,21 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
       this.state.lastHeartbeat = Date.now();
 
     } catch (error) {
-      // Check error message for "not found"
-      if (error.message && error.message.toLowerCase().includes('not found')) {
-        console.warn('[TunnelRelayService] Heartbeat failed: client not found, re-registering...');
+      const errorMsg = error.message || '';
+      // Check error message for "not found" (case insensitive)
+      if (errorMsg.toLowerCase().includes('not found')) {
+        console.log('[TunnelRelayService] Heartbeat error detected: "' + errorMsg + '" - triggering re-registration');
         this.state.registered = false;
         try {
           await this.register();
+          console.log('[TunnelRelayService] Re-registration successful');
         } catch (regError) {
           console.error('[TunnelRelayService] Re-registration failed:', regError.message);
         }
         return;
       }
-      // Other errors: silently fail - heartbeat is non-critical
-      console.debug('[TunnelRelayService] Heartbeat failed:', error.message);
+      // Other errors: log but don't re-register
+      console.log('[TunnelRelayService] Heartbeat failed:', errorMsg);
     }
   }
 
