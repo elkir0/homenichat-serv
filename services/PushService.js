@@ -212,15 +212,17 @@ class PushService {
 
       const pushData = {
         callId,
-        type: pushType,
+        type: pushType,  // 'cancel', 'answered_elsewhere', etc.
         reason,
         timestamp: Date.now()
       };
 
       // Try Push Relay first (preferred method)
+      // IMPORTANT: Send as 'incoming_call' type so the relay sends it as a VoIP push
+      // The iOS app will check pushData.type to distinguish incoming vs cancel
       const relay = getPushRelayService();
       if (relay.isConfigured()) {
-        const result = await relay.broadcast('call_cancelled', pushData);
+        const result = await relay.broadcast('incoming_call', pushData);
 
         if (result.sent > 0) {
           logger.info(`[Push] 📵 Call cancelled sent via relay to ${result.sent} devices`);
