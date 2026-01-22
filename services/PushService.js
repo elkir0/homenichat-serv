@@ -115,8 +115,10 @@ class PushService {
   async sendIncomingCallFCM(callData) {
     try {
       const callId = callData.callId || `call-${Date.now()}`;
-      const callerName = callData.callerName || callData.callerIdName || 'Appel entrant';
       const callerNumber = callData.callerNumber || callData.callerIdNum || '';
+      // IMPORTANT: Use callerNumber as fallback for display name, NOT 'Appel entrant'
+      // This ensures the phone number is shown when callerName is null (filtered trunk name)
+      const callerName = callData.callerName || callerNumber || callData.callerIdName || 'Appel entrant';
       const lineName = callData.lineName || '';
       const extension = callData.extension || '';
 
