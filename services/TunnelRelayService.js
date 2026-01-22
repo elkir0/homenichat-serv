@@ -428,6 +428,25 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
     });
 
     if (!response.success) {
+      // If client not found, re-register and try again
+      if (response.error === 'Client not found' || response.error?.includes('not found')) {
+        console.warn('[TunnelRelayService] Client not found on relay, re-registering...');
+        this.state.registered = false;
+        await this.register();
+        // Retry after re-registration
+        const retryResponse = await this.apiRequest('POST', '/api/turn-credentials', {
+          clientId: this.config.clientId
+        });
+        if (!retryResponse.success) {
+          throw new Error(retryResponse.error || 'Failed to refresh credentials after re-registration');
+        }
+        this.state.turnCredentials = retryResponse.turn;
+        this.state.lastRefresh = Date.now();
+        this.saveConfig();
+        this.emit('credentials-refreshed', retryResponse.turn);
+        console.log('[TunnelRelayService] TURN credentials refreshed after re-registration');
+        return retryResponse.turn;
+      }
       throw new Error(response.error || 'Failed to refresh credentials');
     }
 
@@ -571,11 +590,31 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
         version: process.env.npm_package_version || '1.0.0',
       };
 
-      await this.apiRequest('POST', '/api/heartbeat', stats);
+      const response = await this.apiRequest('POST', '/api/heartbeat', stats);
+
+      // Check if relay returned an error (client not found)
+      if (response && response.error && response.error.toLowerCase().includes('not found')) {
+        console.warn('[TunnelRelayService] Heartbeat failed: client not found, re-registering...');
+        this.state.registered = false;
+        await this.register();
+        return;
+      }
+
       this.state.lastHeartbeat = Date.now();
 
     } catch (error) {
-      // Silently fail - heartbeat is non-critical
+      // Check error message for "not found"
+      if (error.message && error.message.toLowerCase().includes('not found')) {
+        console.warn('[TunnelRelayService] Heartbeat failed: client not found, re-registering...');
+        this.state.registered = false;
+        try {
+          await this.register();
+        } catch (regError) {
+          console.error('[TunnelRelayService] Re-registration failed:', regError.message);
+        }
+        return;
+      }
+      // Other errors: silently fail - heartbeat is non-critical
       console.debug('[TunnelRelayService] Heartbeat failed:', error.message);
     }
   }
