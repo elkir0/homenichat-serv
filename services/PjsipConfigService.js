@@ -46,12 +46,11 @@ class PjsipConfigService {
   }
 
   /**
-   * Parse PJSIP config content and extract extensions
+   * Parse PJSIP config content and extract extensions WITH passwords
    */
   parseConfig(content) {
     const lines = content.split('\n');
     let currentSection = null;
-    let currentType = null;
     let currentData = {};
 
     for (const line of lines) {
@@ -63,17 +62,28 @@ class PjsipConfigService {
       // Section header
       const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
       if (sectionMatch) {
-        // Save previous section
-        if (currentSection && currentType === 'endpoint') {
-          const ext = currentSection.replace('-auth', '');
+        // Save previous section data
+        if (currentSection && currentData.type) {
+          // Extract extension number from section name
+          let ext = currentSection.replace('-auth', '');
+
           if (!this.extensions.has(ext)) {
             this.extensions.set(ext, { extension: ext });
           }
-          Object.assign(this.extensions.get(ext), currentData);
+
+          // Merge data based on section type
+          const extData = this.extensions.get(ext);
+          if (currentData.type === 'auth' && currentData.password) {
+            extData.password = currentData.password;
+          }
+          if (currentData.type === 'endpoint') {
+            if (currentData.callerid) extData.displayName = currentData.callerid.replace(/^"([^"]+)".*/, '$1');
+            if (currentData.context) extData.context = currentData.context;
+            if (currentData.allow) extData.codecs = currentData.allow.split(',');
+          }
         }
 
         currentSection = sectionMatch[1];
-        currentType = null;
         currentData = {};
         continue;
       }
@@ -83,13 +93,70 @@ class PjsipConfigService {
       if (kvMatch) {
         const key = kvMatch[1].trim();
         const value = kvMatch[2].trim();
-
-        if (key === 'type') {
-          currentType = value;
-        }
         currentData[key] = value;
       }
     }
+
+    // Don't forget the last section
+    if (currentSection && currentData.type) {
+      let ext = currentSection.replace('-auth', '');
+      if (!this.extensions.has(ext)) {
+        this.extensions.set(ext, { extension: ext });
+      }
+      const extData = this.extensions.get(ext);
+      if (currentData.type === 'auth' && currentData.password) {
+        extData.password = currentData.password;
+      }
+    }
+  }
+
+  /**
+   * Get or create extension - returns existing password if extension exists
+   *
+   * @param {object} config - Extension configuration
+   * @returns {Promise<{success: boolean, password: string, created: boolean}>}
+   */
+  async getOrCreateExtension(config) {
+    const { extension, password, displayName, context, codecs } = config;
+
+    if (!extension) {
+      return { success: false, message: 'Extension is required' };
+    }
+
+    // Ensure config is loaded
+    if (!this.loaded) {
+      await this.load();
+    }
+
+    // Check if extension already exists with a password
+    const existing = this.extensions.get(extension);
+    if (existing && existing.password) {
+      logger.info(`[PjsipConfig] Extension ${extension} already exists, returning existing password`);
+      return {
+        success: true,
+        password: existing.password,
+        created: false,
+        displayName: existing.displayName
+      };
+    }
+
+    // Extension doesn't exist or has no password - create/update it
+    if (!password) {
+      return { success: false, message: 'Password is required for new extension' };
+    }
+
+    const result = await this.createExtension({
+      extension,
+      password,
+      displayName,
+      context,
+      codecs
+    });
+
+    if (result.success) {
+      return { success: true, password, created: true };
+    }
+    return result;
   }
 
   /**
@@ -106,10 +173,6 @@ class PjsipConfigService {
       password,
       displayName,
       context = 'from-internal',
-      // Codec priority for GSM modem compatibility:
-      // g722 (16kHz) compatible with slin16 modem
-      // ulaw/alaw (8kHz) fallback
-      // opus (48kHz) last - causes bridge issues with modems
       codecs = ['g722', 'ulaw', 'alaw', 'opus'],
     } = config;
 
@@ -150,9 +213,6 @@ class PjsipConfigService {
 
   /**
    * Delete a PJSIP extension
-   *
-   * @param {string} extension - Extension number to delete
-   * @returns {Promise<{success: boolean, message: string}>}
    */
   async deleteExtension(extension) {
     if (!this.extensions.has(extension)) {
@@ -175,9 +235,6 @@ class PjsipConfigService {
 
   /**
    * Get extension configuration
-   *
-   * @param {string} extension - Extension number
-   * @returns {object|null}
    */
   getExtension(extension) {
     return this.extensions.get(extension) || null;
@@ -185,8 +242,6 @@ class PjsipConfigService {
 
   /**
    * List all configured extensions
-   *
-   * @returns {Array}
    */
   listExtensions() {
     return Array.from(this.extensions.values()).map(ext => ({
@@ -199,20 +254,16 @@ class PjsipConfigService {
 
   /**
    * Save all extensions to config file
-   *
-   * CRITICAL: AOR section name MUST match extension number!
-   * Wrong: [1001-aor] with aors=1001-aor
-   * Correct: [1001] type=aor with aors=1001
    */
   async saveConfig() {
     const lines = [
       '; Homenichat PJSIP Dynamic Extensions',
       '; Auto-generated by PjsipConfigService',
       '; DO NOT EDIT MANUALLY - changes will be overwritten',
-      `;`,
+      ';',
       '; IMPORTANT: AOR section name MUST match extension number!',
       '; See docs/WEBRTC-VOIP-CONFIG.md for details.',
-      `;`,
+      ';',
       `; Generated: ${new Date().toISOString()}`,
       '',
     ];
@@ -223,7 +274,6 @@ class PjsipConfigService {
         ? `"${config.displayName}" <${ext}>`
         : ext;
 
-      // ENDPOINT section
       lines.push(
         `; === Extension ${ext} ===`,
         `[${ext}]`,
@@ -234,7 +284,7 @@ class PjsipConfigService {
         `transport=transport-ws`,
         `webrtc=yes`,
         `auth=${ext}-auth`,
-        `aors=${ext}`,  // MUST match AOR section name below!
+        `aors=${ext}`,
         `direct_media=no`,
         `dtmf_mode=rfc4733`,
         `identify_by=username`,
@@ -242,7 +292,6 @@ class PjsipConfigService {
         '',
       );
 
-      // AUTH section
       lines.push(
         `[${ext}-auth]`,
         `type=auth`,
@@ -252,9 +301,8 @@ class PjsipConfigService {
         '',
       );
 
-      // AOR section - CRITICAL: name must match extension number!
       lines.push(
-        `[${ext}]`,  // Same name as endpoint!
+        `[${ext}]`,
         `type=aor`,
         `max_contacts=5`,
         `remove_existing=yes`,
@@ -262,12 +310,10 @@ class PjsipConfigService {
       );
     }
 
-    // Create backup directory
     if (!fs.existsSync(PJSIP_BACKUP_DIR)) {
       fs.mkdirSync(PJSIP_BACKUP_DIR, { recursive: true });
     }
 
-    // Backup existing config
     if (fs.existsSync(PJSIP_DYNAMIC_CONF)) {
       const backupPath = path.join(
         PJSIP_BACKUP_DIR,
@@ -276,17 +322,12 @@ class PjsipConfigService {
       fs.copyFileSync(PJSIP_DYNAMIC_CONF, backupPath);
     }
 
-    // Write new config
     fs.writeFileSync(PJSIP_DYNAMIC_CONF, lines.join('\n'), 'utf8');
 
-    // Set permissions
     try {
       fs.chmodSync(PJSIP_DYNAMIC_CONF, 0o644);
-      // Try to set ownership to asterisk user
       exec(`chown asterisk:asterisk ${PJSIP_DYNAMIC_CONF}`, () => {});
-    } catch (e) {
-      // Ignore permission errors
-    }
+    } catch (e) {}
 
     logger.info(`[PjsipConfig] Config saved with ${this.extensions.size} extensions`);
   }
@@ -296,7 +337,7 @@ class PjsipConfigService {
    */
   async reloadPjsip() {
     return new Promise((resolve) => {
-      exec('asterisk -rx "pjsip reload"', (error, stdout, stderr) => {
+      exec('asterisk -rx "module reload res_pjsip.so"', (error, stdout, stderr) => {
         if (error) {
           logger.warn(`[PjsipConfig] PJSIP reload warning: ${error.message}`);
         } else {
@@ -308,7 +349,7 @@ class PjsipConfigService {
   }
 
   /**
-   * Check if Asterisk is available and PJSIP is loaded
+   * Check if Asterisk is available
    */
   async checkAsterisk() {
     return new Promise((resolve) => {
@@ -324,20 +365,13 @@ class PjsipConfigService {
   }
 
   /**
-   * Get extension registration status from Asterisk
-   *
-   * @param {string} extension - Extension number
-   * @returns {Promise<object>}
+   * Get extension registration status
    */
   async getExtensionStatus(extension) {
     return new Promise((resolve) => {
       exec(`asterisk -rx "pjsip show endpoint ${extension}" 2>/dev/null`, (error, stdout) => {
         if (error || !stdout.includes('Endpoint:')) {
-          resolve({
-            extension,
-            exists: false,
-            registered: false
-          });
+          resolve({ extension, exists: false, registered: false });
           return;
         }
 
@@ -355,7 +389,5 @@ class PjsipConfigService {
   }
 }
 
-// Singleton instance
 const pjsipConfigService = new PjsipConfigService();
-
 module.exports = pjsipConfigService;

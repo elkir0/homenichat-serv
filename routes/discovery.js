@@ -310,7 +310,7 @@ router.get('/', async (req, res) => {
 
             const asteriskCheck = await pjsipConfig.checkAsterisk();
             if (asteriskCheck.available) {
-              const extResult = await pjsipConfig.createExtension({
+              const extResult = await pjsipConfig.getOrCreateExtension({
                 extension: extensionNumber,
                 password: secret,
                 displayName: req.user.username || `User ${req.user.id}`,
@@ -320,7 +320,9 @@ router.get('/', async (req, res) => {
 
               if (extResult.success) {
                 extensionCreated = true;
-                console.log(`[Discovery] Auto-created VoIP extension ${extensionNumber} for user ${req.user.id} via PjsipConfig`);
+                // Use returned password (may be existing password if extension already exists)
+                secret = extResult.password;
+                console.log(`[Discovery] VoIP extension ${extensionNumber} ${extResult.created ? 'created' : 'reused'} for user ${req.user.id} via PjsipConfig`);
               }
             }
           } catch (e) {
@@ -624,7 +626,7 @@ async function getDiscoveryData(req) {
 
           const asteriskCheck = await pjsipConfig.checkAsterisk();
           if (asteriskCheck.available) {
-            const extResult = await pjsipConfig.createExtension({
+            const extResult = await pjsipConfig.getOrCreateExtension({
               extension: extensionNumber,
               password: secret,
               displayName: req.user.username || `User ${req.user.id}`,
@@ -634,6 +636,8 @@ async function getDiscoveryData(req) {
 
             if (extResult.success) {
               extensionCreated = true;
+              // Use returned password (may be existing password if extension already exists)
+              secret = extResult.password;
             }
           }
         } catch (e) {
