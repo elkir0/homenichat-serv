@@ -1,0 +1,28 @@
+; Homenichat - quectel.conf template for EC25 modems
+; Fork: IchthysMaranatha (https://github.com/IchthysMaranatha/asterisk-chan-quectel)
+; Build: ./bootstrap && ./configure --with-astversion=22 && make && make install
+;
+; EC25 uses 8kHz audio (slin16=no) and audio on ttyUSB1 (data+1)
+; Tested optimal gain values: rxgain=3, txgain=-5
+
+[general]
+interval=15
+smsdb=/var/lib/asterisk/smsdb
+csmsttl=600
+
+[defaults]
+context=from-gsm
+group=0
+rxgain=3              ; Reception gain (speaker volume) - tested optimal
+txgain=-5             ; Transmission gain (mic volume) - reduced to prevent saturation
+autodeletesms=no
+resetquectel=yes
+usecallingpres=yes
+callingpres=allowed_passed_screen
+
+; Example modem configuration
+; Uncomment and adjust for your setup
+;[modem-1]
+;data=/dev/ttyUSB2    ; AT command port (usually USB+2)
+;audio=/dev/ttyUSB1   ; Audio port (USB+1 for EC25)
+;slin16=no            ; IMPORTANT: EC25 uses 8kHz, not 16kHz

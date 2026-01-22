@@ -1,0 +1,15 @@
+[Unit]
+Description=Initialize GSM Modem Audio (EC25/SIM7600)
+After=asterisk.service
+Requires=asterisk.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 10
+ExecStart=/opt/homenichat/scripts/modem-init.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

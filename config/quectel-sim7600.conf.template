@@ -1,0 +1,29 @@
+; Homenichat - quectel.conf template for SIM7600 modems
+; Fork: RoEdAl (https://github.com/RoEdAl/asterisk-chan-quectel @ commit 37b566f)
+; Build: cmake -DCMAKE_BUILD_TYPE=Release .. && make && make install
+;
+; SIM7600 uses 16kHz audio (slin16=yes) and audio on ttyUSB4 (data+4)
+; Tested optimal gain values: rxgain=2, txgain=2
+
+[general]
+interval=15
+smsdb=/var/lib/asterisk/smsdb
+csmsttl=600
+
+[defaults]
+context=from-gsm
+group=0
+rxgain=2              ; Reception gain (speaker volume)
+txgain=2              ; Transmission gain (mic volume)
+autodeletesms=no
+resetquectel=yes
+usecallingpres=yes
+callingpres=allowed_passed_screen
+msg_storage=me        ; Store SMS on modem memory
+
+; Example modem configuration
+; Uncomment and adjust for your setup
+;[modem-1]
+;data=/dev/ttyUSB2    ; AT command port (usually USB+2)
+;audio=/dev/ttyUSB4   ; Audio port (USB+4 for SIM7600)
+;slin16=yes           ; IMPORTANT: SIM7600 uses 16kHz
