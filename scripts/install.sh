@@ -862,6 +862,13 @@ install_asterisk_source() {
     # Add asterisk to audio and dialout groups
     usermod -aG audio,dialout asterisk 2>/dev/null || true
 
+    # Create tmpfiles.d config for runtime directory (survives reboot)
+    info "Creating tmpfiles.d config for Asterisk runtime directory..."
+    cat > /etc/tmpfiles.d/asterisk.conf << 'TMPFILES'
+# Create and set permissions for Asterisk runtime directory at boot
+d /var/run/asterisk 0755 asterisk asterisk -
+TMPFILES
+
     # Create systemd service if not exists
     if [ ! -f /etc/systemd/system/asterisk.service ]; then
         info "Creating Asterisk systemd service..."
@@ -874,6 +881,9 @@ After=network.target
 Type=simple
 User=asterisk
 Group=asterisk
+# Ensure runtime directory exists with correct permissions
+ExecStartPre=/bin/mkdir -p /var/run/asterisk
+ExecStartPre=/bin/chown asterisk:asterisk /var/run/asterisk
 ExecStart=/usr/sbin/asterisk -f -C /etc/asterisk/asterisk.conf
 ExecReload=/usr/sbin/asterisk -rx 'core reload'
 ExecStop=/usr/sbin/asterisk -rx 'core stop gracefully'
@@ -888,6 +898,17 @@ ProtectSystem=full
 WantedBy=multi-user.target
 ASTSERVICE
         systemctl daemon-reload
+    else
+        # Add ExecStartPre to existing service if missing
+        if ! grep -q "ExecStartPre.*var/run/asterisk" /etc/systemd/system/asterisk.service 2>/dev/null; then
+            mkdir -p /etc/systemd/system/asterisk.service.d
+            cat > /etc/systemd/system/asterisk.service.d/permissions.conf << 'PERMS'
+[Service]
+ExecStartPre=/bin/mkdir -p /var/run/asterisk
+ExecStartPre=/bin/chown asterisk:asterisk /var/run/asterisk
+PERMS
+            systemctl daemon-reload
+        fi
     fi
 
     # Enable and start Asterisk

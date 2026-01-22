@@ -550,6 +550,25 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
     });
 
     if (!response.success) {
+      // If client not found, re-register and try again
+      if (response.error === 'Client not found' || response.error?.includes('not found')) {
+        logger.warn('[HomenichatCloud] Client not found on relay, re-registering...');
+        this.tunnel.registered = false;
+        await this.registerTunnel();
+        // Retry after re-registration
+        const retryResponse = await this.apiRequest('POST', '/api/turn-credentials', {
+          clientId: this.config.clientId,
+        });
+        if (!retryResponse.success) {
+          throw new Error(retryResponse.error || 'Failed to refresh credentials after re-registration');
+        }
+        this.tunnel.turnCredentials = retryResponse.turn;
+        this.tunnel.lastRefresh = Date.now();
+        this.saveConfig();
+        this.emit('credentials-refreshed', retryResponse.turn);
+        logger.info('[HomenichatCloud] TURN credentials refreshed after re-registration');
+        return retryResponse.turn;
+      }
       throw new Error(response.error || 'Failed to refresh credentials');
     }
 
@@ -813,7 +832,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
     try {
       const memoryUsage = process.memoryUsage();
 
-      await this.apiRequest('POST', '/api/heartbeat', {
+      const response = await this.apiRequest('POST', '/api/heartbeat', {
         clientId: this.config.clientId,
         timestamp: Date.now(),
         uptime: Math.floor(process.uptime()),
@@ -829,9 +848,27 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
         version: process.env.npm_package_version || '1.0.0',
       });
 
+      // Check if relay returned an error (client not found)
+      if (response && response.error && response.error.toLowerCase().includes('not found')) {
+        logger.warn('[HomenichatCloud] Heartbeat failed: client not found, re-registering...');
+        this.tunnel.registered = false;
+        await this.registerTunnel();
+        return;
+      }
+
       this.tunnel.lastHeartbeat = Date.now();
     } catch (error) {
-      // Silently fail - heartbeat is non-critical
+      // Check error message for "not found"
+      if (error.message && error.message.toLowerCase().includes('not found')) {
+        logger.warn('[HomenichatCloud] Heartbeat failed: client not found, re-registering...');
+        this.tunnel.registered = false;
+        try {
+          await this.registerTunnel();
+        } catch (regError) {
+          logger.error('[HomenichatCloud] Re-registration failed:', regError.message);
+        }
+      }
+      // Other errors: silently fail - heartbeat is non-critical
     }
   }
 

@@ -65,97 +65,47 @@ else
 ; =============================================================================
 ; TRANSPORTS
 ; =============================================================================
-[transport-wss]
-type=transport
-protocol=wss
-bind=0.0.0.0:8089
-cert_file=/etc/asterisk/keys/asterisk.pem
-priv_key_file=/etc/asterisk/keys/asterisk.key
-method=tlsv1_2
+; Note: WSS transport requires SSL certificates in /etc/asterisk/keys/
+; If certificates are missing, only WS transport will be available
 
 [transport-ws]
 type=transport
 protocol=ws
 bind=0.0.0.0:8088
 
-; Transport UDP (for classic SIP clients like Groundwire, Zoiper)
-[transport-udp]
-type=transport
-protocol=udp
-bind=0.0.0.0:5060
-
 ; =============================================================================
-; DEFAULT EXTENSION: 1001 (Homenichat WebRTC)
+; WEBRTC ENDPOINT TEMPLATE
 ; =============================================================================
-; Each extension needs 3 sections:
-; - endpoint: [XXXX] type=endpoint
-; - auth: [XXXX-auth] type=auth
-; - aor: [XXXX] type=aor (CRITICAL: SAME NAME as endpoint!)
-
-[1001]
+; Template for WebRTC extensions created by PjsipConfigService
+; Codec priority for GSM modem compatibility:
+; g722 (16kHz) first - compatible with slin16 modem (AT+CPCMFRM=1)
+; ulaw/alaw (8kHz) fallback
+; opus (48kHz) last - causes bridge incompatibility with modems
+[webrtc-endpoint](!)
 type=endpoint
 context=from-internal
 disallow=all
-; Codec priority for GSM modem compatibility:
-; g722 (16kHz) first - compatible with slin16 modem
-; ulaw/alaw (8kHz) fallback
-; opus (48kHz) last - may cause bridge issues with modems
 allow=g722
 allow=ulaw
 allow=alaw
 allow=opus
 transport=transport-ws
 webrtc=yes
-auth=1001-auth
-aors=1001
+dtls_auto_generate_cert=yes
+ice_support=yes
+media_encryption=dtls
+media_use_received_transport=yes
+rtcp_mux=yes
 direct_media=no
-dtmf_mode=rfc4733
-identify_by=username
-callerid="Homenichat" <1001>
-
-[1001-auth]
-type=auth
-auth_type=userpass
-username=1001
-password=homenichat1001
-
-[1001]
-type=aor
-max_contacts=5
-remove_existing=yes
 
 ; =============================================================================
-; ADDITIONAL EXTENSIONS (uncomment and customize as needed)
+; EXTENSIONS
 ; =============================================================================
-; To add more extensions, copy the 3-section pattern above.
-; Remember: AOR section name MUST match the extension number!
-
-;[1002]
-;type=endpoint
-;context=from-internal
-;disallow=all
-;allow=opus,ulaw,alaw
-;transport=transport-ws
-;webrtc=yes
-;auth=1002-auth
-;aors=1002
-;direct_media=no
-;dtmf_mode=rfc4733
-;identify_by=username
-
-;[1002-auth]
-;type=auth
-;auth_type=userpass
-;username=1002
-;password=changeme
-
-;[1002]
-;type=aor
-;max_contacts=5
-;remove_existing=yes
-
-; Include dynamically generated extensions (managed by Homenichat)
-#tryinclude pjsip_extensions_dynamic.conf
+; Extensions are managed dynamically by Homenichat PjsipConfigService.
+; They are stored in pjsip_extensions_dynamic.conf which is included via
+; pjsip_custom.conf. DO NOT add static extensions here to avoid duplicates.
+;
+; To add manual extensions, use pjsip_custom.conf instead.
 EOF
 fi
 
