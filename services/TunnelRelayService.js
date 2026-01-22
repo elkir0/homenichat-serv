@@ -604,11 +604,10 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
 
     } catch (error) {
       const errorMsg = error.message || '';
-      console.log('[TunnelRelayService] Heartbeat catch - errorMsg:', JSON.stringify(errorMsg), 'includes not found:', errorMsg.toLowerCase().includes('not found'));
 
-      // Check error message for "not found" (case insensitive)
+      // Check error message for "not found" (case insensitive) - means relay forgot us
       if (errorMsg.toLowerCase().includes('not found')) {
-        console.log('[TunnelRelayService] Heartbeat error detected: "' + errorMsg + '" - triggering re-registration');
+        console.warn('[TunnelRelayService] Heartbeat: client not found, re-registering...');
         this.state.registered = false;
         try {
           await this.register();
@@ -618,8 +617,8 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
         }
         return;
       }
-      // Other errors: log but don't re-register
-      console.log('[TunnelRelayService] Heartbeat failed (not triggering re-reg):', errorMsg);
+      // Other errors: log silently
+      console.debug('[TunnelRelayService] Heartbeat failed:', errorMsg);
     }
   }
 
