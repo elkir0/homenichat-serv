@@ -334,10 +334,14 @@ class FreePBXAmiService extends EventEmitter {
         formattedNumber = '0' + formattedNumber.substring(4);
       }
 
+      // Filter out trunk names from callerIdName (e.g., "GSM-Chiro" -> null)
+      // This ensures the caller number is displayed instead of the trunk name
+      const filteredCallerName = this.isTrunkName(callerIdName) ? null : callerIdName;
+
       const earlyCallData = {
         callId: uniqueId,
         callerNumber: formattedNumber || 'Inconnu',
-        callerName: callerIdName || null,
+        callerName: filteredCallerName,
         lineName: this.extractLineName(trunkName) || this.extractLineName(channel),
         extension: '1001', // Default extension for incoming calls
         channel: channel,
@@ -398,13 +402,25 @@ class FreePBXAmiService extends EventEmitter {
   }
 
   /**
-   * Check if a number is a trunk/gateway identifier (not a real number)
+   * Check if a name is a trunk/gateway identifier (not a real caller name)
+   * Used to filter out trunk names from CallerIDName field
    */
+  isTrunkName(name) {
+    if (!name) return true;
+    const lowerName = name.toLowerCase();
+    // Patterns that indicate this is a trunk/gateway name, not a real caller
+    const trunkPatterns = [
+      'gsm', 'gateway', 'trunk', 'unknown', 'chiro', 'osteo',
+      'quectel', 'ec25', 'sim7600', 'modem', 'dahdi', 'pjsip',
+      'sip/', 'incoming', 'from-', 'anonymous', 'unavailable',
+      'private', 'restricted', 'withheld'
+    ];
+    return trunkPatterns.some(pattern => lowerName.includes(pattern));
+  }
+
+  // Alias for backwards compatibility
   isTrunkNumber(number) {
-    if (!number) return true;
-    const trunkPatterns = ['gsm', 'gateway', 'trunk', 'unknown', 'Chiro'];
-    const lowerNum = number.toLowerCase();
-    return trunkPatterns.some(pattern => lowerNum.includes(pattern));
+    return this.isTrunkName(number);
   }
 
   /**
