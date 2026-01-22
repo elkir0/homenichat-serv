@@ -276,7 +276,7 @@ router.get('/', async (req, res) => {
         let extensionCreated = false;
         // Use next available extension from 1000 range (matches Asterisk standard)
         const extensionNumber = globalConfig.extension || db.getNextAvailableExtension(1000).toString();
-        const secret = Math.random().toString(36).substring(2, 18);
+        let secret = Math.random().toString(36).substring(2, 18);
 
         // Try AMI first (FreePBX)
         try {
@@ -593,7 +593,7 @@ async function getDiscoveryData(req) {
     else {
       let extensionCreated = false;
       const extensionNumber = globalConfig.extension || db.getNextAvailableExtension(1000).toString();
-      const secret = Math.random().toString(36).substring(2, 18);
+      let secret = Math.random().toString(36).substring(2, 18);
 
       // Try AMI first (FreePBX)
       try {
