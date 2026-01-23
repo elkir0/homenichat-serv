@@ -5,6 +5,7 @@ const providerManager = require('../services/ProviderManager');
 const sessionManager = require('../services/SessionManager');
 const logger = require('winston');
 const chatStorage = require('../services/ChatStorageServicePersistent');
+const dbService = require('../services/DatabaseService');
 const webSocketManager = require('../services/WebSocketManager');
 
 // Toutes les routes nécessitent une authentification
@@ -387,6 +388,25 @@ router.post('/:chatId/test-send/:provider', async (req, res) => {
 router.put('/:chatId/read', async (req, res) => {
   try {
     const { chatId } = req.params;
+
+    // Handle SMS chats directly in SQLite (they use sms_ prefix)
+    if (chatId.startsWith('sms_')) {
+      const db = dbService.db;
+      if (db) {
+        const stmt = db.prepare('UPDATE chats SET unread_count = 0 WHERE id = ?');
+        stmt.run(chatId);
+        logger.info(`[SMS] Marked chat ${chatId} as read (unread_count = 0)`);
+
+        // Broadcast update via WebSocket
+        if (webSocketManager) {
+          webSocketManager.broadcast('chat_read', { chatId, unreadCount: 0 });
+        }
+
+        return res.json({ success: true });
+      }
+    }
+
+    // For WhatsApp chats, use the provider
     const activeProvider = getProviderForRequest(req);
 
     if (!activeProvider) {
@@ -412,6 +432,25 @@ router.put('/:chatId/read', async (req, res) => {
 router.post('/:chatId/read', async (req, res) => {
   try {
     const { chatId } = req.params;
+
+    // Handle SMS chats directly in SQLite (they use sms_ prefix)
+    if (chatId.startsWith('sms_')) {
+      const db = dbService.db;
+      if (db) {
+        const stmt = db.prepare('UPDATE chats SET unread_count = 0 WHERE id = ?');
+        stmt.run(chatId);
+        logger.info(`[SMS] Marked chat ${chatId} as read (unread_count = 0)`);
+
+        // Broadcast update via WebSocket
+        if (webSocketManager) {
+          webSocketManager.broadcast('chat_read', { chatId, unreadCount: 0 });
+        }
+
+        return res.json({ success: true });
+      }
+    }
+
+    // For WhatsApp chats, use the provider
     const activeProvider = getProviderForRequest(req);
 
     if (!activeProvider) {
