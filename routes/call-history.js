@@ -229,6 +229,7 @@ router.post('/', verifyToken, [
             status: req.body.status,
             source: req.body.source || 'pwa',
             pbxCallId: req.body.pbxCallId || null,
+            deviceName: req.body.deviceName || null,
             rawData: req.body.rawData || null
         };
 

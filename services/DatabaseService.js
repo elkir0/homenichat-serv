@@ -196,6 +196,18 @@ class DatabaseService {
             logger.debug('Migration line_name skipped:', err.message);
         }
 
+        // Add device_name column to call_history (for shared history across iOS devices)
+        try {
+            const columns = this.db.prepare("PRAGMA table_info(call_history)").all();
+            const hasDeviceName = columns.some(col => col.name === 'device_name');
+            if (!hasDeviceName) {
+                this.db.exec("ALTER TABLE call_history ADD COLUMN device_name TEXT");
+                logger.info('Migration: Added device_name column to call_history');
+            }
+        } catch (err) {
+            logger.debug('Migration device_name skipped:', err.message);
+        }
+
         // Migration: Add voip_tokens table for iOS VoIP Push (APNs)
         // This is ADDITIVE - does not affect existing PWA functionality
         try {
@@ -409,8 +421,8 @@ class DatabaseService {
                 id, direction, caller_number, called_number, caller_name,
                 start_time, answer_time, end_time, duration,
                 answered_by_user_id, answered_by_username, answered_by_extension,
-                status, source, pbx_call_id, seen, notes, recording_url, line_name, raw_data
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                status, source, pbx_call_id, seen, notes, recording_url, line_name, device_name, raw_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         stmt.run(
             call.id,
@@ -432,6 +444,7 @@ class DatabaseService {
             call.notes || null,
             call.recordingUrl || null,
             call.lineName || null,
+            call.deviceName || null,
             call.rawData ? JSON.stringify(call.rawData) : null
         );
         return call;
