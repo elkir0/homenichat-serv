@@ -196,7 +196,7 @@ class FreePBXAmiService extends EventEmitter {
       Action: 'Login',
       Username: this.config.username,
       Secret: this.config.password,
-      Events: 'call,cdr'
+      Events: 'on'  // Subscribe to all events (Newchannel, DialBegin, Hangup, etc.)
     });
   }
 
