@@ -278,8 +278,9 @@ class FreePBXAmiService extends EventEmitter {
     }
 
     // Determine if caller is internal (extension) or external
+    // External caller must be a valid phone number (digits, possibly starting with +)
     const isInternalCaller = callerIdNum && callerIdNum.length <= 4 && /^\d+$/.test(callerIdNum);
-    const isExternalCaller = callerIdNum && callerIdNum.length >= 6;
+    const isExternalCaller = callerIdNum && callerIdNum.length >= 6 && /^[+\d]/.test(callerIdNum);
 
     // Skip Local channels (dialplan internal)
     if (channel && channel.startsWith('Local/')) {
