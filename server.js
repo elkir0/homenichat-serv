@@ -1067,8 +1067,8 @@ async function startServer() {
       // VoLTE AT commands (AT+QAUDMOD=3, AT+QPCMV=1,2) don't persist after reboot!
       // This ensures VoLTE is re-enabled for modems with volteEnabled=true
       try {
-        const { getModemService } = require('./services/modem');
-        const { startVoLTEInitBackground } = require('./services/modem/volte-init');
+        const { getModemService } = require('./src/services/modem');
+        const { startVoLTEInitBackground } = require('./src/services/modem/volte-init');
         const modemService = getModemService();
         const modemsConfig = modemService.getAllModemsConfig();
 
@@ -1094,7 +1094,7 @@ async function startServer() {
       // Level 4: restart Asterisk, Level 5: reboot host (if enabled)
       if (process.env.WATCHDOG_ENABLED !== 'false') {
         try {
-          const { startWatchdog } = require('./services/modem/watchdog');
+          const { startWatchdog } = require('./src/services/modem/watchdog');
 
           // Configuration from environment
           const watchdogConfig = {
