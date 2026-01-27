@@ -7,7 +7,11 @@ const WebSocket = require('ws');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-require('dotenv').config();
+// Load .env from /etc/homenichat/.env (production) or local .env (development)
+const envPath = fs.existsSync('/etc/homenichat/.env')
+  ? '/etc/homenichat/.env'
+  : path.join(__dirname, '.env');
+require('dotenv').config({ path: envPath });
 
 // Import des routes
 const authRoutes = require('./routes/auth');
