@@ -11,10 +11,11 @@
 
 const logger = require('../../../utils/logger');
 const { MODEM_PROFILES, VOLTE_CONFIG, VOICE_MODES } = require('./constants');
-const { asteriskCommand, sendAtCommand, sleep } = require('./utils');
+const { asteriskCommand, sendAtCommand, sleep, sendAtDirect, getModemDataPort } = require('./utils');
 
 /**
  * Get VoLTE status for a modem
+ * Uses direct serial communication for accurate status reading
  * @param {string} modemId - Modem ID (e.g., 'modem-1')
  * @returns {Promise<Object>} VoLTE status
  */
@@ -30,55 +31,70 @@ async function getVoLTEStatus(modemId) {
     };
 
     try {
-        // Check IMS status: AT+QCFG="ims" -> should return 1,1 for active VoLTE
-        const imsResult = await asteriskCommand(`quectel cmd ${modemId} ${VOLTE_CONFIG.verifyCommands.imsStatus}`);
-        const imsMatch = imsResult.match(/\+QCFG:\s*"ims",(\d),(\d)/);
-        if (imsMatch) {
-            status.details.imsEnabled = imsMatch[1] === '1';
-            status.details.imsRegistered = imsMatch[2] === '1';
-            status.imsRegistered = imsMatch[1] === '1' && imsMatch[2] === '1';
-        }
+        // Get modem data port for direct AT commands
+        const dataPort = await getModemDataPort(modemId);
 
-        // Check network mode: AT+COPS? -> should contain ",7" for LTE
-        const copsResult = await asteriskCommand(`quectel cmd ${modemId} ${VOLTE_CONFIG.verifyCommands.networkMode}`);
-        const copsMatch = copsResult.match(/\+COPS:\s*\d,\d,"[^"]*",(\d+)/);
-        if (copsMatch) {
-            const rat = parseInt(copsMatch[1]);
-            status.networkMode = rat === 7 ? 'LTE' : rat === 2 ? '3G' : rat === 0 ? '2G' : `Unknown(${rat})`;
-            status.details.networkRat = rat;
-        }
-
-        // Check audio mode: AT+QAUDMOD? -> 0=handset, 3=USB Audio (UAC)
-        const audmodResult = await asteriskCommand(`quectel cmd ${modemId} ${VOLTE_CONFIG.verifyCommands.audioMode}`);
-        const audmodMatch = audmodResult.match(/\+QAUDMOD:\s*(\d)/);
-        if (audmodMatch) {
-            const mode = parseInt(audmodMatch[1]);
-            status.audioMode = mode === 3 ? 'UAC' : mode === 0 ? 'Handset' : `Mode${mode}`;
-            status.details.audioModeId = mode;
-        }
-
-        // Check PCM mode: AT+QPCMV? -> 1,0=TTY, 1,2=UAC
-        const pcmvResult = await asteriskCommand(`quectel cmd ${modemId} ${VOLTE_CONFIG.verifyCommands.pcmMode}`);
-        const pcmvMatch = pcmvResult.match(/\+QPCMV:\s*(\d),(\d)/);
-        if (pcmvMatch) {
-            status.details.pcmEnabled = pcmvMatch[1] === '1';
-            status.details.pcmMode = parseInt(pcmvMatch[2]);
-        }
-
-        // Determine if VoLTE is fully active
-        status.volteEnabled =
-            status.imsRegistered &&
-            status.networkMode === 'LTE' &&
-            status.audioMode === 'UAC' &&
-            status.details.pcmMode === 2;
-
-        // Check if modem supports VoLTE (EC25)
+        // Check if modem supports VoLTE (EC25) and get Voice capability from Asterisk
         const deviceInfo = await asteriskCommand(`quectel show device state ${modemId}`);
         if (deviceInfo.includes('EC25') || deviceInfo.includes('Quectel')) {
             status.volteSupported = true;
         }
 
-        logger.info(`[VoLTE] Status for ${modemId}: VoLTE=${status.volteEnabled}, IMS=${status.imsRegistered}, Network=${status.networkMode}, Audio=${status.audioMode}`);
+        // Check Voice capability from Asterisk (most reliable indicator)
+        const voiceMatch = deviceInfo.match(/Voice\s*:\s*(Yes|No)/i);
+        if (voiceMatch) {
+            status.details.voiceCapability = voiceMatch[1].toLowerCase() === 'yes';
+        }
+
+        if (dataPort) {
+            // Use direct serial for accurate AT responses
+
+            // Check IMS status: AT+QCFG="ims" -> should return 1,1 for active VoLTE
+            const imsResult = await sendAtDirect(dataPort, 'AT+QCFG="ims"');
+            const imsMatch = imsResult.match(/\+QCFG:\s*"ims",(\d),(\d)/);
+            if (imsMatch) {
+                status.details.imsEnabled = imsMatch[1] === '1';
+                status.details.imsRegistered = imsMatch[2] === '1';
+                status.imsRegistered = imsMatch[1] === '1' && imsMatch[2] === '1';
+            }
+
+            // Check network mode: AT+COPS? -> should contain ",7" for LTE
+            const copsResult = await sendAtDirect(dataPort, 'AT+COPS?');
+            const copsMatch = copsResult.match(/\+COPS:\s*\d,\d,"[^"]*",(\d+)/);
+            if (copsMatch) {
+                const rat = parseInt(copsMatch[1]);
+                status.networkMode = rat === 7 ? 'LTE' : rat === 2 ? '3G' : rat === 0 ? '2G' : `Unknown(${rat})`;
+                status.details.networkRat = rat;
+            }
+
+            // Check audio mode: AT+QAUDMOD? -> 0=handset, 3=USB Audio (UAC)
+            const audmodResult = await sendAtDirect(dataPort, 'AT+QAUDMOD?');
+            const audmodMatch = audmodResult.match(/\+QAUDMOD:\s*(\d)/);
+            if (audmodMatch) {
+                const mode = parseInt(audmodMatch[1]);
+                status.audioMode = mode === 3 ? 'UAC' : mode === 0 ? 'Handset' : `Mode${mode}`;
+                status.details.audioModeId = mode;
+            }
+
+            // Check PCM mode: AT+QPCMV? -> 1,0=TTY, 1,2=UAC
+            const pcmvResult = await sendAtDirect(dataPort, 'AT+QPCMV?');
+            const pcmvMatch = pcmvResult.match(/\+QPCMV:\s*(\d),(\d)/);
+            if (pcmvMatch) {
+                status.details.pcmEnabled = pcmvMatch[1] === '1';
+                status.details.pcmMode = parseInt(pcmvMatch[2]);
+            }
+        }
+
+        // Determine if VoLTE is fully active
+        // Primary check: Voice capability from Asterisk + IMS enabled + LTE network
+        // Fallback: Full check with audio modes
+        if (status.details.voiceCapability && status.details.imsEnabled && status.networkMode === 'LTE') {
+            status.volteEnabled = true;
+        } else if (status.imsRegistered && status.networkMode === 'LTE' && status.audioMode === 'UAC') {
+            status.volteEnabled = true;
+        }
+
+        logger.info(`[VoLTE] Status for ${modemId}: VoLTE=${status.volteEnabled}, Voice=${status.details.voiceCapability}, IMS=${status.imsRegistered}, Network=${status.networkMode}, Audio=${status.audioMode}`);
 
     } catch (error) {
         logger.error(`[VoLTE] Error getting status for ${modemId}:`, error.message);

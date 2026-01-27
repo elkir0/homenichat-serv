@@ -94,6 +94,57 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Send AT command directly to modem via serial port and get response
+ * Uses socat for direct serial communication (bypasses Asterisk queueing)
+ * @param {string} port - Serial port (e.g., '/dev/ttyUSB2')
+ * @param {string} command - AT command
+ * @param {number} timeout - Timeout in seconds (default 3)
+ * @returns {Promise<string>} AT response
+ */
+async function sendAtDirect(port, command, timeout = 3) {
+    try {
+        // Use socat to send command and read response
+        // The crnl option ensures proper line endings for AT commands
+        const cmd = `echo '${command}' | timeout ${timeout} socat - ${port},crnl 2>/dev/null`;
+        const result = await runCommand(cmd, (timeout + 1) * 1000);
+        return result;
+    } catch (error) {
+        logger.warn(`[ModemUtils] Direct AT command failed: ${command}`, error.message);
+        return '';
+    }
+}
+
+/**
+ * Get modem data port from modem config or Asterisk
+ * @param {string} modemId - Modem ID
+ * @returns {Promise<string|null>} Data port path or null
+ */
+async function getModemDataPort(modemId) {
+    try {
+        // Try to get from Asterisk device info
+        const deviceInfo = await asteriskCommand(`quectel show device state ${modemId}`);
+        const dataMatch = deviceInfo.match(/Data\s*:\s*(\S+)/i);
+        if (dataMatch) {
+            return dataMatch[1];
+        }
+
+        // Fallback: try common ports
+        const fs = require('fs');
+        const commonPorts = ['/dev/ttyUSB2', '/dev/ttyUSB3', '/dev/ttyUSB0'];
+        for (const port of commonPorts) {
+            if (fs.existsSync(port)) {
+                return port;
+            }
+        }
+
+        return null;
+    } catch (error) {
+        logger.warn(`[ModemUtils] Failed to get data port for ${modemId}:`, error.message);
+        return null;
+    }
+}
+
 module.exports = {
     runCommand,
     runCommandSync,
@@ -101,4 +152,6 @@ module.exports = {
     sendAtCommand,
     parseAtResponse,
     sleep,
+    sendAtDirect,
+    getModemDataPort,
 };
