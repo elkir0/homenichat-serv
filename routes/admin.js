@@ -1687,6 +1687,72 @@ router.get('/modems/trunk-defaults', async (req, res) => {
 });
 
 // =============================================================================
+// VOLTE
+// =============================================================================
+
+/**
+ * GET /api/admin/modems/:id/volte/status
+ * Get VoLTE status for a modem (IMS registration, network mode, audio mode)
+ */
+router.get('/modems/:id/volte/status', async (req, res) => {
+  try {
+    const { getVoLTEStatus } = require('../src/services/modem/volte');
+    const { id } = req.params;
+    const status = await getVoLTEStatus(id);
+    res.json(status);
+  } catch (error) {
+    console.error('[Admin/Modems] Error getting VoLTE status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/modems/:id/volte/toggle
+ * Toggle VoLTE mode on/off for a modem
+ * Body: { enable: true/false }
+ */
+router.post('/modems/:id/volte/toggle', async (req, res) => {
+  try {
+    const { toggleVoLTE } = require('../src/services/modem/volte');
+    const { getModemService } = require('../src/services/modem');
+    const modemService = getModemService();
+    const { id } = req.params;
+    const { enable } = req.body;
+
+    if (typeof enable !== 'boolean') {
+      return res.status(400).json({ error: 'enable must be boolean' });
+    }
+
+    // Check if modem supports VoLTE
+    const modemConfig = modemService.getModemConfig(id);
+    const modemType = (modemConfig?.modemType || 'sim7600').toLowerCase();
+    const { MODEM_PROFILES } = require('../src/services/modem/constants');
+    const profile = MODEM_PROFILES[modemType];
+
+    if (!profile?.supportsVoLTE) {
+      return res.status(400).json({
+        success: false,
+        error: `Modem type ${modemType} does not support VoLTE. Only EC25 modems support VoLTE.`,
+      });
+    }
+
+    // Toggle VoLTE
+    const result = await toggleVoLTE(id, enable);
+
+    // If successful, update modem config
+    if (result.success) {
+      modemService.saveModemConfig(id, { ...modemConfig, volteEnabled: enable });
+      await modemService.applyQuectelConf();
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('[Admin/Modems] Error toggling VoLTE:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================================================
 // VOIP / FREEPBX
 // =============================================================================
 
