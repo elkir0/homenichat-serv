@@ -86,25 +86,38 @@ async function getVoLTEStatus(modemId) {
         }
 
         // Determine if VoLTE is fully active
-        // PRIMARY: Voice capability from Asterisk is the most reliable indicator
-        // On LTE networks, Voice: Yes means VoLTE is working (without VoLTE, voice would be No on pure LTE)
-        if (status.details.voiceCapability === true) {
+        // VoLTE requires: IMS enabled + Voice capability
+        // - Voice: Yes on 3G = traditional circuit-switched voice (NOT VoLTE)
+        // - Voice: Yes on LTE with IMS = VoLTE
+        // - Voice: No on LTE = no voice capability (would need CSFB to 3G)
+
+        // PRIMARY: IMS enabled + Voice capability = VoLTE confirmed
+        // IMS (AT+QCFG="ims" = 1,x) is the key indicator that VoLTE mode is configured
+        if (status.details.imsEnabled === true && status.details.voiceCapability === true) {
             status.volteEnabled = true;
-            // If voice is active but we couldn't get network mode, assume LTE (VoLTE requires LTE)
-            if (!status.networkMode) {
+            // If VoLTE is working, we're on LTE
+            if (!status.networkMode || status.networkMode === 'Unknown') {
                 status.networkMode = 'LTE';
             }
         }
-        // SECONDARY: Check IMS + network mode if voice capability wasn't detected
-        else if (status.details.imsEnabled && (status.networkMode === 'LTE' || status.audioMode === 'UAC')) {
+        // SECONDARY: Full IMS registration + LTE network
+        else if (status.imsRegistered && status.networkMode === 'LTE') {
             status.volteEnabled = true;
         }
-        // TERTIARY: Full check with all AT responses
-        else if (status.imsRegistered && status.networkMode === 'LTE' && status.audioMode === 'UAC') {
+        // TERTIARY: Audio mode UAC indicates VoLTE configuration
+        else if (status.details.imsEnabled && status.audioMode === 'UAC') {
             status.volteEnabled = true;
         }
 
-        logger.info(`[VoLTE] Status for ${modemId}: VoLTE=${status.volteEnabled}, Voice=${status.details.voiceCapability}, IMS=${status.details.imsEnabled}, Network=${status.networkMode}, Audio=${status.audioMode}`);
+        // If Voice is active but IMS not enabled, it's 3G/2G voice (not VoLTE)
+        if (status.details.voiceCapability === true && !status.volteEnabled) {
+            // Voice works but via circuit-switched (3G/2G fallback)
+            status.details.voiceMode = 'CS'; // Circuit-Switched
+        } else if (status.volteEnabled) {
+            status.details.voiceMode = 'VoLTE';
+        }
+
+        logger.info(`[VoLTE] Status for ${modemId}: VoLTE=${status.volteEnabled}, Voice=${status.details.voiceCapability}, IMS=${status.details.imsEnabled}, Network=${status.networkMode}, VoiceMode=${status.details.voiceMode}`);
 
     } catch (error) {
         logger.error(`[VoLTE] Error getting status for ${modemId}:`, error.message);
