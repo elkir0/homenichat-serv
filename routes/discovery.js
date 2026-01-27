@@ -224,6 +224,8 @@ router.get('/', async (req, res) => {
       let userVoipSettings = db.getSetting(`user_${req.user.id}_voip`);
 
       // Global VoIP config from environment
+      // Set VOIP_WEBRTC_ENABLED=false to disable WebRTC credentials (GSM-only setups)
+      const webrtcEnabled = process.env.VOIP_WEBRTC_ENABLED !== 'false';
       const globalConfig = {
         server: process.env.VOIP_WSS_URL || `wss://${host?.split(':')[0]}/wss`,
         domain: process.env.VOIP_DOMAIN || host?.split(':')[0] || 'localhost',
@@ -231,9 +233,14 @@ router.get('/', async (req, res) => {
         password: process.env.VOIP_PASSWORD || '',
       };
 
+      // Skip WebRTC credentials entirely if disabled
+      if (!webrtcEnabled) {
+        console.log(`[Discovery] WebRTC disabled via VOIP_WEBRTC_ENABLED=false for user ${req.user.id}`);
+        // Don't set voipCredentials - GSM-only mode
+      }
       // PRIORITY 0: Explicit env config (VOIP_EXTENSION + VOIP_PASSWORD both set)
       // This takes highest priority as it represents admin's explicit config for external VoIP
-      if (globalConfig.extension && globalConfig.password) {
+      else if (globalConfig.extension && globalConfig.password) {
         result.voipCredentials = {
           server: globalConfig.server,
           domain: globalConfig.domain,
@@ -567,6 +574,8 @@ async function getDiscoveryData(req) {
     // Fallback: Check old settings table (deprecated)
     const userVoipSettings = db.getSetting(`user_${req.user.id}_voip`);
 
+    // Set VOIP_WEBRTC_ENABLED=false to disable WebRTC credentials (GSM-only setups)
+    const webrtcEnabled = process.env.VOIP_WEBRTC_ENABLED !== 'false';
     const globalConfig = {
       server: process.env.VOIP_WSS_URL || `wss://${process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost'}/wss`,
       domain: process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost',
@@ -574,9 +583,14 @@ async function getDiscoveryData(req) {
       password: process.env.VOIP_PASSWORD || '',
     };
 
+    // Skip WebRTC credentials entirely if disabled
+    if (!webrtcEnabled) {
+      console.log(`[Discovery] WebRTC disabled via VOIP_WEBRTC_ENABLED=false for user ${req.user.id}`);
+      // Don't set voipCredentials - GSM-only mode
+    }
     // PRIORITY 0: Explicit env config (VOIP_EXTENSION + VOIP_PASSWORD both set)
     // This takes highest priority as it represents admin's explicit config for external VoIP
-    if (globalConfig.extension && globalConfig.password) {
+    else if (globalConfig.extension && globalConfig.password) {
       result.voipCredentials = {
         server: globalConfig.server,
         domain: globalConfig.domain,
