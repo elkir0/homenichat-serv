@@ -13,13 +13,27 @@ const logger = require('../../../utils/logger');
 const { MODEM_PROFILES, VOLTE_CONFIG, VOICE_MODES } = require('./constants');
 const { asteriskCommand, sendAtCommand, sleep, sendAtDirect, getModemDataPort } = require('./utils');
 
+// Cache for VoLTE status to avoid repeated unreliable serial reads
+// Key: modemId, Value: { status, timestamp }
+const volteStatusCache = new Map();
+const CACHE_TTL_MS = 30000; // 30 seconds
+
 /**
  * Get VoLTE status for a modem
- * Uses direct serial communication for accurate status reading
+ * Uses caching to avoid unreliable repeated serial reads
  * @param {string} modemId - Modem ID (e.g., 'modem-1')
+ * @param {boolean} forceRefresh - Force refresh ignoring cache
  * @returns {Promise<Object>} VoLTE status
  */
-async function getVoLTEStatus(modemId) {
+async function getVoLTEStatus(modemId, forceRefresh = false) {
+    // Check cache first (unless forced refresh)
+    if (!forceRefresh) {
+        const cached = volteStatusCache.get(modemId);
+        if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+            logger.debug(`[VoLTE] Returning cached status for ${modemId} (age: ${Date.now() - cached.timestamp}ms)`);
+            return { ...cached.status, cached: true };
+        }
+    }
     const status = {
         modemId,
         volteSupported: false,
@@ -85,43 +99,49 @@ async function getVoLTEStatus(modemId) {
             }
         }
 
-        // Determine if VoLTE is fully active
-        // VoLTE requires: IMS enabled + Voice capability
-        // - Voice: Yes on 3G = traditional circuit-switched voice (NOT VoLTE)
-        // - Voice: Yes on LTE with IMS = VoLTE
-        // - Voice: No on LTE = no voice capability (would need CSFB to 3G)
+        // Determine VoLTE MODE (configured) vs ACTIVE (currently connected)
+        // volteEnabled = VoLTE MODE is CONFIGURED (regardless of network state)
+        // volteActive = VoLTE is currently ACTIVE (requires network + IMS registered)
 
-        // PRIMARY: IMS enabled + Voice capability = VoLTE confirmed
-        // IMS (AT+QCFG="ims" = 1,x) is the key indicator that VoLTE mode is configured
-        if (status.details.imsEnabled === true && status.details.voiceCapability === true) {
-            status.volteEnabled = true;
-            // If VoLTE is working, we're on LTE
-            if (!status.networkMode || status.networkMode === 'Unknown') {
-                status.networkMode = 'LTE';
-            }
-        }
-        // SECONDARY: Full IMS registration + LTE network
-        else if (status.imsRegistered && status.networkMode === 'LTE') {
-            status.volteEnabled = true;
-        }
-        // TERTIARY: Audio mode UAC indicates VoLTE configuration
-        else if (status.details.imsEnabled && status.audioMode === 'UAC') {
+        // VoLTE is CONFIGURED if:
+        // - IMS is enabled (AT+QCFG="ims" = 1,x) AND
+        // - Audio mode is UAC (AT+QAUDMOD = 3)
+        // This works even without network!
+        if (status.details.imsEnabled === true) {
+            status.volteEnabled = true; // VoLTE MODE is configured
+        } else if (status.audioMode === 'UAC') {
+            // Fallback: UAC audio mode strongly indicates VoLTE config
             status.volteEnabled = true;
         }
 
-        // If Voice is active but IMS not enabled, it's 3G/2G voice (not VoLTE)
-        if (status.details.voiceCapability === true && !status.volteEnabled) {
-            // Voice works but via circuit-switched (3G/2G fallback)
-            status.details.voiceMode = 'CS'; // Circuit-Switched
-        } else if (status.volteEnabled) {
+        // VoLTE is ACTIVE if configured AND actually working
+        status.details.volteActive = false;
+        if (status.volteEnabled && status.details.voiceCapability === true && status.networkMode === 'LTE') {
+            status.details.volteActive = true;
             status.details.voiceMode = 'VoLTE';
+        } else if (status.volteEnabled && status.imsRegistered) {
+            status.details.volteActive = true;
+            status.details.voiceMode = 'VoLTE';
+        } else if (status.details.voiceCapability === true) {
+            // Voice works but via circuit-switched (3G/2G)
+            status.details.voiceMode = 'CS';
+        } else {
+            status.details.voiceMode = null; // No voice capability currently
         }
 
-        logger.info(`[VoLTE] Status for ${modemId}: VoLTE=${status.volteEnabled}, Voice=${status.details.voiceCapability}, IMS=${status.details.imsEnabled}, Network=${status.networkMode}, VoiceMode=${status.details.voiceMode}`);
+        logger.info(`[VoLTE] Status for ${modemId}: Configured=${status.volteEnabled}, Active=${status.details.volteActive}, Voice=${status.details.voiceCapability}, IMS=${status.details.imsEnabled}, Network=${status.networkMode}`);
 
     } catch (error) {
         logger.error(`[VoLTE] Error getting status for ${modemId}:`, error.message);
         status.error = error.message;
+    }
+
+    // Cache successful results (only if we got meaningful data)
+    if (status.details.imsEnabled !== undefined || status.audioMode) {
+        volteStatusCache.set(modemId, {
+            status,
+            timestamp: Date.now(),
+        });
     }
 
     return status;
@@ -234,6 +254,9 @@ async function disableVoLTE(modemId) {
  * @returns {Promise<Object>} Result
  */
 async function toggleVoLTE(modemId, enable) {
+    // Invalidate cache since we're changing the config
+    volteStatusCache.delete(modemId);
+
     if (enable) {
         return enableVoLTE(modemId);
     } else {
