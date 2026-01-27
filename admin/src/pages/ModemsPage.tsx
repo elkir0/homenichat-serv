@@ -1880,11 +1880,28 @@ export default function ModemsPage() {
             <Grid item xs={12} md={4}>
               <Card>
                 <CardContent>
-                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                    <SignalIcon sx={{ mr: 1, color: 'info.main' }} />
-                    <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                      Signal
-                    </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                      <SignalIcon sx={{ mr: 1, color: 'info.main' }} />
+                      <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                        Signal
+                      </Typography>
+                    </Box>
+                    {/* Network Type Badge */}
+                    {data.status.technology && data.status.technology !== 'No Service' && (
+                      <Chip
+                        label={data.status.technology}
+                        size="small"
+                        color={
+                          data.status.technology.includes('LTE') || data.status.technology === '4G'
+                            ? 'success'
+                            : data.status.technology === '3G' || data.status.technology.includes('WCDMA')
+                            ? 'warning'
+                            : 'default'
+                        }
+                        sx={{ fontWeight: 700 }}
+                      />
+                    )}
                   </Box>
 
                   <Box sx={{ textAlign: 'center', py: 2 }}>

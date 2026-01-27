@@ -77,6 +77,13 @@ async function collectModemStatus(modemId, modemConfig = {}) {
                 case 'Access technology':
                     data.technology = value;
                     break;
+                case 'Mode':
+                    // chan_quectel reports network mode here
+                    // Map common values: LTE, WCDMA (3G), GSM (2G), No Service
+                    if (value && value !== 'No Service' && data.technology === 'Unknown') {
+                        data.technology = value;
+                    }
+                    break;
                 case 'Provider Name':
                     if (value) data.operator = value;
                     break;
@@ -134,6 +141,25 @@ async function collectModemStatus(modemId, modemConfig = {}) {
             }
         } catch (e) {
             // Ignore PIN check errors
+        }
+    }
+
+    // Fallback: Get real network type from AT+COPS? if technology is still Unknown
+    if ((data.technology === 'Unknown' || data.technology === 'No Service') && modemConfig.dataPort) {
+        try {
+            const { sendAtDirect } = require('./utils');
+            const copsResult = await sendAtDirect(modemConfig.dataPort, 'AT+COPS?');
+            // +COPS: 0,0,"Operator",7  -> 7=LTE, 2=3G/WCDMA, 0=2G/GSM
+            const copsMatch = copsResult.match(/\+COPS:\s*\d,\d,"[^"]*",(\d+)/);
+            if (copsMatch) {
+                const rat = parseInt(copsMatch[1]);
+                if (rat === 7) data.technology = 'LTE';
+                else if (rat === 2) data.technology = '3G';
+                else if (rat === 0) data.technology = '2G';
+                else data.technology = `RAT${rat}`;
+            }
+        } catch (e) {
+            // Ignore AT command errors
         }
     }
 
