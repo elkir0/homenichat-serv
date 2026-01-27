@@ -732,8 +732,19 @@ install_asterisk_source() {
     info "Installing Asterisk from source (this takes 15-25 minutes on Raspberry Pi)..."
 
     # Asterisk version - use 22 LTS for stability
-    local AST_VERSION="22.7.0"
+    # Get latest Asterisk 22.x version dynamically
+    info "Checking latest Asterisk 22.x version..."
+    local AST_VERSION
+    AST_VERSION=$(curl -s "https://downloads.asterisk.org/pub/telephony/asterisk/" | grep -o 'asterisk-22\.[0-9]*\.[0-9]*\.tar\.gz' | sort -t. -k2,2n -k3,3n | tail -1 | sed 's/asterisk-\(.*\)\.tar\.gz/\1/')
+
+    # Fallback to known working version if detection fails
+    if [ -z "$AST_VERSION" ]; then
+        AST_VERSION="22.8.0"
+        warning "Could not detect latest version, using fallback: ${AST_VERSION}"
+    fi
+
     local AST_URL="https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${AST_VERSION}.tar.gz"
+    info "Will install Asterisk ${AST_VERSION}"
 
     # Install build dependencies
     info "Installing Asterisk build dependencies..."
@@ -758,11 +769,27 @@ install_asterisk_source() {
         rm -rf "asterisk-${AST_VERSION}"
     fi
 
-    wget -q --show-progress "${AST_URL}" -O "asterisk-${AST_VERSION}.tar.gz" || {
-        error "Failed to download Asterisk"
+    # Verify URL is valid before downloading
+    info "Verifying download URL..."
+    if ! curl -sI "${AST_URL}" | head -1 | grep -q "200\|301\|302"; then
+        error "Asterisk download URL not valid: ${AST_URL}"
+        error "Please check https://downloads.asterisk.org/pub/telephony/asterisk/ for available versions"
         return 1
-    }
+    fi
 
+    info "Downloading from ${AST_URL}..."
+    if ! wget --progress=bar:force "${AST_URL}" -O "asterisk-${AST_VERSION}.tar.gz" 2>&1 | tee -a "$LOG_FILE"; then
+        error "Failed to download Asterisk from ${AST_URL}"
+        return 1
+    fi
+
+    # Verify download
+    if [ ! -f "asterisk-${AST_VERSION}.tar.gz" ] || [ ! -s "asterisk-${AST_VERSION}.tar.gz" ]; then
+        error "Downloaded file is missing or empty"
+        return 1
+    fi
+
+    info "Extracting Asterisk..."
     tar xzf "asterisk-${AST_VERSION}.tar.gz"
     rm -f "asterisk-${AST_VERSION}.tar.gz"
     cd "asterisk-${AST_VERSION}"
