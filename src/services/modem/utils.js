@@ -97,6 +97,7 @@ function sleep(ms) {
 /**
  * Send AT command directly to modem via serial port and get response
  * Uses socat for direct serial communication (bypasses Asterisk queueing)
+ * Flushes the buffer first with a simple AT command to avoid stale data
  * @param {string} port - Serial port (e.g., '/dev/ttyUSB2')
  * @param {string} command - AT command
  * @param {number} timeout - Timeout in seconds (default 3)
@@ -104,10 +105,10 @@ function sleep(ms) {
  */
 async function sendAtDirect(port, command, timeout = 3) {
     try {
-        // Use socat to send command and read response
-        // The crnl option ensures proper line endings for AT commands
-        const cmd = `echo '${command}' | timeout ${timeout} socat - ${port},crnl 2>/dev/null`;
-        const result = await runCommand(cmd, (timeout + 1) * 1000);
+        // Flush buffer first with simple AT, then send actual command
+        // This clears any stale responses that might be in the modem's buffer
+        const cmd = `(echo 'AT'; sleep 0.3; echo '${command}') | timeout ${timeout} socat - ${port},crnl 2>/dev/null`;
+        const result = await runCommand(cmd, (timeout + 2) * 1000);
         return result;
     } catch (error) {
         logger.warn(`[ModemUtils] Direct AT command failed: ${command}`, error.message);
