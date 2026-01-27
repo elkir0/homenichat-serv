@@ -195,6 +195,23 @@ interface SimStatus {
   maxAttempts?: number;
 }
 
+// VoLTE status interface
+interface VoLTEStatus {
+  supported: boolean;
+  enabled: boolean;
+  imsRegistered: boolean;
+  networkMode: string;
+  audioMode: string;
+  uacDeviceAvailable: boolean;
+  modemType: string;
+  details?: {
+    qcfg_ims?: string;
+    qnwprefcfg?: string;
+    qaudmod?: string;
+    cereg?: string;
+  };
+}
+
 // API functions
 const modemsApi = {
   getFullStatus: async (): Promise<FullModemData> => {
@@ -475,6 +492,31 @@ const modemsApi = {
     }
     return response.json();
   },
+
+  // VoLTE APIs
+  getVoLTEStatus: async (modemId: string): Promise<VoLTEStatus> => {
+    const response = await fetch(`/api/admin/modems/${modemId}/volte/status`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
+    });
+    if (!response.ok) throw new Error('Failed to get VoLTE status');
+    return response.json();
+  },
+
+  toggleVoLTE: async (modemId: string, enable: boolean): Promise<{ success: boolean; message: string; volteEnabled: boolean }> => {
+    const response = await fetch(`/api/admin/modems/${modemId}/volte/toggle`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ enable }),
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Failed to toggle VoLTE');
+    }
+    return response.json();
+  },
 };
 
 // Signal strength component
@@ -594,6 +636,11 @@ export default function ModemsPage() {
     },
   });
 
+  // VoLTE state
+  const [volteStatus, setVolteStatus] = useState<VoLTEStatus | null>(null);
+  const [volteLoading, setVolteLoading] = useState(false);
+  const [volteError, setVolteError] = useState<string | null>(null);
+
   // Queries
   const { data: fullStatus, isLoading, error, refetch } = useQuery({
     queryKey: ['modemFullStatus'],
@@ -687,6 +734,33 @@ export default function ModemsPage() {
       }
     }
   }, [modemConfigData, selectedTab, currentConfigModemId]);
+
+  // Fetch VoLTE status when modem changes (only for EC25 modems)
+  useEffect(() => {
+    const fetchVolteStatus = async () => {
+      const modemType = modemConfigData?.modems?.[currentConfigModemId]?.modemType?.toLowerCase();
+      if (modemType === 'ec25') {
+        setVolteLoading(true);
+        setVolteError(null);
+        try {
+          const status = await modemsApi.getVoLTEStatus(currentConfigModemId);
+          setVolteStatus(status);
+        } catch (err) {
+          setVolteError(err instanceof Error ? err.message : 'Failed to get VoLTE status');
+          setVolteStatus(null);
+        } finally {
+          setVolteLoading(false);
+        }
+      } else {
+        setVolteStatus(null);
+        setVolteError(null);
+      }
+    };
+
+    if (currentConfigModemId && modemConfigData?.modems) {
+      fetchVolteStatus();
+    }
+  }, [currentConfigModemId, modemConfigData]);
 
   // Mutations
   const restartModemMutation = useMutation({
@@ -871,6 +945,25 @@ export default function ModemsPage() {
     onSuccess: (result) => {
       setActionResult({ success: result.success, message: result.message });
       refetchTrunkStatus();
+    },
+    onError: (err: Error) => {
+      setActionResult({ success: false, message: err.message });
+    },
+  });
+
+  // VoLTE toggle mutation
+  const toggleVoLTEMutation = useMutation({
+    mutationFn: ({ modemId, enable }: { modemId: string; enable: boolean }) =>
+      modemsApi.toggleVoLTE(modemId, enable),
+    onSuccess: async (result) => {
+      setActionResult({ success: result.success, message: result.message });
+      // Refresh VoLTE status
+      try {
+        const status = await modemsApi.getVoLTEStatus(currentConfigModemId);
+        setVolteStatus(status);
+      } catch {
+        // Ignore refresh errors
+      }
     },
     onError: (err: Error) => {
       setActionResult({ success: false, message: err.message });
@@ -1437,6 +1530,89 @@ export default function ModemsPage() {
                   />
                 </Box>
               </Grid>
+
+              {/* VoLTE Toggle - Only for EC25 modems */}
+              {(configForm.modemType?.toLowerCase() === 'ec25' || modemConfigData?.modems?.[currentConfigModemId]?.modemType?.toLowerCase() === 'ec25') && (
+                <Grid item xs={12}>
+                  <Paper
+                    sx={{
+                      p: 2,
+                      backgroundColor: (theme) => alpha(theme.palette.info.main, 0.05),
+                      border: (theme) => `1px solid ${alpha(theme.palette.info.main, 0.2)}`,
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
+                      <Box>
+                        <Typography variant="subtitle1" fontWeight={600} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <SignalIcon color="info" />
+                          Mode d'appel VoLTE / 3G
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          VoLTE offre une meilleure qualite audio et une connexion plus rapide. Disponible uniquement avec les modems EC25.
+                        </Typography>
+                      </Box>
+
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        {volteLoading ? (
+                          <CircularProgress size={24} />
+                        ) : volteError ? (
+                          <Chip label={volteError} size="small" color="error" variant="outlined" />
+                        ) : (
+                          <>
+                            {/* Status indicators */}
+                            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                              <Chip
+                                label={volteStatus?.enabled ? 'VoLTE' : '3G'}
+                                size="small"
+                                color={volteStatus?.enabled ? 'success' : 'default'}
+                                variant={volteStatus?.enabled ? 'filled' : 'outlined'}
+                              />
+                              {volteStatus?.imsRegistered && (
+                                <Chip label="IMS OK" size="small" color="success" variant="outlined" />
+                              )}
+                              {volteStatus?.networkMode && (
+                                <Chip label={volteStatus.networkMode} size="small" color="info" variant="outlined" />
+                              )}
+                            </Box>
+
+                            {/* Toggle switch */}
+                            <FormControlLabel
+                              control={
+                                <Switch
+                                  checked={volteStatus?.enabled || false}
+                                  onChange={(e) => {
+                                    toggleVoLTEMutation.mutate({
+                                      modemId: currentConfigModemId,
+                                      enable: e.target.checked,
+                                    });
+                                  }}
+                                  disabled={toggleVoLTEMutation.isPending || !volteStatus?.supported}
+                                  color="success"
+                                />
+                              }
+                              label={
+                                <Typography variant="body2" fontWeight={500}>
+                                  {volteStatus?.enabled ? 'VoLTE actif' : 'Mode 3G'}
+                                </Typography>
+                              }
+                              labelPlacement="start"
+                            />
+                          </>
+                        )}
+                      </Box>
+                    </Box>
+
+                    {toggleVoLTEMutation.isPending && (
+                      <Box sx={{ mt: 2 }}>
+                        <LinearProgress color="info" />
+                        <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                          Changement de mode en cours... Le modem va redemarrer.
+                        </Typography>
+                      </Box>
+                    )}
+                  </Paper>
+                </Grid>
+              )}
 
               {/* Actions */}
               <Grid item xs={12}>
