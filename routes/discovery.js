@@ -224,8 +224,6 @@ router.get('/', async (req, res) => {
       let userVoipSettings = db.getSetting(`user_${req.user.id}_voip`);
 
       // Global VoIP config from environment
-      // Set VOIP_WEBRTC_ENABLED=false to disable WebRTC credentials (GSM-only setups)
-      const webrtcEnabled = process.env.VOIP_WEBRTC_ENABLED !== 'false';
       const globalConfig = {
         server: process.env.VOIP_WSS_URL || `wss://${host?.split(':')[0]}/wss`,
         domain: process.env.VOIP_DOMAIN || host?.split(':')[0] || 'localhost',
@@ -233,10 +231,24 @@ router.get('/', async (req, res) => {
         password: process.env.VOIP_PASSWORD || '',
       };
 
-      // Skip WebRTC credentials entirely if disabled
-      if (!webrtcEnabled) {
-        console.log(`[Discovery] WebRTC disabled via VOIP_WEBRTC_ENABLED=false for user ${req.user.id}`);
-        // Don't set voipCredentials - GSM-only mode
+      // Auto-detect WebRTC mode:
+      // - If VOIP_WEBRTC_ENABLED=false is set → disabled
+      // - If no explicit VOIP config AND GSM modems are available → GSM-only mode (skip WebRTC)
+      // - Otherwise → try to configure WebRTC
+      const hasExplicitVoipConfig = globalConfig.extension && globalConfig.password;
+      const hasGsmModems = result.modems && result.modems.length > 0;
+      const webrtcExplicitlyDisabled = process.env.VOIP_WEBRTC_ENABLED === 'false';
+
+      // GSM-only auto-detection: if we have modems but no explicit WebRTC config, skip WebRTC
+      const isGsmOnlyMode = !hasExplicitVoipConfig && hasGsmModems && !process.env.VOIP_WSS_URL;
+
+      if (webrtcExplicitlyDisabled || isGsmOnlyMode) {
+        if (isGsmOnlyMode) {
+          console.log(`[Discovery] GSM-only mode detected (modems: ${result.modems.length}, no explicit WebRTC config) for user ${req.user.id}`);
+        } else {
+          console.log(`[Discovery] WebRTC disabled via VOIP_WEBRTC_ENABLED=false for user ${req.user.id}`);
+        }
+        // Don't set voipCredentials - GSM calls via API instead
       }
       // PRIORITY 0: Explicit env config (VOIP_EXTENSION + VOIP_PASSWORD both set)
       // This takes highest priority as it represents admin's explicit config for external VoIP
@@ -574,8 +586,6 @@ async function getDiscoveryData(req) {
     // Fallback: Check old settings table (deprecated)
     const userVoipSettings = db.getSetting(`user_${req.user.id}_voip`);
 
-    // Set VOIP_WEBRTC_ENABLED=false to disable WebRTC credentials (GSM-only setups)
-    const webrtcEnabled = process.env.VOIP_WEBRTC_ENABLED !== 'false';
     const globalConfig = {
       server: process.env.VOIP_WSS_URL || `wss://${process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost'}/wss`,
       domain: process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost',
@@ -583,9 +593,22 @@ async function getDiscoveryData(req) {
       password: process.env.VOIP_PASSWORD || '',
     };
 
-    // Skip WebRTC credentials entirely if disabled
-    if (!webrtcEnabled) {
-      console.log(`[Discovery] WebRTC disabled via VOIP_WEBRTC_ENABLED=false for user ${req.user.id}`);
+    // Auto-detect WebRTC mode (simplified for helper function)
+    const hasExplicitVoipConfig = globalConfig.extension && globalConfig.password;
+    const webrtcExplicitlyDisabled = process.env.VOIP_WEBRTC_ENABLED === 'false';
+    // Check if we have GSM modems by trying to detect them
+    let hasGsmModems = false;
+    try {
+      const ModemService = require('../services/ModemService');
+      const modemService = new ModemService({});
+      const modemIds = await modemService.listModems();
+      hasGsmModems = modemIds && modemIds.length > 0;
+    } catch (e) {
+      // No modems
+    }
+    const isGsmOnlyMode = !hasExplicitVoipConfig && hasGsmModems && !process.env.VOIP_WSS_URL;
+
+    if (webrtcExplicitlyDisabled || isGsmOnlyMode) {
       // Don't set voipCredentials - GSM-only mode
     }
     // PRIORITY 0: Explicit env config (VOIP_EXTENSION + VOIP_PASSWORD both set)
