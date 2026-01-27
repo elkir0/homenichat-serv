@@ -1462,11 +1462,11 @@ MANAGER_CONF
 
 CONFIG_FILE="/var/lib/homenichat/modem-config.json"
 LOG_FILE="/var/log/homenichat/modem-init.log"
-MAX_RETRIES=30
+MAX_RETRIES=60
 RETRY_DELAY=2
 
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
 }
 
 mkdir -p /var/log/homenichat
@@ -1479,24 +1479,23 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 0
 fi
 
-PIN_CODE=$(grep -oP '"pinCode"\s*:\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null)
-DATA_PORT=$(grep -oP '"dataPort"\s*:\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null)
+# FIX: Use head -1 to get only first match (JSON has nested dataPort)
+PIN_CODE=$(grep -oP '"pinCode"\s*:\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null | head -1)
+DATA_PORT=$(grep -oP '"dataPort"\s*:\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null | head -1)
+MODEM_TYPE=$(grep -oP '"modemType"\s*:\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null | head -1)
 
 if [ -z "$PIN_CODE" ]; then
     log "No PIN configured, exiting"
     exit 0
 fi
 
-if [ -z "$DATA_PORT" ]; then
-    DATA_PORT="/dev/ttyUSB2"
-fi
-
-log "Using port: $DATA_PORT"
+DATA_PORT="${DATA_PORT:-/dev/ttyUSB2}"
+log "Config: port=$DATA_PORT, PIN=****, type=$MODEM_TYPE"
 
 # Wait for modem port to appear
 RETRY=0
 while [ ! -e "$DATA_PORT" ] && [ $RETRY -lt $MAX_RETRIES ]; do
-    log "Waiting for modem port... ($RETRY/$MAX_RETRIES)"
+    log "Waiting for modem port $DATA_PORT... ($RETRY/$MAX_RETRIES)"
     sleep $RETRY_DELAY
     RETRY=$((RETRY + 1))
 done
@@ -1506,40 +1505,62 @@ if [ ! -e "$DATA_PORT" ]; then
     exit 1
 fi
 
+log "Modem port available"
+
+# Configure serial port
+stty -F "$DATA_PORT" 115200 raw -echo -echoe -echok -echoctl -echoke 2>/dev/null || true
+
+# Function to send AT command and get response (more robust than socat)
+send_at() {
+    local cmd="$1"
+    local wait="${2:-3}"
+    echo -e "${cmd}\r" > "$DATA_PORT"
+    sleep 0.5
+    timeout $wait cat "$DATA_PORT" 2>/dev/null | tr -d '\r' | head -10
+}
+
 # Check if PIN is needed
 log "Checking SIM PIN status..."
-PIN_STATUS=$(echo -e "AT+CPIN?\r" | timeout 5 socat - "$DATA_PORT",raw,echo=0,b115200,crnl 2>/dev/null)
+PIN_STATUS=$(send_at "AT+CPIN?" 3)
+log "Response: $PIN_STATUS"
 
 if echo "$PIN_STATUS" | grep -q "SIM PIN"; then
-    log "Entering PIN code..."
-    RESULT=$(echo -e "AT+CPIN=\"$PIN_CODE\"\r" | timeout 5 socat - "$DATA_PORT",raw,echo=0,b115200,crnl 2>/dev/null)
+    log "SIM requires PIN, entering..."
+    RESULT=$(send_at "AT+CPIN=\"$PIN_CODE\"" 5)
 
-    if echo "$RESULT" | grep -q "OK"; then
-        log "PIN accepted successfully"
+    if echo "$RESULT" | grep -qE "OK|READY"; then
+        log "PIN accepted!"
         sleep 3
+        # Verify
+        VERIFY=$(send_at "AT+CPIN?" 3)
+        log "Verification: $VERIFY"
     else
-        log "ERROR: PIN entry failed: $RESULT"
+        log "ERROR: PIN failed: $RESULT"
         exit 1
     fi
-elif echo "$PIN_STATUS" | grep -q "PUK"; then
-    log "ERROR: SIM is PUK locked!"
-    exit 1
 elif echo "$PIN_STATUS" | grep -q "READY"; then
     log "SIM already unlocked"
+elif echo "$PIN_STATUS" | grep -q "PUK"; then
+    log "ERROR: SIM PUK locked!"
+    exit 1
 else
-    log "Unknown PIN status: $PIN_STATUS"
+    log "Could not determine PIN status, trying anyway..."
+    send_at "AT+CPIN=\"$PIN_CODE\"" 5
 fi
 
-# Configure audio mode (EC25: PCM mode instead of USB audio)
-MODEM_TYPE=$(grep -oP '"modemType"\s*:\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null)
+# Configure audio mode based on modem type
 if [ "$MODEM_TYPE" = "ec25" ]; then
-    log "Configuring EC25 audio mode to PCM..."
-    echo -e "AT+QAUDMOD=2\r" | timeout 3 socat - "$DATA_PORT",raw,echo=0,b115200,crnl 2>/dev/null
-    echo -e "AT+CPCMFRM=0\r" | timeout 3 socat - "$DATA_PORT",raw,echo=0,b115200,crnl 2>/dev/null
-    log "Audio configured for PCM mode"
+    log "Configuring EC25 audio mode..."
+    send_at "AT+QAUDMOD=2" 2
+    send_at "AT+CPCMFRM=0" 2
+    log "EC25 audio configured for PCM mode"
+elif [ "$MODEM_TYPE" = "sim7600" ]; then
+    log "Configuring SIM7600 audio mode..."
+    send_at "AT+CPCMFRM=1" 2
+    log "SIM7600 audio configured for 16kHz"
 fi
 
-log "Modem initialization complete"
+log "=== Modem initialization complete ==="
 exit 0
 MODEM_INIT_SCRIPT
 
@@ -1549,15 +1570,18 @@ MODEM_INIT_SCRIPT
     cat > /etc/systemd/system/homenichat-modem-init.service << 'MODEM_SERVICE'
 [Unit]
 Description=Homenichat Modem Initialization (PIN entry)
-After=network.target
+After=systemd-udev-settle.service
 Before=asterisk.service
 Wants=systemd-udev-settle.service
+DefaultDependencies=no
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/homenichat-modem-init
 RemainAfterExit=yes
-TimeoutStartSec=120
+TimeoutStartSec=180
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

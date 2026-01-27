@@ -1062,6 +1062,71 @@ async function startServer() {
         tokenMonitor.start().catch(console.error);
         logger.info('Token monitoring started for Meta provider');
       }
+
+      // Initialize VoLTE for EC25 modems (non-blocking background task)
+      // VoLTE AT commands (AT+QAUDMOD=3, AT+QPCMV=1,2) don't persist after reboot!
+      // This ensures VoLTE is re-enabled for modems with volteEnabled=true
+      try {
+        const { getModemService } = require('./services/modem');
+        const { startVoLTEInitBackground } = require('./services/modem/volte-init');
+        const modemService = getModemService();
+        const modemsConfig = modemService.getAllModemsConfig();
+
+        // Check if any modem has VoLTE enabled
+        const modems = modemsConfig || {};
+        const hasVoLTEModems = Object.values(modems).some(m => m.volteEnabled === true);
+
+        if (hasVoLTEModems) {
+          // Start VoLTE initialization in background after 15 seconds
+          // (gives Asterisk time to fully load chan_quectel)
+          startVoLTEInitBackground({ modems: modemsConfig }, 15000);
+          logger.info('[VoLTE] Background initialization scheduled for EC25 modems');
+        } else {
+          logger.info('[VoLTE] No modems with VoLTE enabled, skipping initialization');
+        }
+      } catch (volteError) {
+        logger.warn('[VoLTE] Could not initialize VoLTE service:', volteError.message);
+      }
+
+      // Start Modem Watchdog service (progressive recovery)
+      // Monitors modem health and applies corrective actions:
+      // Level 1: AT diagnostics, Level 2: modem reset, Level 3: reload chan_quectel
+      // Level 4: restart Asterisk, Level 5: reboot host (if enabled)
+      if (process.env.WATCHDOG_ENABLED !== 'false') {
+        try {
+          const { startWatchdog } = require('./services/modem/watchdog');
+
+          // Configuration from environment
+          const watchdogConfig = {
+            checkIntervalMs: parseInt(process.env.WATCHDOG_INTERVAL_MS) || 60000,
+            enabledLevels: {
+              5: process.env.WATCHDOG_ENABLE_REBOOT !== 'false', // MAX level (reboot)
+            },
+          };
+
+          const watchdog = startWatchdog(watchdogConfig);
+
+          // Listen for reboot warnings
+          watchdog.on('reboot_imminent', (data) => {
+            logger.error(`[Watchdog] HOST REBOOT IN ${data.countdown} SECONDS: ${data.reason}`);
+            // Broadcast to WebSocket clients
+            pushService.broadcast('watchdog_reboot', data);
+          });
+
+          // Listen for actions
+          watchdog.on('action', (data) => {
+            logger.info(`[Watchdog] Action: ${data.modemId} - Level ${data.levelName}`);
+            // Broadcast to WebSocket clients
+            pushService.broadcast('watchdog_action', data);
+          });
+
+          logger.info(`[Watchdog] Started with interval ${watchdogConfig.checkIntervalMs}ms, reboot=${watchdogConfig.enabledLevels[5]}`);
+        } catch (watchdogError) {
+          logger.warn('[Watchdog] Could not start watchdog service:', watchdogError.message);
+        }
+      } else {
+        logger.info('[Watchdog] Disabled (set WATCHDOG_ENABLED=true to enable)');
+      }
     });
   } catch (error) {
     logger.error('Failed to start server:', error);

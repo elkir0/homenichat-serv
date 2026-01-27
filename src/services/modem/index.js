@@ -20,6 +20,8 @@ const sms = require('./sms');
 const sim = require('./sim');
 const status = require('./status');
 const audio = require('./audio');
+const volte = require('./volte');
+const watchdog = require('./watchdog');
 
 /**
  * ModemService class
@@ -313,6 +315,92 @@ class ModemService {
     }
 
     // =====================================================
+    // VoLTE Methods (EC25 Modems)
+    // =====================================================
+
+    /**
+     * Get VoLTE status for a modem
+     */
+    async getVoLTEStatus(modemId) {
+        return volte.getVoLTEStatus(modemId);
+    }
+
+    /**
+     * Enable VoLTE mode on a modem
+     */
+    async enableVoLTE(modemId) {
+        return volte.enableVoLTE(modemId);
+    }
+
+    /**
+     * Disable VoLTE mode and return to 3G mode
+     */
+    async disableVoLTE(modemId) {
+        return volte.disableVoLTE(modemId);
+    }
+
+    /**
+     * Toggle VoLTE mode for a modem
+     */
+    async toggleVoLTE(modemId, enable) {
+        return volte.toggleVoLTE(modemId, enable);
+    }
+
+    /**
+     * Initialize VoLTE after Asterisk restart
+     * Must be called after modem is detected and ready
+     */
+    async initializeVoLTE(modemId, volteEnabled = false) {
+        return volte.initializeVoLTE(modemId, volteEnabled);
+    }
+
+    /**
+     * Check if USB Audio Class (UAC) device is available
+     */
+    async isUACDeviceAvailable() {
+        return volte.isUACDeviceAvailable();
+    }
+
+    /**
+     * Get recommended VoLTE configuration for quectel.conf
+     */
+    getVoLTEQuectelConfig(modemConfig) {
+        return volte.getVoLTEQuectelConfig(modemConfig);
+    }
+
+    // =====================================================
+    // Watchdog Methods
+    // =====================================================
+
+    /**
+     * Get watchdog instance
+     */
+    getWatchdog() {
+        return watchdog.getWatchdog();
+    }
+
+    /**
+     * Start watchdog service
+     */
+    startWatchdog(config = {}) {
+        return watchdog.startWatchdog(config);
+    }
+
+    /**
+     * Stop watchdog service
+     */
+    stopWatchdog() {
+        return watchdog.stopWatchdog();
+    }
+
+    /**
+     * Get watchdog status
+     */
+    getWatchdogStatus() {
+        return watchdog.getWatchdog().getStatus();
+    }
+
+    // =====================================================
     // Service Management Methods
     // =====================================================
 
@@ -405,4 +493,6 @@ module.exports = {
     sim,
     status,
     audio,
+    volte,
+    watchdog,
 };

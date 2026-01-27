@@ -422,4 +422,703 @@ router.post('/restart-services', async (req, res) => {
     }
 });
 
+// =============================================================================
+// SMS STATS
+// =============================================================================
+
+// Get database (lazy load)
+const getDb = () => require('../../services/database');
+
+/**
+ * GET /modems/sms/stats
+ * Get SMS statistics
+ */
+router.get('/sms/stats', async (req, res) => {
+    try {
+        const db = getDb();
+
+        // Get SMS stats from database
+        const stats = db.sms?.getStats?.() || {
+            total: 0,
+            sent: 0,
+            received: 0,
+            failed: 0,
+            today: 0,
+            thisWeek: 0,
+            thisMonth: 0,
+        };
+
+        // Get per-modem stats
+        const modemService = getModemService();
+        const modemsConfig = modemService.getAllModemsConfig();
+        const perModem = {};
+
+        for (const modemId of Object.keys(modemsConfig)) {
+            perModem[modemId] = db.sms?.getStatsByModem?.(modemId) || {
+                sent: 0,
+                received: 0,
+                failed: 0,
+            };
+        }
+
+        res.json({
+            stats,
+            perModem,
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error getting SMS stats:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// =============================================================================
+// USER-MODEM MAPPINGS (Push Notifications Routing)
+// =============================================================================
+
+/**
+ * GET /modems/mappings
+ * Get all user-modem mappings
+ */
+router.get('/mappings', async (req, res) => {
+    try {
+        const db = getDb();
+        const mappings = db.modemMappings?.findAll?.() || [];
+        res.json({ mappings });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error getting modem mappings:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /modems/mappings/user/:userId
+ * Get modem mappings for a specific user
+ */
+router.get('/mappings/user/:userId', [
+    param('userId').isInt({ min: 1 }),
+    handleValidationErrors,
+], async (req, res) => {
+    try {
+        const db = getDb();
+        const mappings = db.modemMappings?.findByUserId?.(parseInt(req.params.userId)) || [];
+        res.json({ mappings });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error getting user modem mappings:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /modems/mappings/modem/:modemId
+ * Get users mapped to a specific modem
+ */
+router.get('/mappings/modem/:modemId', async (req, res) => {
+    try {
+        const db = getDb();
+        const users = db.modemMappings?.findByModemId?.(req.params.modemId) || [];
+        res.json({ users });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error getting modem users:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/mappings
+ * Create or update a user-modem mapping
+ */
+router.post('/mappings', [
+    body('userId').isInt({ min: 1 }),
+    body('modemId').notEmpty().isString(),
+    body('modemPhoneNumber').optional().isString(),
+    body('notifySms').optional().isBoolean(),
+    body('notifyCalls').optional().isBoolean(),
+    handleValidationErrors,
+], async (req, res) => {
+    try {
+        const db = getDb();
+        const { userId, modemId, modemPhoneNumber, notifySms, notifyCalls } = req.body;
+
+        const mapping = db.modemMappings?.create?.(userId, modemId, {
+            modemPhoneNumber,
+            notifySms: notifySms !== false,
+            notifyCalls: notifyCalls !== false,
+        });
+
+        res.json({ success: true, mapping });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error creating modem mapping:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * DELETE /modems/mappings/:userId/:modemId
+ * Delete a user-modem mapping
+ */
+router.delete('/mappings/:userId/:modemId', [
+    param('userId').isInt({ min: 1 }),
+    param('modemId').notEmpty(),
+    handleValidationErrors,
+], async (req, res) => {
+    try {
+        const db = getDb();
+        const { userId, modemId } = req.params;
+        const deleted = db.modemMappings?.delete?.(parseInt(userId), modemId) || false;
+
+        res.json({
+            success: deleted,
+            message: deleted ? 'Mapping deleted' : 'Mapping not found',
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error deleting modem mapping:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/mappings/auto-map
+ * Auto-map all users to a modem
+ */
+router.post('/mappings/auto-map', [
+    body('modemId').notEmpty().isString(),
+    body('modemPhoneNumber').optional().isString(),
+    handleValidationErrors,
+], async (req, res) => {
+    try {
+        const db = getDb();
+        const { modemId, modemPhoneNumber } = req.body;
+        const count = db.modemMappings?.autoMapAllUsers?.(modemId, modemPhoneNumber) || 0;
+
+        res.json({
+            success: true,
+            message: `${count} users mapped to modem ${modemId}`,
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error auto-mapping modem:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// =============================================================================
+// DEVICE TOKENS (Push Notification Tokens)
+// =============================================================================
+
+/**
+ * GET /modems/device-tokens
+ * Get all registered device tokens
+ */
+router.get('/device-tokens', async (req, res) => {
+    try {
+        const db = getDb();
+        const tokens = db.devices?.findAll?.() || [];
+
+        // Mask tokens for security (show only last 8 chars)
+        const masked = tokens.map(t => ({
+            ...t,
+            token: t.token ? `...${t.token.slice(-8)}` : null,
+        }));
+
+        res.json({ tokens: masked, count: tokens.length });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error getting device tokens:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /modems/device-tokens/user/:userId
+ * Get device tokens for a specific user
+ */
+router.get('/device-tokens/user/:userId', [
+    param('userId').isInt({ min: 1 }),
+    handleValidationErrors,
+], async (req, res) => {
+    try {
+        const db = getDb();
+        const tokens = db.devices?.findByUserId?.(parseInt(req.params.userId)) || [];
+
+        const masked = tokens.map(t => ({
+            ...t,
+            token: t.token ? `...${t.token.slice(-8)}` : null,
+        }));
+
+        res.json({ tokens: masked });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error getting user device tokens:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * DELETE /modems/device-tokens/:token
+ * Delete a device token
+ */
+router.delete('/device-tokens/:token', async (req, res) => {
+    try {
+        const db = getDb();
+        let tokenToDelete = req.params.token;
+
+        // If partial token provided, find full token
+        if (tokenToDelete.length <= 20) {
+            const allTokens = db.devices?.findAll?.() || [];
+            const match = allTokens.find(t => t.token?.endsWith(tokenToDelete));
+            if (match) {
+                tokenToDelete = match.token;
+            }
+        }
+
+        const deleted = db.devices?.delete?.(tokenToDelete) || false;
+        res.json({
+            success: deleted,
+            message: deleted ? 'Token deleted' : 'Token not found',
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error deleting device token:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/device-tokens/cleanup
+ * Cleanup stale device tokens
+ */
+router.post('/device-tokens/cleanup', [
+    body('daysInactive').optional().isInt({ min: 1, max: 365 }),
+    handleValidationErrors,
+], async (req, res) => {
+    try {
+        const db = getDb();
+        const days = req.body.daysInactive || 30;
+        const deleted = db.devices?.cleanupStale?.(days) || 0;
+        res.json({
+            success: true,
+            deleted,
+            message: `${deleted} stale tokens cleaned up`,
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error cleaning up device tokens:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// =============================================================================
+// VOLTE MANAGEMENT (EC25 Modems)
+// =============================================================================
+
+// Get VoLTE module (lazy load)
+const getVoLTE = () => require('../../services/modem/volte');
+
+/**
+ * GET /modems/:id/volte/status
+ * Get VoLTE status for a modem (IMS registration, network mode, audio mode)
+ */
+router.get('/:id/volte/status', async (req, res) => {
+    try {
+        const volte = getVoLTE();
+        const { id } = req.params;
+        const status = await volte.getVoLTEStatus(id);
+        res.json(status);
+    } catch (error) {
+        logger.error('[Admin/Modems] Error getting VoLTE status:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/:id/volte/toggle
+ * Toggle VoLTE mode on/off for a modem
+ * Body: { enable: true/false }
+ */
+router.post('/:id/volte/toggle', [
+    body('enable').isBoolean().withMessage('enable must be boolean'),
+    handleValidationErrors,
+], async (req, res) => {
+    try {
+        const volte = getVoLTE();
+        const modemService = getModemService();
+        const { id } = req.params;
+        const { enable } = req.body;
+
+        // Check if modem supports VoLTE
+        const modemConfig = modemService.getModemConfig(id);
+        const modemType = (modemConfig.modemType || 'sim7600').toLowerCase();
+        const { MODEM_PROFILES } = require('../../services/modem/constants');
+        const profile = MODEM_PROFILES[modemType];
+
+        if (!profile?.supportsVoLTE) {
+            return res.status(400).json({
+                success: false,
+                error: `Modem type ${modemType} does not support VoLTE. Only EC25 modems support VoLTE.`,
+            });
+        }
+
+        // Toggle VoLTE
+        const result = await volte.toggleVoLTE(id, enable);
+
+        // If successful, update modem config and regenerate quectel.conf
+        if (result.success) {
+            modemService.saveModemConfig(id, { ...modemConfig, volteEnabled: enable });
+            await modemService.applyQuectelConf();
+        }
+
+        res.json(result);
+    } catch (error) {
+        logger.error('[Admin/Modems] Error toggling VoLTE:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/:id/volte/enable
+ * Enable VoLTE mode for a modem
+ */
+router.post('/:id/volte/enable', async (req, res) => {
+    try {
+        const volte = getVoLTE();
+        const modemService = getModemService();
+        const { id } = req.params;
+
+        // Check if modem supports VoLTE
+        const modemConfig = modemService.getModemConfig(id);
+        const modemType = (modemConfig.modemType || 'sim7600').toLowerCase();
+        const { MODEM_PROFILES } = require('../../services/modem/constants');
+        const profile = MODEM_PROFILES[modemType];
+
+        if (!profile?.supportsVoLTE) {
+            return res.status(400).json({
+                success: false,
+                error: `Modem type ${modemType} does not support VoLTE. Only EC25 modems support VoLTE.`,
+            });
+        }
+
+        // Enable VoLTE
+        const result = await volte.enableVoLTE(id);
+
+        // If successful, update modem config and regenerate quectel.conf
+        if (result.success) {
+            modemService.saveModemConfig(id, { ...modemConfig, volteEnabled: true });
+            await modemService.applyQuectelConf();
+        }
+
+        res.json(result);
+    } catch (error) {
+        logger.error('[Admin/Modems] Error enabling VoLTE:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/:id/volte/disable
+ * Disable VoLTE mode and switch to 3G mode
+ */
+router.post('/:id/volte/disable', async (req, res) => {
+    try {
+        const volte = getVoLTE();
+        const modemService = getModemService();
+        const { id } = req.params;
+
+        // Disable VoLTE
+        const result = await volte.disableVoLTE(id);
+
+        // If successful, update modem config and regenerate quectel.conf
+        if (result.success) {
+            const modemConfig = modemService.getModemConfig(id);
+            modemService.saveModemConfig(id, { ...modemConfig, volteEnabled: false });
+            await modemService.applyQuectelConf();
+        }
+
+        res.json(result);
+    } catch (error) {
+        logger.error('[Admin/Modems] Error disabling VoLTE:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/:id/volte/initialize
+ * Initialize VoLTE after Asterisk restart (re-sends AT commands)
+ */
+router.post('/:id/volte/initialize', async (req, res) => {
+    try {
+        const volte = getVoLTE();
+        const modemService = getModemService();
+        const { id } = req.params;
+
+        // Get modem config to check if VoLTE should be enabled
+        const modemConfig = modemService.getModemConfig(id);
+        const volteEnabled = modemConfig.volteEnabled || false;
+
+        const result = await volte.initializeVoLTE(id, volteEnabled);
+        res.json(result);
+    } catch (error) {
+        logger.error('[Admin/Modems] Error initializing VoLTE:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /modems/volte/uac-device
+ * Check if USB Audio Class (UAC) device is available for VoLTE
+ */
+router.get('/volte/uac-device', async (req, res) => {
+    try {
+        const volte = getVoLTE();
+        const available = await volte.isUACDeviceAvailable();
+        res.json({
+            available,
+            device: available ? 'plughw:CARD=Android,DEV=0' : null,
+            message: available
+                ? 'UAC device found - VoLTE audio ready'
+                : 'UAC device not found - ensure AT+QAUDMOD=3 is set and modem is in VoLTE mode',
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error checking UAC device:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// =============================================================================
+// WATCHDOG SERVICE (Progressive Modem Recovery)
+// =============================================================================
+
+// Get watchdog module (lazy load)
+const getWatchdog = () => require('../../services/modem/watchdog');
+
+/**
+ * GET /modems/watchdog/status
+ * Get watchdog service status and modem states
+ */
+router.get('/watchdog/status', async (req, res) => {
+    try {
+        const { getWatchdog: getWatchdogInstance } = getWatchdog();
+        const watchdog = getWatchdogInstance();
+        res.json(watchdog.getStatus());
+    } catch (error) {
+        logger.error('[Admin/Modems] Error getting watchdog status:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/watchdog/start
+ * Start the watchdog service
+ */
+router.post('/watchdog/start', async (req, res) => {
+    try {
+        const { startWatchdog } = getWatchdog();
+        const config = req.body || {};
+        const watchdog = startWatchdog(config);
+        res.json({
+            success: true,
+            message: 'Watchdog started',
+            status: watchdog.getStatus(),
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error starting watchdog:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/watchdog/stop
+ * Stop the watchdog service
+ */
+router.post('/watchdog/stop', async (req, res) => {
+    try {
+        const { stopWatchdog, getWatchdog: getWatchdogInstance } = getWatchdog();
+        stopWatchdog();
+        const watchdog = getWatchdogInstance();
+        res.json({
+            success: true,
+            message: 'Watchdog stopped',
+            status: watchdog.getStatus(),
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error stopping watchdog:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /modems/watchdog/history
+ * Get watchdog action history
+ */
+router.get('/watchdog/history', async (req, res) => {
+    try {
+        const { getWatchdog: getWatchdogInstance } = getWatchdog();
+        const watchdog = getWatchdogInstance();
+        const limit = parseInt(req.query.limit) || 50;
+        res.json({
+            history: watchdog.getHistory(limit),
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error getting watchdog history:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/watchdog/reset/:modemId
+ * Reset escalation level for a modem
+ */
+router.post('/watchdog/reset/:modemId', async (req, res) => {
+    try {
+        const { getWatchdog: getWatchdogInstance } = getWatchdog();
+        const watchdog = getWatchdogInstance();
+        const { modemId } = req.params;
+
+        watchdog.resetEscalation(modemId);
+
+        res.json({
+            success: true,
+            message: `Escalation reset for ${modemId}`,
+            status: watchdog.getStatus(),
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error resetting watchdog escalation:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/watchdog/force-action
+ * Force a specific action level (for testing or manual intervention)
+ * Body: { modemId: string, level: number (1-5) }
+ *
+ * Levels:
+ * 1 = SOFT (AT diagnostic)
+ * 2 = MEDIUM (modem reset)
+ * 3 = HARD (reload chan_quectel)
+ * 4 = CRITICAL (restart asterisk)
+ * 5 = MAXIMUM (reboot host)
+ */
+router.post('/watchdog/force-action', [
+    body('modemId').notEmpty().withMessage('modemId required'),
+    body('level').isInt({ min: 1, max: 5 }).withMessage('level must be 1-5'),
+    handleValidationErrors,
+], async (req, res) => {
+    try {
+        const { getWatchdog: getWatchdogInstance, LEVEL_NAMES } = getWatchdog();
+        const watchdog = getWatchdogInstance();
+        const { modemId, level } = req.body;
+
+        logger.warn(`[Admin/Modems] Forcing watchdog action: ${modemId} level ${level} (${LEVEL_NAMES[level]})`);
+
+        const result = await watchdog.forceAction(modemId, level);
+
+        res.json({
+            success: result.success,
+            modemId,
+            level,
+            levelName: LEVEL_NAMES[level],
+            action: result,
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error forcing watchdog action:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /modems/watchdog/cleanup-smsdb
+ * Manually trigger smsdb cleanup
+ */
+router.post('/watchdog/cleanup-smsdb', async (req, res) => {
+    try {
+        const { getWatchdog: getWatchdogInstance } = getWatchdog();
+        const watchdog = getWatchdogInstance();
+        const result = await watchdog.cleanupSmsdb();
+        res.json(result);
+    } catch (error) {
+        logger.error('[Admin/Modems] Error cleaning smsdb:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /modems/watchdog/logs
+ * Get watchdog log file statistics and recent entries
+ */
+router.get('/watchdog/logs', async (req, res) => {
+    try {
+        const { getWatchdog: getWatchdogInstance } = getWatchdog();
+        const watchdog = getWatchdogInstance();
+        const limit = parseInt(req.query.limit) || 100;
+
+        res.json({
+            stats: watchdog.getLogStats(),
+            entries: watchdog.getLogFileHistory(limit),
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error getting watchdog logs:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * DELETE /modems/watchdog/logs
+ * Clear all watchdog log files
+ */
+router.delete('/watchdog/logs', async (req, res) => {
+    try {
+        const { getWatchdog: getWatchdogInstance } = getWatchdog();
+        const watchdog = getWatchdogInstance();
+        const result = watchdog.clearLogs();
+
+        res.json({
+            success: result.success,
+            message: result.success ? 'Watchdog logs cleared' : result.error,
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error clearing watchdog logs:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * PUT /modems/watchdog/config
+ * Update watchdog configuration
+ * Body: { enabled, checkIntervalMs, enableMaxReboot, thresholds, ... }
+ */
+router.put('/watchdog/config', async (req, res) => {
+    try {
+        const { getWatchdog: getWatchdogInstance, ESCALATION_LEVELS } = getWatchdog();
+        const watchdog = getWatchdogInstance();
+        const updates = req.body;
+
+        // Update configuration
+        if (updates.checkIntervalMs !== undefined) {
+            watchdog.config.checkIntervalMs = updates.checkIntervalMs;
+        }
+
+        if (updates.enableMaxReboot !== undefined) {
+            watchdog.config.enabledLevels[ESCALATION_LEVELS.MAXIMUM] = updates.enableMaxReboot;
+        }
+
+        if (updates.thresholds) {
+            watchdog.config.thresholds = { ...watchdog.config.thresholds, ...updates.thresholds };
+        }
+
+        // Restart if interval changed and running
+        if (updates.checkIntervalMs !== undefined && watchdog.running) {
+            watchdog.stop();
+            watchdog.start();
+        }
+
+        res.json({
+            success: true,
+            message: 'Watchdog configuration updated',
+            config: {
+                checkIntervalMs: watchdog.config.checkIntervalMs,
+                maxRebootEnabled: watchdog.config.enabledLevels[ESCALATION_LEVELS.MAXIMUM],
+                thresholds: watchdog.config.thresholds,
+            },
+        });
+    } catch (error) {
+        logger.error('[Admin/Modems] Error updating watchdog config:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 module.exports = router;

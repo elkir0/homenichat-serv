@@ -1,11 +1,16 @@
 /**
  * Asterisk Integration Module
  * Handles chan_quectel configuration and Asterisk commands
+ *
+ * VoLTE Support (EC25):
+ * - When volteEnabled=true, uses UAC (USB Audio Class) instead of TTY
+ * - Requires quec_uac=1 and alsadev parameter in quectel.conf
+ * - Must use IchthysMaranatha fork of chan_quectel
  */
 
 const fs = require('fs');
 const logger = require('../../../utils/logger');
-const { QUECTEL_CONF_PATH, MODEM_PROFILES } = require('./constants');
+const { QUECTEL_CONF_PATH, MODEM_PROFILES, VOLTE_CONFIG } = require('./constants');
 const { runCommand, asteriskCommand, sleep } = require('./utils');
 const { detectUsbPorts, calculateAudioPort } = require('./detection');
 
@@ -104,6 +109,7 @@ function generateQuectelConf(config = {}, modemsConfig = {}) {
 
     let confContent = `; Homenichat - Configuration chan_quectel
 ; Generated automatically - ${new Date().toISOString()}
+; VoLTE support: quec_uac=1 for EC25 modems in VoLTE mode
 
 [general]
 interval=15
@@ -132,16 +138,39 @@ callingpres=allowed_passed_screen
         audioPort: cfg.audioPort,
         phoneNumber: cfg.phoneNumber,
         imsi: cfg.imsi,
+        volteEnabled: cfg.volteEnabled || false,  // VoLTE mode flag
     }));
 
     for (const modem of modemsToGen) {
         const type = (modem.type || 'sim7600').toLowerCase();
         const profile = MODEM_PROFILES[type] || MODEM_PROFILES.sim7600;
         const dataPort = modem.dataPort || '/dev/ttyUSB2';
-        const audioPort = modem.audioPort || calculateAudioPort(dataPort, type);
         const modemName = modem.name || modem.id || 'hni-modem';
 
-        confContent += `
+        // Check if VoLTE mode is enabled and supported
+        const volteEnabled = modem.volteEnabled && profile.supportsVoLTE;
+
+        if (volteEnabled) {
+            // VoLTE mode: Use USB Audio Class (UAC) instead of TTY
+            logger.info(`[AsteriskIntegration] Generating VoLTE config for ${modemName}`);
+            confContent += `
+; ${modemName} - VoLTE Mode (USB Audio Class)
+; Requires: AT+QAUDMOD=3 and AT+QPCMV=1,2 sent to modem
+[${modemName}]
+data=${dataPort}
+quec_uac=1                              ; Enable USB Audio Class (VoLTE)
+alsadev=${VOLTE_CONFIG.alsaDevice}      ; ALSA device for UAC
+context=from-gsm
+rxgain=${VOLTE_CONFIG.rxgain}           ; Higher gain for VoLTE
+txgain=${VOLTE_CONFIG.txgain}
+${modem.imsi ? `imsi=${modem.imsi}` : '; imsi auto-detected'}
+${modem.phoneNumber ? `exten=+${modem.phoneNumber.replace(/^\+/, '')}` : ''}
+`;
+        } else {
+            // Standard 3G mode: Use TTY serial audio
+            const audioPort = modem.audioPort || calculateAudioPort(dataPort, type);
+            confContent += `
+; ${modemName} - 3G Mode (TTY Serial Audio)
 [${modemName}]
 data=${dataPort}
 audio=${audioPort}
@@ -149,6 +178,7 @@ slin16=${profile.slin16 ? 'yes' : 'no'}
 ${modem.imsi ? `imsi=${modem.imsi}` : '; imsi auto-detected'}
 ${modem.phoneNumber ? `exten=+${modem.phoneNumber.replace(/^\+/, '')}` : ''}
 `;
+        }
     }
 
     return confContent;
