@@ -195,15 +195,16 @@ interface SimStatus {
   maxAttempts?: number;
 }
 
-// VoLTE status interface
+// VoLTE status interface (matches backend API response)
 interface VoLTEStatus {
-  supported: boolean;
-  enabled: boolean;
+  modemId: string;
+  volteSupported: boolean;
+  volteEnabled: boolean;
   imsRegistered: boolean;
-  networkMode: string;
-  audioMode: string;
-  uacDeviceAvailable: boolean;
-  modemType: string;
+  networkMode: string | null;
+  audioMode: string | null;
+  uacDeviceAvailable?: boolean;
+  modemType?: string;
   details?: {
     qcfg_ims?: string;
     qnwprefcfg?: string;
@@ -1562,10 +1563,10 @@ export default function ModemsPage() {
                             {/* Status indicators */}
                             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                               <Chip
-                                label={volteStatus?.enabled ? 'VoLTE' : '3G'}
+                                label={volteStatus?.volteEnabled ? 'VoLTE' : '3G'}
                                 size="small"
-                                color={volteStatus?.enabled ? 'success' : 'default'}
-                                variant={volteStatus?.enabled ? 'filled' : 'outlined'}
+                                color={volteStatus?.volteEnabled ? 'success' : 'default'}
+                                variant={volteStatus?.volteEnabled ? 'filled' : 'outlined'}
                               />
                               {volteStatus?.imsRegistered && (
                                 <Chip label="IMS OK" size="small" color="success" variant="outlined" />
@@ -1579,20 +1580,20 @@ export default function ModemsPage() {
                             <FormControlLabel
                               control={
                                 <Switch
-                                  checked={volteStatus?.enabled || false}
+                                  checked={volteStatus?.volteEnabled || false}
                                   onChange={(e) => {
                                     toggleVoLTEMutation.mutate({
                                       modemId: currentConfigModemId,
                                       enable: e.target.checked,
                                     });
                                   }}
-                                  disabled={toggleVoLTEMutation.isPending || !volteStatus?.supported}
+                                  disabled={toggleVoLTEMutation.isPending || !volteStatus?.volteSupported}
                                   color="success"
                                 />
                               }
                               label={
                                 <Typography variant="body2" fontWeight={500}>
-                                  {volteStatus?.enabled ? 'VoLTE actif' : 'Mode 3G'}
+                                  {volteStatus?.volteEnabled ? 'VoLTE actif' : 'Mode 3G'}
                                 </Typography>
                               }
                               labelPlacement="start"
