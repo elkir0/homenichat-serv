@@ -112,7 +112,7 @@ class HomenichatCloudService extends EventEmitter {
       });
 
     } catch (error) {
-      logger.error('[HomenichatCloud] Initialization failed:', error.message);
+      logger.error(`[HomenichatCloud] Initialization failed: ${error.message}`);
     }
   }
 
@@ -149,7 +149,7 @@ class HomenichatCloudService extends EventEmitter {
       }
 
     } catch (error) {
-      logger.error('[HomenichatCloud] Failed to load config:', error.message);
+      logger.error(`[HomenichatCloud] Failed to load config: ${error.message}`);
     }
   }
 
@@ -184,7 +184,7 @@ class HomenichatCloudService extends EventEmitter {
       }, null, 2));
 
     } catch (error) {
-      logger.error('[HomenichatCloud] Failed to save config:', error.message);
+      logger.error(`[HomenichatCloud] Failed to save config: ${error.message}`);
     }
   }
 
@@ -244,7 +244,7 @@ class HomenichatCloudService extends EventEmitter {
       };
 
     } catch (error) {
-      logger.error('[HomenichatCloud] Registration failed:', error.message);
+      logger.error(`[HomenichatCloud] Registration failed: ${error.message}`);
       throw error;
     }
   }
@@ -290,7 +290,7 @@ class HomenichatCloudService extends EventEmitter {
       };
 
     } catch (error) {
-      logger.error('[HomenichatCloud] Login failed:', error.message);
+      logger.error(`[HomenichatCloud] Login failed: ${error.message}`);
       throw error;
     }
   }
@@ -375,7 +375,7 @@ class HomenichatCloudService extends EventEmitter {
       this.tunnel.publicKey = fs.readFileSync(publicKeyPath, 'utf8').trim();
 
     } catch (error) {
-      logger.error('[HomenichatCloud] Failed to ensure keys:', error.message);
+      logger.error(`[HomenichatCloud] Failed to ensure keys: ${error.message}`);
       throw error;
     }
   }
@@ -477,7 +477,7 @@ class HomenichatCloudService extends EventEmitter {
       logger.info('[HomenichatCloud] WireGuard tunnel connected');
 
     } catch (error) {
-      logger.error('[HomenichatCloud] Failed to connect tunnel:', error.message);
+      logger.error(`[HomenichatCloud] Failed to connect tunnel: ${error.message}`);
       this.tunnel.lastError = error.message;
       throw error;
     }
@@ -668,7 +668,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
       logger.info('[HomenichatCloud] Device registered for push', { deviceId, platform });
       return result;
     } catch (error) {
-      logger.error('[HomenichatCloud] Device registration failed:', error.message);
+      logger.error(`[HomenichatCloud] Device registration failed: ${error.message}`);
       return { success: false, error: error.message };
     }
   }
@@ -694,7 +694,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
       logger.info('[HomenichatCloud] Device unregistered', { deviceId });
       return result;
     } catch (error) {
-      logger.error('[HomenichatCloud] Device unregistration failed:', error.message);
+      logger.error(`[HomenichatCloud] Device unregistration failed: ${error.message}`);
       return { success: false, error: error.message };
     }
   }
@@ -736,7 +736,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
       logger.info('[HomenichatCloud] Push sent', { userId, type, sent: result.sent });
       return result;
     } catch (error) {
-      logger.error('[HomenichatCloud] Push send failed:', error.message);
+      logger.error(`[HomenichatCloud] Push send failed: ${error.message}`);
       return { success: false, sent: 0, error: error.message };
     }
   }
@@ -783,7 +783,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
       try {
         await this.refreshTurnCredentials();
       } catch (error) {
-        logger.error('[HomenichatCloud] Credential refresh failed:', error.message);
+        logger.error(`[HomenichatCloud] Credential refresh failed: ${error.message}`);
       }
     }, this.config.refreshInterval);
   }
@@ -865,7 +865,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
         try {
           await this.registerTunnel();
         } catch (regError) {
-          logger.error('[HomenichatCloud] Re-registration failed:', regError.message);
+          logger.error(`[HomenichatCloud] Re-registration failed: ${regError.message}`);
         }
       }
       // Other errors: silently fail - heartbeat is non-critical
@@ -892,7 +892,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
       await this.reconnectTunnel();
 
     } catch (error) {
-      logger.error('[HomenichatCloud] Health check failed:', error.message);
+      logger.error(`[HomenichatCloud] Health check failed: ${error.message}`);
       this.tunnel.connected = false;
       this.tunnel.lastError = error.message;
       setTimeout(() => this.reconnectTunnel(), 5000);
@@ -904,7 +904,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
       await this.disconnectTunnel();
       await this.connectTunnel();
     } catch (error) {
-      logger.error('[HomenichatCloud] Reconnect failed:', error.message);
+      logger.error(`[HomenichatCloud] Reconnect failed: ${error.message}`);
     }
   }
 

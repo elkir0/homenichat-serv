@@ -93,7 +93,7 @@ class FreePBXAmiService extends EventEmitter {
     });
 
     this.socket.on('error', (err) => {
-      logger.error('[AMI] Socket error:', err.message);
+      logger.error(`[AMI] Socket error: ${err.message}`);
       this.connected = false;
       this.authenticated = false;
     });
@@ -182,7 +182,7 @@ class FreePBXAmiService extends EventEmitter {
       logger.info('[AMI] Authentication successful');
       this.emit('authenticated');
     } else if (event['Response'] === 'Error') {
-      logger.error('[AMI] Error:', event['Message']);
+      logger.error(`[AMI] Error: ${event['Message']}`);
     } else if (event['Event']) {
       this.handleAmiEvent(event);
     }
@@ -1045,7 +1045,7 @@ class FreePBXAmiService extends EventEmitter {
       pushService.broadcast(pushService.eventTypes.CALL_HISTORY_UPDATE, { reason: 'pbx_call' });
 
     } catch (error) {
-      logger.error('[AMI] Error saving call:', error);
+      logger.error(`[AMI] Error saving call: ${error.message}`);
     }
   }
 
@@ -1071,7 +1071,7 @@ class FreePBXAmiService extends EventEmitter {
       pushService.broadcast(pushService.eventTypes.CALL_HISTORY_UPDATE, { reason: 'pbx_cdr' });
 
     } catch (error) {
-      logger.error('[AMI] Error saving CDR call:', error);
+      logger.error(`[AMI] Error saving CDR call: ${error.message}`);
     }
   }
 
