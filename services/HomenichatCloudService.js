@@ -834,6 +834,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
 
       const response = await this.apiRequest('POST', '/api/heartbeat', {
         clientId: this.config.clientId,
+        publicKey: this.tunnel.publicKey, // Send publicKey for reliable client lookup
         timestamp: Date.now(),
         uptime: Math.floor(process.uptime()),
         memory: {
