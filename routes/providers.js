@@ -10,19 +10,94 @@ router.use(verifyToken);
 
 /**
  * GET /api/providers/status
- * Obtient le statut de tous les providers
+ * Obtient le statut de tous les providers (incluant modems GSM et VoIP)
  */
 router.get('/status', async (req, res) => {
   try {
     const providers = providerManager.getAvailableProviders();
     const healthStatus = await providerManager.getHealthStatus();
-
     const activeProviders = Array.from(providerManager.activeProviders);
+
+    // Format pour apps mobiles: tableau de providers avec type et statut
+    const providersList = [];
+
+    // WhatsApp - Baileys
+    const baileysProvider = providerManager.providers?.get('baileys');
+    if (baileysProvider) {
+      const connState = await baileysProvider.getConnectionState?.() || {};
+      providersList.push({
+        name: 'baileys',
+        type: 'whatsapp',
+        connected: connState.isConnected || false,
+        phone: baileysProvider.sock?.user?.id?.split('@')[0]?.split(':')[0] || null
+      });
+    }
+
+    // WhatsApp - Meta Cloud
+    const metaProvider = providerManager.providers?.get('meta');
+    if (metaProvider) {
+      const metaHealth = await metaProvider.getHealth?.() || {};
+      providersList.push({
+        name: 'meta',
+        type: 'whatsapp',
+        connected: metaHealth.isHealthy || false,
+        phone: metaProvider.config?.phoneNumber || null
+      });
+    }
+
+    // GSM Modems
+    try {
+      const ModemService = require('../services/ModemService');
+      const modemService = new ModemService();
+      const modemsConfig = modemService.getModemsConfig ? modemService.getModemsConfig() : modemService.modemsConfig;
+
+      if (modemsConfig?.modems) {
+        for (const [modemId, config] of Object.entries(modemsConfig.modems)) {
+          // Get modem status
+          let modemConnected = false;
+          try {
+            const { collectModemStatus } = require('../src/services/modem/status');
+            const status = await collectModemStatus(modemId, config);
+            modemConnected = status.state === 'Free' || status.registered;
+          } catch (e) {
+            // Modem status check failed
+          }
+
+          providersList.push({
+            name: modemId,
+            type: 'sms',
+            subtype: 'modem',
+            connected: modemConnected,
+            phone: config.phoneNumber || null,
+            modemType: config.modemType || 'unknown'
+          });
+        }
+      }
+    } catch (e) {
+      // ModemService not available
+    }
+
+    // VoIP - FreePBX AMI
+    try {
+      const freepbxAmi = require('../services/FreePBXAmiService');
+      const amiStatus = freepbxAmi.getStatus ? freepbxAmi.getStatus() : { connected: freepbxAmi.connected };
+      providersList.push({
+        name: 'asterisk',
+        type: 'voip',
+        connected: amiStatus.connected || false,
+        amiConnected: amiStatus.authenticated || amiStatus.connected || false
+      });
+    } catch (e) {
+      // AMI not available
+    }
+
     res.json({
       success: true,
-      activeProvider: activeProviders[0] || 'none', // Premier provider actif
-      activeProviders: activeProviders, // Tous les providers actifs
+      activeProvider: activeProviders[0] || 'none',
+      activeProviders: activeProviders,
       providers: providers,
+      // Format liste pour apps mobiles
+      providersList: providersList,
       health: healthStatus
     });
   } catch (error) {
