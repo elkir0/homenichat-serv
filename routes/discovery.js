@@ -231,8 +231,29 @@ router.get('/', async (req, res) => {
         password: process.env.VOIP_PASSWORD || '',
       };
 
-      // PRIORITY 1: Use user_voip_extensions table (correct credentials matching Asterisk)
-      if (userVoipExt && userVoipExt.enabled && userVoipExt.webrtcEnabled && userVoipExt.extension && userVoipExt.secret) {
+      // PRIORITY 0: Explicit env config (VOIP_EXTENSION + VOIP_PASSWORD both set)
+      // This takes highest priority as it represents admin's explicit config for external VoIP
+      if (globalConfig.extension && globalConfig.password) {
+        result.voipCredentials = {
+          server: globalConfig.server,
+          domain: globalConfig.domain,
+          extension: globalConfig.extension,
+          password: globalConfig.password,
+          displayName: req.user.username || 'Homenichat User',
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        };
+
+        // Update CDR extensions
+        if (result.cdr && result.cdr.enabled) {
+          result.cdr.extensions = [globalConfig.extension];
+        }
+        console.log(`[Discovery] Using env config for user ${req.user.id}: ext ${globalConfig.extension} @ ${globalConfig.domain}`);
+      }
+      // PRIORITY 1: Use user_voip_extensions table (correct credentials matching local Asterisk)
+      else if (userVoipExt && userVoipExt.enabled && userVoipExt.webrtcEnabled && userVoipExt.extension && userVoipExt.secret) {
         result.voipCredentials = {
           server: globalConfig.server,
           domain: globalConfig.domain,
@@ -553,8 +574,28 @@ async function getDiscoveryData(req) {
       password: process.env.VOIP_PASSWORD || '',
     };
 
-    // PRIORITY 1: Use user_voip_extensions table (correct credentials matching Asterisk)
-    if (userVoipExt && userVoipExt.enabled && userVoipExt.webrtcEnabled && userVoipExt.extension && userVoipExt.secret) {
+    // PRIORITY 0: Explicit env config (VOIP_EXTENSION + VOIP_PASSWORD both set)
+    // This takes highest priority as it represents admin's explicit config for external VoIP
+    if (globalConfig.extension && globalConfig.password) {
+      result.voipCredentials = {
+        server: globalConfig.server,
+        domain: globalConfig.domain,
+        extension: globalConfig.extension,
+        password: globalConfig.password,
+        displayName: req.user.username || 'Homenichat User',
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      };
+
+      if (result.cdr && result.cdr.enabled) {
+        result.cdr.extensions = [globalConfig.extension];
+      }
+      console.log(`[Discovery] Using env config for user ${req.user.id}: ext ${globalConfig.extension} @ ${globalConfig.domain}`);
+    }
+    // PRIORITY 1: Use user_voip_extensions table (correct credentials matching local Asterisk)
+    else if (userVoipExt && userVoipExt.enabled && userVoipExt.webrtcEnabled && userVoipExt.extension && userVoipExt.secret) {
       result.voipCredentials = {
         server: globalConfig.server,
         domain: globalConfig.domain,
