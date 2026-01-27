@@ -86,15 +86,25 @@ async function getVoLTEStatus(modemId) {
         }
 
         // Determine if VoLTE is fully active
-        // Primary check: Voice capability from Asterisk + IMS enabled + LTE network
-        // Fallback: Full check with audio modes
-        if (status.details.voiceCapability && status.details.imsEnabled && status.networkMode === 'LTE') {
+        // PRIMARY: Voice capability from Asterisk is the most reliable indicator
+        // On LTE networks, Voice: Yes means VoLTE is working (without VoLTE, voice would be No on pure LTE)
+        if (status.details.voiceCapability === true) {
             status.volteEnabled = true;
-        } else if (status.imsRegistered && status.networkMode === 'LTE' && status.audioMode === 'UAC') {
+            // If voice is active but we couldn't get network mode, assume LTE (VoLTE requires LTE)
+            if (!status.networkMode) {
+                status.networkMode = 'LTE';
+            }
+        }
+        // SECONDARY: Check IMS + network mode if voice capability wasn't detected
+        else if (status.details.imsEnabled && (status.networkMode === 'LTE' || status.audioMode === 'UAC')) {
+            status.volteEnabled = true;
+        }
+        // TERTIARY: Full check with all AT responses
+        else if (status.imsRegistered && status.networkMode === 'LTE' && status.audioMode === 'UAC') {
             status.volteEnabled = true;
         }
 
-        logger.info(`[VoLTE] Status for ${modemId}: VoLTE=${status.volteEnabled}, Voice=${status.details.voiceCapability}, IMS=${status.imsRegistered}, Network=${status.networkMode}, Audio=${status.audioMode}`);
+        logger.info(`[VoLTE] Status for ${modemId}: VoLTE=${status.volteEnabled}, Voice=${status.details.voiceCapability}, IMS=${status.details.imsEnabled}, Network=${status.networkMode}, Audio=${status.audioMode}`);
 
     } catch (error) {
         logger.error(`[VoLTE] Error getting status for ${modemId}:`, error.message);
