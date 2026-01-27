@@ -1888,20 +1888,37 @@ export default function ModemsPage() {
                       </Typography>
                     </Box>
                     {/* Network Type Badge */}
-                    {data.status.technology && data.status.technology !== 'No Service' && (
-                      <Chip
-                        label={data.status.technology}
-                        size="small"
-                        color={
-                          data.status.technology.includes('LTE') || data.status.technology === '4G'
-                            ? 'success'
-                            : data.status.technology === '3G' || data.status.technology.includes('WCDMA')
-                            ? 'warning'
-                            : 'default'
+                    {(() => {
+                      // Determine network type: use technology, or infer LTE if voice is active (VoLTE)
+                      const tech = data.status.technology;
+                      const hasVoice = data.status.voice;
+                      let networkType = null;
+                      let color: 'success' | 'warning' | 'default' = 'default';
+
+                      if (tech && tech !== 'Unknown' && tech !== 'No Service') {
+                        networkType = tech;
+                      } else if (hasVoice) {
+                        // VoLTE requires LTE, so if voice is active, we're on LTE
+                        networkType = 'LTE';
+                      }
+
+                      if (networkType) {
+                        if (networkType.includes('LTE') || networkType === '4G') {
+                          color = 'success';
+                        } else if (networkType === '3G' || networkType.includes('WCDMA')) {
+                          color = 'warning';
                         }
-                        sx={{ fontWeight: 700 }}
-                      />
-                    )}
+                        return (
+                          <Chip
+                            label={networkType}
+                            size="small"
+                            color={color}
+                            sx={{ fontWeight: 700 }}
+                          />
+                        );
+                      }
+                      return null;
+                    })()}
                   </Box>
 
                   <Box sx={{ textAlign: 'center', py: 2 }}>
