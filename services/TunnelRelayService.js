@@ -575,6 +575,7 @@ PersistentKeepalive = ${wg.persistentKeepalive || 25}
 
       const stats = {
         clientId: this.config.clientId,
+        publicKey: this.state.publicKey, // Send publicKey for reliable client lookup
         timestamp: Date.now(),
         uptime: Math.floor(process.uptime()),
         memory: {
