@@ -1,6 +1,6 @@
 /**
  * Script de migration vers SQLite
- * Transfère les données de bailey_store.json et database-memory.js vers lekip-chat.db
+ * Transfère les données de bailey_store.json et database-memory.js vers homenichat.db
  */
 const fs = require('fs');
 const path = require('path');

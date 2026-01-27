@@ -51,7 +51,7 @@ const verifyToken = async (req, res, next) => {
     const jwt = require('jsonwebtoken');
     const db = require('../services/DatabaseService');
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'lekip-chat-secret-key-change-this-in-production');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'homenichat-secret-key-change-this-in-production');
 
     // Vérifier que la session existe
     const session = db.getSession(token);

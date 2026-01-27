@@ -41,7 +41,7 @@ router.get('/voip', verifyToken, (req, res) => {
         domain: userVoip.domain || globalConfig.domain,
         extension: userVoip.extension,
         password: userVoip.password || '',
-        displayName: userVoip.displayName || `${req.user.username} - L'ekip-Chat`,
+        displayName: userVoip.displayName || `${req.user.username} - Homenichat`,
         iceServers: globalConfig.iceServers,
         isUserConfig: true
       });

@@ -968,7 +968,7 @@ async function startServer() {
 
     // Démarrage du serveur
     server.listen(PORT, () => {
-      logger.info(`Serveur L'ekip-Chat démarré sur le port ${PORT}`);
+      logger.info(`Serveur Homenichat démarré sur le port ${PORT}`);
       logger.info(`Active Provider: ${providerManager.activeProvider?.getProviderName() || 'none'}`);
 
       // Démarrer le job de nettoyage des médias (toutes les 24h)

@@ -114,7 +114,7 @@ class ConfigurationService {
     const yamlConfig = {
       version: '2.0',
       instance: {
-        name: "L'ekip-Chat",
+        name: "Homenichat",
         timezone: 'Europe/Paris',
         language: 'fr'
       },
@@ -206,7 +206,7 @@ class ConfigurationService {
     this.config = {
       version: '2.0',
       instance: {
-        name: "L'ekip-Chat",
+        name: "Homenichat",
         timezone: 'Europe/Paris',
         language: 'fr'
       },

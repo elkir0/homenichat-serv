@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const db = require('../services/DatabaseService');
 
 // Clé secrète pour JWT (à mettre dans les variables d'environnement)
-const JWT_SECRET = process.env.JWT_SECRET || 'lekip-chat-secret-key-change-this-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || 'homenichat-secret-key-change-this-in-production';
 
 // Homenichat Cloud provisioning server URL
 const CLOUD_PROVISIONING_URL = process.env.CLOUD_PROVISIONING_URL || 'https://relay.homenichat.com';

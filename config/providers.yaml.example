@@ -1,15 +1,15 @@
-# L'ekip-Chat - Configuration Providers v2.0
+# Homenichat - Configuration Providers v2.0
 #
 # Variables d'environnement: ${VAR_NAME} ou ${VAR_NAME:default_value}
 # Hot-reload: Les modifications sont appliquees automatiquement
 #
-# Documentation: https://github.com/your-repo/lekip-chat/docs/CONFIG.md
+# Documentation: https://github.com/elkir0/homenichat-serv/docs/CONFIG.md
 
 version: "2.0"
 
 # Configuration instance
 instance:
-  name: "L'ekip-Chat"
+  name: "Homenichat"
   timezone: "Europe/Paris"
   language: "fr"
 

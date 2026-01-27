@@ -84,7 +84,7 @@ router.post('/unsubscribe', verifyToken, (req, res) => {
 router.post('/test', verifyToken, async (req, res) => {
     try {
         const result = await webPushService.sendToUser(req.user.id, {
-            title: "Test L'ekip-Chat",
+            title: "Test Homenichat",
             body: 'Les notifications push fonctionnent !',
             icon: '/logo-192.png',
             badge: '/logo-192.png'

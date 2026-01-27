@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://lekip-chat.fr/schemas/providers.schema.json",
-  "title": "L'ekip-Chat Providers Configuration",
-  "description": "Schema de validation pour la configuration des providers L'ekip-Chat v2.0",
+  "$id": "https://homenichat.com/schemas/providers.schema.json",
+  "title": "Homenichat Providers Configuration",
+  "description": "Schema de validation pour la configuration des providers Homenichat v2.0",
   "type": "object",
   "required": ["version", "providers"],
   "properties": {

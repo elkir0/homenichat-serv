@@ -10,7 +10,7 @@ const logger = winston.createLogger({
     winston.format.splat(),
     winston.format.json()
   ),
-  defaultMeta: { service: 'lekip-chat' },
+  defaultMeta: { service: 'homenichat' },
   transports: [
     // Console
     new winston.transports.Console({
