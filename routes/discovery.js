@@ -241,12 +241,16 @@ router.get('/', async (req, res) => {
       // Get cloud public URL if connected (for remote access via tunnel)
       let cloudPublicUrl = null;
       let cloudDomain = null;
+      let cloudTurnCredentials = null;
       if (homenichatCloudService) {
         const cloudStatus = await homenichatCloudService.getStatus();
-        if (cloudStatus.tunnel?.registration?.publicUrl) {
-          cloudPublicUrl = cloudStatus.tunnel.registration.publicUrl.replace('https://', 'wss://') + '/wss';
-          cloudDomain = new URL(cloudStatus.tunnel.registration.publicUrl).hostname;
+        // publicUrl is at top level of status (not under tunnel.registration)
+        if (cloudStatus.publicUrl) {
+          cloudPublicUrl = cloudStatus.publicUrl.replace('https://', 'wss://') + '/wss';
+          cloudDomain = new URL(cloudStatus.publicUrl).hostname;
         }
+        // Get TURN credentials from cloud
+        cloudTurnCredentials = await homenichatCloudService.getTurnCredentials();
       }
 
       // Global VoIP config from environment or cloud
@@ -308,17 +312,13 @@ router.get('/', async (req, res) => {
           { urls: 'stun:stun1.l.google.com:19302' }
         ];
 
-        // Add TURN servers from cloud if available
-        if (homenichatCloudService) {
-          const cloudStatus = await homenichatCloudService.getStatus();
-          const turnCreds = cloudStatus.tunnel?.turnCredentials || cloudStatus.tunnel?.registration?.turn;
-          if (turnCreds && turnCreds.urls) {
-            iceServers.push({
-              urls: turnCreds.urls,
-              username: turnCreds.username,
-              credential: turnCreds.credential
-            });
-          }
+        // Add TURN servers from cloud if available (cloudTurnCredentials fetched above)
+        if (cloudTurnCredentials && cloudTurnCredentials.urls) {
+          iceServers.push({
+            urls: cloudTurnCredentials.urls,
+            username: cloudTurnCredentials.username,
+            credential: cloudTurnCredentials.credential
+          });
         }
 
         result.voipCredentials = {
