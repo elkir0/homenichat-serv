@@ -12,6 +12,7 @@ const router = express.Router();
 let providerManager = null;
 let securityService = null;
 let db = null;
+let homenichatCloudService = null;
 
 /**
  * Initialize routes with required services
@@ -20,6 +21,7 @@ function initDiscoveryRoutes(services) {
   providerManager = services.providerManager;
   securityService = services.securityService;
   db = services.db;
+  homenichatCloudService = services.homenichatCloudService;
   return router;
 }
 
@@ -223,10 +225,21 @@ router.get('/', async (req, res) => {
       // Fallback: Check old settings table (deprecated, may have stale data)
       let userVoipSettings = db.getSetting(`user_${req.user.id}_voip`);
 
-      // Global VoIP config from environment
+      // Get cloud public URL if connected (for remote access via tunnel)
+      let cloudPublicUrl = null;
+      let cloudDomain = null;
+      if (homenichatCloudService) {
+        const cloudStatus = homenichatCloudService.getStatus();
+        if (cloudStatus.tunnel?.registration?.publicUrl) {
+          cloudPublicUrl = cloudStatus.tunnel.registration.publicUrl.replace('https://', 'wss://') + '/wss';
+          cloudDomain = new URL(cloudStatus.tunnel.registration.publicUrl).hostname;
+        }
+      }
+
+      // Global VoIP config from environment or cloud
       const globalConfig = {
-        server: process.env.VOIP_WSS_URL || `wss://${host?.split(':')[0]}/wss`,
-        domain: process.env.VOIP_DOMAIN || host?.split(':')[0] || 'localhost',
+        server: process.env.VOIP_WSS_URL || cloudPublicUrl || `wss://${host?.split(':')[0]}/wss`,
+        domain: process.env.VOIP_DOMAIN || cloudDomain || host?.split(':')[0] || 'localhost',
         extension: process.env.VOIP_EXTENSION || '',
         password: process.env.VOIP_PASSWORD || '',
       };
@@ -276,16 +289,32 @@ router.get('/', async (req, res) => {
       }
       // PRIORITY 1: Use user_voip_extensions table (correct credentials matching local Asterisk)
       else if (hasUserVoipExt && userVoipExt.webrtcEnabled) {
+        // Build ICE servers with TURN credentials from cloud if available
+        const iceServers = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ];
+
+        // Add TURN servers from cloud if available
+        if (homenichatCloudService) {
+          const cloudStatus = homenichatCloudService.getStatus();
+          const turnCreds = cloudStatus.tunnel?.turnCredentials || cloudStatus.tunnel?.registration?.turn;
+          if (turnCreds && turnCreds.urls) {
+            iceServers.push({
+              urls: turnCreds.urls,
+              username: turnCreds.username,
+              credential: turnCreds.credential
+            });
+          }
+        }
+
         result.voipCredentials = {
           server: globalConfig.server,
           domain: globalConfig.domain,
           extension: userVoipExt.extension,
           password: userVoipExt.secret,
           displayName: userVoipExt.displayName || req.user.username || 'Homenichat User',
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
+          iceServers
         };
 
         // Update CDR extensions

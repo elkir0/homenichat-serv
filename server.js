@@ -40,6 +40,7 @@ const mediaCleanupJob = require('./jobs/mediaCleanup');
 const webSocketManager = require('./services/WebSocketManager');
 const VoipProvider = require('./providers/voip/VoipProvider');
 const freepbxAmi = require('./services/FreePBXAmiService');
+const homenichatCloudService = require('./services/HomenichatCloudService');
 const SecurityService = require('./services/SecurityService');
 const {
   auditMiddleware,
@@ -834,6 +835,7 @@ async function startServer() {
       securityService,
       providerManager,
       db,
+      homenichatCloudService,
     });
     logger.info('Discovery routes initialized successfully');
 
