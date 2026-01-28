@@ -226,7 +226,7 @@ router.get('/', async (req, res) => {
         const cloudStatus = homenichatCloudService.getStatus();
         // If the cloud user's ID matches the server's logged-in cloud account,
         // use the local admin user (id=1) for VoIP extension lookup
-        if (cloudStatus.auth?.userId === req.user.cloudUserId) {
+        if (cloudStatus.userId === req.user.cloudUserId) {
           effectiveUserId = 1; // Local admin user
           console.log(`[Discovery] Mapped cloud user ${req.user.cloudUserId} to local admin (user_id=1)`);
         }
@@ -629,7 +629,7 @@ async function getDiscoveryData(req) {
     let effectiveUserId = req.user.id;
     if (req.user.isCloudUser && req.user.cloudUserId && homenichatCloudService) {
       const cloudStatus = homenichatCloudService.getStatus();
-      if (cloudStatus.auth?.userId === req.user.cloudUserId) {
+      if (cloudStatus.userId === req.user.cloudUserId) {
         effectiveUserId = 1; // Local admin user
       }
     }
