@@ -469,25 +469,74 @@ class WatchdogService extends EventEmitter {
   }
 
   /**
-   * Configure l'audio d'un modem (16kHz)
+   * Configure l'audio d'un modem selon son type (EC25 VoLTE UAC vs SIM7600 TTY)
    */
   async configureModemAudio(modemId) {
-    const commands = [
-      'AT+CPCMFRM=1',
-      'AT+CMICGAIN=0',
-      'AT+COUTGAIN=5',
-      'AT+CTXVOL=0x2000',
-    ];
+    // Detect modem type from USB
+    const modemType = await this.detectModemType();
+
+    let commands;
+    if (modemType === 'ec25') {
+      // EC25: VoLTE UAC mode - AT+QAUDMOD=3 + AT+QPCMV=1,2
+      // These do NOT persist after modem reboot!
+      commands = [
+        'AT+QAUDMOD=3',      // USB Audio mode (REQUIRED for VoLTE!)
+        'AT+QPCMV=1,2',      // Voice over UAC
+        'AT+QEEC=1,1,1024',  // Echo Cancellation Enhanced
+      ];
+      this.log('INFO', `Configuring EC25 VoLTE UAC audio for ${modemId}`);
+    } else {
+      // SIM7600: TTY serial audio mode - 16kHz PCM
+      commands = [
+        'AT+CPCMFRM=1',
+        'AT+CMICGAIN=0',
+        'AT+COUTGAIN=5',
+        'AT+CTXVOL=0x2000',
+      ];
+      this.log('INFO', `Configuring SIM7600 TTY audio for ${modemId}`);
+    }
 
     for (const cmd of commands) {
       try {
         await this.runCmd(`asterisk -rx "quectel cmd ${modemId} ${cmd}" 2>/dev/null`);
       } catch {
-        // Continue même en cas d'erreur
+        // Continue even on error
+      }
+      // EC25 needs more time between AT commands
+      if (modemType === 'ec25') {
+        await this.sleep(1000);
       }
     }
 
-    this.log('INFO', `Audio configured for ${modemId}`);
+    // For EC25: verify QAUDMOD was applied
+    if (modemType === 'ec25') {
+      try {
+        const verify = await this.runCmd(`asterisk -rx "quectel cmd ${modemId} AT+QAUDMOD?" 2>/dev/null`);
+        if (verify && verify.includes('QAUDMOD: 3')) {
+          this.log('OK', `EC25 ${modemId}: QAUDMOD=3 confirmed (VoLTE UAC active)`);
+        } else {
+          this.log('WARNING', `EC25 ${modemId}: QAUDMOD verification failed: ${verify}`);
+        }
+      } catch {
+        // Non-critical
+      }
+    }
+
+    this.log('INFO', `Audio configured for ${modemId} (type: ${modemType})`);
+  }
+
+  /**
+   * Detect modem type from USB vendor ID
+   */
+  async detectModemType() {
+    try {
+      const lsusb = await this.runCmd('lsusb 2>/dev/null');
+      if (lsusb.includes('2c7c:')) return 'ec25';
+      if (lsusb.includes('1e0e:')) return 'sim7600';
+    } catch {
+      // Fallback
+    }
+    return 'ec25'; // Default to EC25 (safer - UAC commands are harmless on SIM7600)
   }
 
   /**

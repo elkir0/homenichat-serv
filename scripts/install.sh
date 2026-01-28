@@ -1611,12 +1611,16 @@ else
     send_at "AT+CPIN=\"$PIN_CODE\"" 5
 fi
 
-# Configure audio mode based on modem type
+# Configure audio mode based on modem type (pre-Asterisk, via serial)
+# NOTE: EC25 VoLTE commands (AT+QAUDMOD=3, AT+QPCMV=1,2) are applied
+# AFTER Asterisk starts by modem-init.sh / WatchdogService, not here.
+# This section only handles pre-Asterisk audio init.
 if [ "$MODEM_TYPE" = "ec25" ]; then
-    log "Configuring EC25 audio mode..."
-    send_at "AT+QAUDMOD=2" 2
-    send_at "AT+CPCMFRM=0" 2
-    log "EC25 audio configured for PCM mode"
+    log "EC25 detected - VoLTE audio (AT+QAUDMOD=3) will be applied after Asterisk starts"
+    # Pre-set USB Audio mode so modem enumerates UAC device
+    send_at "AT+QAUDMOD=3" 2
+    send_at "AT+QPCMV=1,2" 2
+    log "EC25 pre-configured for USB Audio Class (UAC) mode"
 elif [ "$MODEM_TYPE" = "sim7600" ]; then
     log "Configuring SIM7600 audio mode..."
     send_at "AT+CPCMFRM=1" 2
@@ -1800,24 +1804,28 @@ DYNAMIC
     chown asterisk:asterisk /etc/asterisk/extensions_homenichat.conf 2>/dev/null || true
     chown asterisk:asterisk /etc/asterisk/extensions_custom.conf 2>/dev/null || true
 
-    # Install audio initialization script for SIM7600 modems
-    if [ "$INSTALL_MODEMS" = true ] && [ -f "$INSTALL_DIR/scripts/init-quectel-audio.sh" ]; then
-        cp "$INSTALL_DIR/scripts/init-quectel-audio.sh" /usr/local/bin/
-        chmod +x /usr/local/bin/init-quectel-audio.sh
-        info "Installed init-quectel-audio.sh"
+    # Install modem audio initialization script (runs AFTER Asterisk starts)
+    # This applies VoLTE AT commands (EC25: AT+QAUDMOD=3, AT+QPCMV=1,2)
+    # and SIM7600 audio commands (AT+CPCMFRM=1, etc.)
+    if [ "$INSTALL_MODEMS" = true ] && [ -f "$INSTALL_DIR/scripts/modem-init.sh" ]; then
+        cp "$INSTALL_DIR/scripts/modem-init.sh" /usr/local/bin/homenichat-audio-init
+        chmod +x /usr/local/bin/homenichat-audio-init
+        info "Installed modem-init.sh as homenichat-audio-init"
 
         # Create systemd service to run audio init after Asterisk starts
+        # The modem-init.sh waits for modems to be in "Free" state before applying AT commands
         cat > /etc/systemd/system/homenichat-audio-init.service << 'AUDIO_SERVICE'
 [Unit]
-Description=Homenichat Quectel Audio Initialization
+Description=Homenichat Modem Audio Initialization (VoLTE UAC / SIM7600 PCM)
 After=asterisk.service
 Requires=asterisk.service
 
 [Service]
 Type=oneshot
 ExecStartPre=/bin/sleep 5
-ExecStart=/usr/local/bin/init-quectel-audio.sh
+ExecStart=/usr/local/bin/homenichat-audio-init
 RemainAfterExit=yes
+TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target
@@ -1825,7 +1833,7 @@ AUDIO_SERVICE
 
         systemctl daemon-reload
         systemctl enable homenichat-audio-init.service >> "$LOG_FILE" 2>&1 || true
-        info "Enabled homenichat-audio-init.service"
+        info "Enabled homenichat-audio-init.service (auto-applies VoLTE/audio AT commands at boot)"
     fi
 
     # Reload Asterisk if running to apply config changes

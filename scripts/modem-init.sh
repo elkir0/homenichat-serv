@@ -46,27 +46,42 @@ detect_modem_type() {
     fi
 }
 
-# Initialize EC25 modem (IchthysMaranatha fork)
+# Initialize EC25 modem (IchthysMaranatha fork with VoLTE UAC)
 init_ec25() {
     local modem=$1
-    log "Initializing EC25 modem: $modem"
+    log "Initializing EC25 modem (VoLTE UAC): $modem"
 
-    # Echo Cancellation Enhanced
+    # CRITICAL: Set USB Audio mode (required for VoLTE audio!)
+    # This does NOT persist after modem reboot - must be applied every time
+    log "  Setting USB Audio Mode (AT+QAUDMOD=3)..."
+    $ASTERISK_CMD "quectel cmd $modem AT+QAUDMOD=3" 2>/dev/null || true
+    sleep 1
+
+    # CRITICAL: Enable Voice over UAC (USB Audio Class)
+    # Without this, audio streams won't activate during calls
+    log "  Enabling Voice over UAC (AT+QPCMV=1,2)..."
+    $ASTERISK_CMD "quectel cmd $modem AT+QPCMV=1,2" 2>/dev/null || true
+    sleep 1
+
+    # Verify QAUDMOD was applied (should return 3)
+    log "  Verifying AT+QAUDMOD..."
+    local verify=$($ASTERISK_CMD "quectel cmd $modem AT+QAUDMOD?" 2>/dev/null || echo "")
+    if echo "$verify" | grep -q "QAUDMOD: 3"; then
+        log "  ✓ QAUDMOD=3 confirmed (USB Audio mode)"
+    else
+        log "  WARNING: QAUDMOD verification failed, retrying..."
+        sleep 2
+        $ASTERISK_CMD "quectel cmd $modem AT+QAUDMOD=3" 2>/dev/null || true
+        sleep 1
+        $ASTERISK_CMD "quectel cmd $modem AT+QPCMV=1,2" 2>/dev/null || true
+    fi
+
+    # Echo Cancellation (optional, improves audio quality)
     log "  Enabling Echo Cancellation (AT+QEEC=1,1,1024)..."
     $ASTERISK_CMD "quectel cmd $modem AT+QEEC=1,1,1024" 2>/dev/null || true
-    sleep 0.5
-
-    # Side Tone Detection
-    log "  Enabling Side Tone Detection (AT+QSIDET=1)..."
-    $ASTERISK_CMD "quectel cmd $modem AT+QSIDET=1" 2>/dev/null || true
-    sleep 0.5
-
-    # PCM Audio Mode (serial, not USB audio class)
-    log "  Setting PCM Audio Mode (AT+QAUDMOD=0)..."
-    $ASTERISK_CMD "quectel cmd $modem AT+QAUDMOD=0" 2>/dev/null || true
     sleep 0.3
 
-    log "  EC25 $modem initialized"
+    log "  EC25 $modem initialized (VoLTE UAC mode)"
 }
 
 # Initialize SIM7600 modem (RoEdAl fork)
@@ -110,8 +125,8 @@ main() {
     MODEM_TYPE=$(detect_modem_type)
     log "Detected modem type: $MODEM_TYPE"
 
-    # Get list of connected modems
-    MODEMS=$($ASTERISK_CMD "quectel show devices" 2>/dev/null | grep -E "^\s*(modem-|quectel)" | awk '{print $1}' | head -5)
+    # Get list of connected modems (any name: modem-X, hni-X, quectel-X, etc.)
+    MODEMS=$($ASTERISK_CMD "quectel show devices" 2>/dev/null | grep -vE "^(ID|$)" | grep -E "^\s*[a-zA-Z]" | awk '{print $1}' | head -5)
 
     if [ -z "$MODEMS" ]; then
         log "No modems found in chan_quectel"
