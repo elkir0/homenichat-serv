@@ -381,7 +381,7 @@ router.get('/modem-scan', async (req, res) => {
         // Check for existing modem configuration
         const ModemService = require('../services/ModemService');
         const modemService = new ModemService({ modems: {}, logger: console });
-        const existingConfig = modemService.getModemsConfig();
+        const existingConfig = modemService.getAllModemsConfig();
 
         res.json({
             detected,
