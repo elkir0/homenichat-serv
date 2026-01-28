@@ -219,11 +219,24 @@ router.get('/', async (req, res) => {
 
     // VoIP credentials for 1-click setup
     if (req.user && req.user.id && db) {
+      // Map cloud user to local user if this is a cloud-authenticated request
+      // and the cloud userId matches the server's configured cloud account
+      let effectiveUserId = req.user.id;
+      if (req.user.isCloudUser && req.user.cloudUserId && homenichatCloudService) {
+        const cloudStatus = homenichatCloudService.getStatus();
+        // If the cloud user's ID matches the server's logged-in cloud account,
+        // use the local admin user (id=1) for VoIP extension lookup
+        if (cloudStatus.auth?.userId === req.user.cloudUserId) {
+          effectiveUserId = 1; // Local admin user
+          console.log(`[Discovery] Mapped cloud user ${req.user.cloudUserId} to local admin (user_id=1)`);
+        }
+      }
+
       // PRIORITY 1: Check user_voip_extensions table (correct source, synced with Asterisk)
-      const userVoipExt = db.getVoIPExtensionByUserId(req.user.id);
+      const userVoipExt = db.getVoIPExtensionByUserId(effectiveUserId);
 
       // Fallback: Check old settings table (deprecated, may have stale data)
-      let userVoipSettings = db.getSetting(`user_${req.user.id}_voip`);
+      let userVoipSettings = db.getSetting(`user_${effectiveUserId}_voip`);
 
       // Get cloud public URL if connected (for remote access via tunnel)
       let cloudPublicUrl = null;
@@ -406,7 +419,7 @@ router.get('/', async (req, res) => {
           // Save to user_voip_extensions table (correct source of truth)
           try {
             db.createVoIPExtension({
-              userId: req.user.id,
+              userId: effectiveUserId,
               extension: extensionNumber,
               secret: secret,
               displayName: req.user.username || `User ${req.user.id}`,
@@ -612,11 +625,20 @@ async function getDiscoveryData(req) {
 
   // VoIP credentials for 1-click setup
   if (req && req.user && db) {
+    // Map cloud user to local user if applicable
+    let effectiveUserId = req.user.id;
+    if (req.user.isCloudUser && req.user.cloudUserId && homenichatCloudService) {
+      const cloudStatus = homenichatCloudService.getStatus();
+      if (cloudStatus.auth?.userId === req.user.cloudUserId) {
+        effectiveUserId = 1; // Local admin user
+      }
+    }
+
     // PRIORITY 1: Check user_voip_extensions table (correct source, synced with Asterisk)
-    const userVoipExt = db.getVoIPExtensionByUserId(req.user.id);
+    const userVoipExt = db.getVoIPExtensionByUserId(effectiveUserId);
 
     // Fallback: Check old settings table (deprecated)
-    const userVoipSettings = db.getSetting(`user_${req.user.id}_voip`);
+    const userVoipSettings = db.getSetting(`user_${effectiveUserId}_voip`);
 
     const globalConfig = {
       server: process.env.VOIP_WSS_URL || `wss://${process.env.VOIP_DOMAIN || req.headers.host?.split(':')[0] || 'localhost'}/wss`,
@@ -627,6 +649,7 @@ async function getDiscoveryData(req) {
 
     // Auto-detect WebRTC mode (simplified for helper function)
     const hasExplicitVoipConfig = globalConfig.extension && globalConfig.password;
+    const hasUserVoipExt = userVoipExt && userVoipExt.enabled && userVoipExt.extension && userVoipExt.secret;
     const webrtcExplicitlyDisabled = process.env.VOIP_WEBRTC_ENABLED === 'false';
     // Check if we have GSM modems by trying to detect them
     let hasGsmModems = false;
@@ -638,7 +661,8 @@ async function getDiscoveryData(req) {
     } catch (e) {
       // No modems
     }
-    const isGsmOnlyMode = !hasExplicitVoipConfig && hasGsmModems && !process.env.VOIP_WSS_URL;
+    // GSM-only mode: only if no user extension AND no explicit config AND modems available
+    const isGsmOnlyMode = !hasExplicitVoipConfig && !hasUserVoipExt && hasGsmModems && !process.env.VOIP_WSS_URL;
 
     if (webrtcExplicitlyDisabled || isGsmOnlyMode) {
       // Don't set voipCredentials - GSM-only mode
@@ -759,10 +783,10 @@ async function getDiscoveryData(req) {
         // Save to user_voip_extensions table (correct source of truth)
         try {
           db.createVoIPExtension({
-            userId: req.user.id,
+            userId: effectiveUserId,
             extension: extensionNumber,
             secret: secret,
-            displayName: req.user.username || `User ${req.user.id}`,
+            displayName: req.user.username || `User ${effectiveUserId}`,
             context: 'from-internal',
             transport: 'transport-wss',
             codecs: 'g722,ulaw,alaw,opus',
