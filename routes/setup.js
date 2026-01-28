@@ -692,35 +692,49 @@ router.post('/complete', async (req, res) => {
             });
         }
 
-        // Auto-create VoIP extension for admin user
+        // Auto-create VoIP extension for admin user ONLY if Asterisk is installed
+        // Without Asterisk, there's no SIP server to register extensions with
         let voipExtension = null;
         try {
-            const admin = db.getUserByUsername('admin');
-            if (admin) {
-                // Check if admin already has a VoIP extension
-                const existingExt = db.getVoIPExtensionByUserId(admin.id);
-                if (!existingExt) {
-                    // Generate extension number and secret
-                    const crypto = require('crypto');
-                    const extension = db.getNextAvailableExtension(1000);
-                    const secret = crypto.randomBytes(16).toString('hex');
+            const { execSync } = require('child_process');
+            let asteriskInstalled = false;
+            try {
+                execSync('which asterisk', { stdio: 'pipe' });
+                asteriskInstalled = true;
+            } catch {
+                asteriskInstalled = false;
+            }
 
-                    // Create VoIP extension for admin
-                    voipExtension = db.createVoIPExtension(admin.id, {
-                        extension,
-                        secret,
-                        displayName: 'Admin',
-                        context: 'from-internal',
-                        transport: 'wss',
-                        codecs: 'g722,ulaw,alaw,opus',
-                        enabled: true,
-                        webrtcEnabled: true
-                    });
+            if (!asteriskInstalled) {
+                logger.info('Asterisk not installed - skipping VoIP extension auto-creation (GSM-only mode)');
+            } else {
+                const admin = db.getUserByUsername('admin');
+                if (admin) {
+                    // Check if admin already has a VoIP extension
+                    const existingExt = db.getVoIPExtensionByUserId(admin.id);
+                    if (!existingExt) {
+                        // Generate extension number and secret
+                        const crypto = require('crypto');
+                        const extension = db.getNextAvailableExtension(1000);
+                        const secret = crypto.randomBytes(16).toString('hex');
 
-                    logger.info(`Auto-created VoIP extension ${extension} for admin user during setup`);
-                } else {
-                    voipExtension = existingExt;
-                    logger.info(`Admin user already has VoIP extension ${existingExt.extension}`);
+                        // Create VoIP extension for admin
+                        voipExtension = db.createVoIPExtension(admin.id, {
+                            extension,
+                            secret,
+                            displayName: 'Admin',
+                            context: 'from-internal',
+                            transport: 'wss',
+                            codecs: 'g722,ulaw,alaw,opus',
+                            enabled: true,
+                            webrtcEnabled: true
+                        });
+
+                        logger.info(`Auto-created VoIP extension ${extension} for admin user during setup`);
+                    } else {
+                        voipExtension = existingExt;
+                        logger.info(`Admin user already has VoIP extension ${existingExt.extension}`);
+                    }
                 }
             }
         } catch (voipError) {
