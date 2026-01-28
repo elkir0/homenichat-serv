@@ -477,16 +477,32 @@ class WatchdogService extends EventEmitter {
 
     let commands;
     if (modemType === 'ec25') {
-      // EC25: VoLTE UAC mode - AT+QAUDMOD=3 + AT+QPCMV=1,2
-      // These do NOT persist after modem reboot!
+      // EC25: VoLTE UAC mode
+      // DO NOT send AT+QAUDMOD=3 or AT+QPCMV=1,2 via asterisk CLI!
+      // AT+QAUDMOD=3 causes USB re-enumeration which crashes chan_quectel.
+      // These must be sent via serial BEFORE Asterisk starts (homenichat-modem-init service).
+      // Here we only verify and send non-disruptive commands.
+      this.log('INFO', `EC25 ${modemId}: applying non-disruptive audio commands`);
+
+      // Verify Voice: Yes (set by pre-Asterisk init)
+      try {
+        const state = await this.runCmd(`asterisk -rx "quectel show device state ${modemId}" 2>/dev/null`);
+        if (state && state.includes('Voice                   : Yes')) {
+          this.log('OK', `EC25 ${modemId}: Voice: Yes (VoLTE UAC active)`);
+        } else {
+          this.log('WARNING', `EC25 ${modemId}: Voice not enabled - AT+QAUDMOD=3 may not have been applied at boot`);
+        }
+      } catch {
+        // Non-critical
+      }
+
       commands = [
-        'AT+QAUDMOD=3',      // USB Audio mode (REQUIRED for VoLTE!)
-        'AT+QPCMV=1,2',      // Voice over UAC
-        'AT+QEEC=1,1,1024',  // Echo Cancellation Enhanced
+        'AT+QEEC=1,1,1024',          // Echo Cancellation Enhanced
+        'AT+QCFG="nwscanmode",3',    // Lock LTE-only (prevent 3G CSFB)
+        'AT+QCFG="ims",1',           // Enable IMS
       ];
-      this.log('INFO', `Configuring EC25 VoLTE UAC audio for ${modemId}`);
     } else {
-      // SIM7600: TTY serial audio mode - 16kHz PCM
+      // SIM7600: TTY serial audio mode - 16kHz PCM (safe to send via asterisk CLI)
       commands = [
         'AT+CPCMFRM=1',
         'AT+CMICGAIN=0',
@@ -502,24 +518,7 @@ class WatchdogService extends EventEmitter {
       } catch {
         // Continue even on error
       }
-      // EC25 needs more time between AT commands
-      if (modemType === 'ec25') {
-        await this.sleep(1000);
-      }
-    }
-
-    // For EC25: verify QAUDMOD was applied
-    if (modemType === 'ec25') {
-      try {
-        const verify = await this.runCmd(`asterisk -rx "quectel cmd ${modemId} AT+QAUDMOD?" 2>/dev/null`);
-        if (verify && verify.includes('QAUDMOD: 3')) {
-          this.log('OK', `EC25 ${modemId}: QAUDMOD=3 confirmed (VoLTE UAC active)`);
-        } else {
-          this.log('WARNING', `EC25 ${modemId}: QAUDMOD verification failed: ${verify}`);
-        }
-      } catch {
-        // Non-critical
-      }
+      await this.sleep(500);
     }
 
     this.log('INFO', `Audio configured for ${modemId} (type: ${modemType})`);

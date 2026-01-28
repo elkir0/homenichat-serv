@@ -1612,15 +1612,44 @@ else
 fi
 
 # Configure audio mode based on modem type (pre-Asterisk, via serial)
-# NOTE: EC25 VoLTE commands (AT+QAUDMOD=3, AT+QPCMV=1,2) are applied
-# AFTER Asterisk starts by modem-init.sh / WatchdogService, not here.
-# This section only handles pre-Asterisk audio init.
+# EC25: AT+QAUDMOD=3 causes USB re-enumeration! Must be sent here (before Asterisk)
+# and NOT via "asterisk -rx quectel cmd" (which would crash chan_quectel).
 if [ "$MODEM_TYPE" = "ec25" ]; then
-    log "EC25 detected - VoLTE audio (AT+QAUDMOD=3) will be applied after Asterisk starts"
-    # Pre-set USB Audio mode so modem enumerates UAC device
+    log "EC25 detected - Configuring VoLTE USB Audio (UAC) mode..."
+
+    # AT+QAUDMOD=3 causes USB re-enumeration (modem disconnects/reconnects)
+    log "  Sending AT+QAUDMOD=3 (USB Audio mode)..."
     send_at "AT+QAUDMOD=3" 2
-    send_at "AT+QPCMV=1,2" 2
-    log "EC25 pre-configured for USB Audio Class (UAC) mode"
+
+    # Wait for USB re-enumeration (modem resets USB bus)
+    log "  Waiting for USB re-enumeration..."
+    sleep 5
+    RETRY=0
+    while [ ! -e "$DATA_PORT" ] && [ $RETRY -lt 15 ]; do
+        log "  Waiting for $DATA_PORT... ($RETRY/15)"
+        sleep 2
+        RETRY=$((RETRY + 1))
+    done
+
+    if [ -e "$DATA_PORT" ]; then
+        log "  Modem port back after re-enumeration"
+        stty -F "$DATA_PORT" 115200 raw -echo -echoe -echok 2>/dev/null || true
+        sleep 1
+
+        # Now send remaining commands (no USB reset)
+        log "  Sending AT+QPCMV=1,2 (Voice over UAC)..."
+        send_at "AT+QPCMV=1,2" 2
+        log "  Sending AT+QEEC=1,1,1024 (Echo Cancellation)..."
+        send_at "AT+QEEC=1,1,1024" 2
+        log "  Locking LTE-only mode (AT+QCFG=nwscanmode,3)..."
+        send_at 'AT+QCFG="nwscanmode",3' 2
+        log "  Enabling IMS (AT+QCFG=ims,1)..."
+        send_at 'AT+QCFG="ims",1' 2
+    else
+        log "  WARNING: Modem port not available after re-enumeration"
+    fi
+
+    log "EC25 VoLTE UAC mode configured (pre-Asterisk)"
 elif [ "$MODEM_TYPE" = "sim7600" ]; then
     log "Configuring SIM7600 audio mode..."
     send_at "AT+CPCMFRM=1" 2

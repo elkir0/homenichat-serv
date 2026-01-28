@@ -2,12 +2,22 @@
 # modem-init.sh
 # Unified modem initialization script for EC25 and SIM7600
 #
-# Detects modem type and applies appropriate audio settings.
-# Should be called after Asterisk starts (via systemd service).
+# ARCHITECTURE (two-phase init):
+#
+# Phase 1 (BEFORE Asterisk) - homenichat-modem-init.service:
+#   Sends AT+QAUDMOD=3 + AT+QPCMV=1,2 via serial port.
+#   AT+QAUDMOD=3 causes USB re-enumeration (modem disconnects/reconnects).
+#   This MUST happen before Asterisk takes control of the modem.
+#   → Embedded in install.sh as homenichat-modem-init script.
+#
+# Phase 2 (AFTER Asterisk) - homenichat-audio-init.service:
+#   THIS SCRIPT. Verifies VoLTE settings are applied, sends only
+#   non-disruptive AT commands (echo cancellation, LTE lock).
+#   Does NOT send AT+QAUDMOD=3 (would crash chan_quectel via USB reset).
 #
 # Modem detection:
-# - EC25:    USB ID 2c7c:* (Quectel)
-# - SIM7600: USB ID 1e0e:* (Simcom)
+# - EC25:    USB ID 2c7c:* (Quectel) → IchthysMaranatha fork, UAC mode
+# - SIM7600: USB ID 1e0e:* (Simcom)  → RoEdAl fork @ 37b566f, TTY mode
 
 set -e
 
@@ -16,7 +26,7 @@ LOG_PREFIX="[modem-init]"
 
 log() {
     echo "$LOG_PREFIX $1"
-    logger -t modem-init "$1"
+    logger -t modem-init "$1" 2>/dev/null || true
 }
 
 # Wait for Asterisk to be ready
@@ -35,6 +45,24 @@ wait_for_asterisk() {
     log "Asterisk is ready"
 }
 
+# Wait for modem to be in "Free" state in chan_quectel
+wait_for_modem() {
+    local max_wait=60
+    local waited=0
+
+    log "Waiting for modem to appear in chan_quectel..."
+    while [ $waited -lt $max_wait ]; do
+        if $ASTERISK_CMD "quectel show devices" 2>/dev/null | grep -qE "Free|Ring|Dial"; then
+            log "Modem detected in chan_quectel"
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    log "WARNING: No modem detected after ${max_wait}s"
+    return 1
+}
+
 # Detect modem type from USB
 detect_modem_type() {
     if lsusb 2>/dev/null | grep -q "2c7c:"; then
@@ -46,42 +74,68 @@ detect_modem_type() {
     fi
 }
 
-# Initialize EC25 modem (IchthysMaranatha fork with VoLTE UAC)
+# Initialize EC25 modem (post-Asterisk, non-disruptive commands only)
+# NOTE: AT+QAUDMOD=3 and AT+QPCMV=1,2 are sent BEFORE Asterisk
+# by homenichat-modem-init service via serial port (see install.sh).
+# Sending AT+QAUDMOD=3 here would cause USB re-enumeration and crash chan_quectel!
 init_ec25() {
     local modem=$1
-    log "Initializing EC25 modem (VoLTE UAC): $modem"
+    log "Initializing EC25 modem (post-Asterisk): $modem"
 
-    # CRITICAL: Set USB Audio mode (required for VoLTE audio!)
-    # This does NOT persist after modem reboot - must be applied every time
-    log "  Setting USB Audio Mode (AT+QAUDMOD=3)..."
-    $ASTERISK_CMD "quectel cmd $modem AT+QAUDMOD=3" 2>/dev/null || true
-    sleep 1
-
-    # CRITICAL: Enable Voice over UAC (USB Audio Class)
-    # Without this, audio streams won't activate during calls
-    log "  Enabling Voice over UAC (AT+QPCMV=1,2)..."
-    $ASTERISK_CMD "quectel cmd $modem AT+QPCMV=1,2" 2>/dev/null || true
-    sleep 1
-
-    # Verify QAUDMOD was applied (should return 3)
-    log "  Verifying AT+QAUDMOD..."
-    local verify=$($ASTERISK_CMD "quectel cmd $modem AT+QAUDMOD?" 2>/dev/null || echo "")
-    if echo "$verify" | grep -q "QAUDMOD: 3"; then
-        log "  ✓ QAUDMOD=3 confirmed (USB Audio mode)"
+    # Verify that VoLTE UAC was configured by pre-Asterisk init
+    local voice_status=$($ASTERISK_CMD "quectel show device state $modem" 2>/dev/null | grep "Voice" | awk '{print $NF}')
+    if [ "$voice_status" = "Yes" ]; then
+        log "  ✓ Voice: Yes (VoLTE UAC active - set by pre-Asterisk init)"
     else
-        log "  WARNING: QAUDMOD verification failed, retrying..."
-        sleep 2
-        $ASTERISK_CMD "quectel cmd $modem AT+QAUDMOD=3" 2>/dev/null || true
-        sleep 1
-        $ASTERISK_CMD "quectel cmd $modem AT+QPCMV=1,2" 2>/dev/null || true
+        log "  WARNING: Voice: $voice_status - VoLTE UAC may not be configured"
+        log "  AT+QAUDMOD=3 must be sent via serial BEFORE Asterisk starts"
+        log "  Attempting recovery via serial port..."
+        # Try to fix by sending via serial port directly
+        # This is a fallback - the proper way is via homenichat-modem-init service
+        if [ -e /dev/ttyUSB2 ]; then
+            log "  Stopping Asterisk for modem reconfiguration..."
+            systemctl stop asterisk 2>/dev/null || true
+            sleep 2
+            stty -F /dev/ttyUSB2 115200 raw -echo 2>/dev/null || true
+            echo -e "AT+QAUDMOD=3\r" > /dev/ttyUSB2 2>/dev/null || true
+            sleep 5  # Wait for USB re-enumeration
+            # Wait for ports to come back
+            for i in $(seq 1 15); do
+                [ -e /dev/ttyUSB2 ] && break
+                sleep 2
+            done
+            sleep 1
+            stty -F /dev/ttyUSB2 115200 raw -echo 2>/dev/null || true
+            echo -e "AT+QPCMV=1,2\r" > /dev/ttyUSB2 2>/dev/null || true
+            sleep 2
+            log "  Restarting Asterisk..."
+            systemctl start asterisk 2>/dev/null || true
+            sleep 8
+            wait_for_asterisk
+            wait_for_modem || true
+            log "  Recovery attempt completed"
+        else
+            log "  ERROR: /dev/ttyUSB2 not found, cannot recover"
+        fi
     fi
 
-    # Echo Cancellation (optional, improves audio quality)
+    # Non-disruptive commands only (these don't cause USB reset)
+
+    # Echo Cancellation Enhanced
     log "  Enabling Echo Cancellation (AT+QEEC=1,1,1024)..."
     $ASTERISK_CMD "quectel cmd $modem AT+QEEC=1,1,1024" 2>/dev/null || true
+    sleep 0.5
+
+    # Verify LTE lock (prevent 3G CSFB which breaks VoLTE)
+    log "  Verifying LTE-only mode..."
+    $ASTERISK_CMD "quectel cmd $modem AT+QCFG=\"nwscanmode\",3" 2>/dev/null || true
+    sleep 0.5
+
+    # Enable IMS if not already
+    $ASTERISK_CMD "quectel cmd $modem AT+QCFG=\"ims\",1" 2>/dev/null || true
     sleep 0.3
 
-    log "  EC25 $modem initialized (VoLTE UAC mode)"
+    log "  EC25 $modem post-init complete"
 }
 
 # Initialize SIM7600 modem (RoEdAl fork)
@@ -109,7 +163,7 @@ init_sim7600() {
 
 # Main
 main() {
-    log "=== Modem Audio Initialization ==="
+    log "=== Modem Audio Initialization (Phase 2: post-Asterisk) ==="
 
     # Wait for Asterisk
     wait_for_asterisk
@@ -120,6 +174,9 @@ main() {
         $ASTERISK_CMD "module load chan_quectel.so" 2>/dev/null || true
         sleep 2
     fi
+
+    # Wait for modem to be ready
+    wait_for_modem || exit 0
 
     # Detect modem type
     MODEM_TYPE=$(detect_modem_type)
@@ -143,7 +200,7 @@ main() {
                 init_sim7600 "$MODEM"
                 ;;
             *)
-                log "Unknown modem type, trying EC25 settings..."
+                log "Unknown modem type ($MODEM_TYPE), trying EC25 settings..."
                 init_ec25 "$MODEM"
                 ;;
         esac
