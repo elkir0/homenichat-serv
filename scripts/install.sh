@@ -7,6 +7,7 @@
 #    or: sudo ./install.sh
 #    or: sudo ./install.sh --auto  (non-interactive, accept defaults)
 #    or: sudo ./install.sh --full  (install ALL components: Baileys, Asterisk, Modems)
+#    or: sudo ./install.sh --full --with-freepbx  (full install + FreePBX GUI)
 #    or: sudo ./install.sh --full --verbose  (full install with detailed output)
 #
 # License: GPL v3
@@ -32,7 +33,7 @@ LOG_FILE="/var/log/homenichat-install.log"
 REPO_URL="https://github.com/elkir0/homenichat-serv.git"
 
 # Installation options
-# Note: FreePBX is required for VoIP (standalone Asterisk not supported)
+# Note: Asterisk is installed directly. FreePBX is optional (GUI for Asterisk)
 INSTALL_FREEPBX=false
 INSTALL_BAILEYS=true
 INSTALL_MODEMS=false
@@ -50,9 +51,11 @@ for arg in "$@"; do
         --full|--all)
             AUTO_MODE=true
             FULL_MODE=true
-            INSTALL_FREEPBX=true
             INSTALL_BAILEYS=true
             INSTALL_MODEMS=true
+            ;;
+        --with-freepbx)
+            INSTALL_FREEPBX=true
             ;;
         --verbose|-v)
             VERBOSE_MODE=true
@@ -719,6 +722,41 @@ install_wireguard() {
 }
 
 # ============================================================================
+# Asterisk Installation (required for GSM modems)
+# ============================================================================
+
+install_asterisk() {
+    # Only install if modems are enabled (Asterisk is required for GSM VoIP)
+    [ "$INSTALL_MODEMS" != true ] && return
+
+    info "Installing Asterisk for GSM modem support..."
+
+    # Get system architecture
+    ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
+
+    if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
+        # ARM64: Must compile from source
+        install_asterisk_source || {
+            error "Failed to install Asterisk from source"
+            return 1
+        }
+    else
+        # AMD64: Check if FreePBX will be installed (it includes Asterisk)
+        if [ "$INSTALL_FREEPBX" = true ]; then
+            info "FreePBX will install Asterisk - skipping separate installation"
+            return 0
+        fi
+        # Otherwise compile from source on AMD64 too
+        install_asterisk_source || {
+            error "Failed to install Asterisk from source"
+            return 1
+        }
+    fi
+
+    success "Asterisk installed for GSM modem support"
+}
+
+# ============================================================================
 # Asterisk Installation from Source (for ARM64 / Raspberry Pi)
 # ============================================================================
 
@@ -961,11 +999,9 @@ install_chan_quectel() {
     [ "$INSTALL_MODEMS" != true ] && return
 
     # chan_quectel requires Asterisk to be installed
-    # (either via FreePBX on AMD64, or from source on ARM64)
     if ! command -v asterisk &>/dev/null; then
         warning "Asterisk not found - skipping chan_quectel installation"
         warning "GSM modems require Asterisk for VoIP functionality"
-        warning "Enable FreePBX/VoIP option to install Asterisk"
         return
     fi
 
@@ -1745,7 +1781,7 @@ AUDIO_SERVICE
 install_freepbx() {
     [ "$INSTALL_FREEPBX" != true ] && return
 
-    info "Checking FreePBX compatibility..."
+    info "Installing FreePBX GUI (optional web interface for Asterisk)..."
 
     # Get system info
     . /etc/os-release 2>/dev/null || true
@@ -1753,91 +1789,27 @@ install_freepbx() {
 
     # FreePBX Sangoma installer requirements:
     # - Debian 12 (bookworm) only
-    # - AMD64 architecture only (no ARM support)
+    # - AMD64 architecture only (no ARM support from Sangoma)
 
-    local CAN_INSTALL_SANGOMA=false
-
-    if [[ "$VERSION_CODENAME" == "bookworm" && "$ARCH" == "amd64" ]]; then
-        CAN_INSTALL_SANGOMA=true
+    if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
+        # ARM64: Use FreePBX ARM installer script
+        info "ARM64 detected - using FreePBX ARM installer..."
+        if [ -f "/opt/homenichat/scripts/install-freepbx-arm.sh" ]; then
+            yes | /opt/homenichat/scripts/install-freepbx-arm.sh >> "$LOG_FILE" 2>&1 || {
+                warning "FreePBX ARM installation had issues (check $LOG_FILE)"
+                warning "You can retry manually: sudo /opt/homenichat/scripts/install-freepbx-arm.sh"
+            }
+        else
+            warning "FreePBX ARM installer script not found"
+            warning "FreePBX GUI will not be available, but Asterisk is functional"
+        fi
+        return 0
     fi
 
-    if [ "$CAN_INSTALL_SANGOMA" != true ]; then
-        warning "FreePBX Sangoma installer cannot be used on this system"
-        echo ""
-        echo "Requirements: Debian 12 (bookworm) + AMD64 architecture"
-        echo "Detected:     $PRETTY_NAME ($ARCH)"
-        echo ""
-
-        if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
-            # ARM64: Install Asterisk from source first
-            info "ARM64 detected - Installing Asterisk from source..."
-            install_asterisk_source || {
-                error "Failed to install Asterisk from source"
-                return 1
-            }
-
-            success "Asterisk installed successfully on ARM64"
-
-            # Install chan_quectel for GSM modem support
-            if [ "$INSTALL_MODEMS" = true ]; then
-                info "Installing chan_quectel for ARM64..."
-                install_chan_quectel || warning "chan_quectel installation failed"
-            fi
-
-            # In AUTO/FULL mode, automatically run FreePBX ARM installer
-            if [ "$AUTO_MODE" = true ] || [ "$FULL_MODE" = true ]; then
-                info "AUTO MODE: Running FreePBX ARM installer..."
-                if [ -f "/opt/homenichat/scripts/install-freepbx-arm.sh" ]; then
-                    # Run with auto-confirm (pipe yes)
-                    yes | /opt/homenichat/scripts/install-freepbx-arm.sh >> "$LOG_FILE" 2>&1 || {
-                        warning "FreePBX ARM installation had issues (check $LOG_FILE)"
-                        warning "You can retry manually: sudo /opt/homenichat/scripts/install-freepbx-arm.sh"
-                    }
-                else
-                    warning "FreePBX ARM installer script not found at /opt/homenichat/scripts/install-freepbx-arm.sh"
-                fi
-            else
-                # Interactive mode: show options
-                echo ""
-                echo -e "${BOLD}Asterisk is now installed. Options for FreePBX:${NC}"
-                echo ""
-                echo "  1. ${BOLD}Run FreePBX ARM installer${NC} (recommended for full GUI)"
-                echo "     ${CYAN}sudo /opt/homenichat/scripts/install-freepbx-arm.sh${NC}"
-                echo ""
-                echo "  2. ${BOLD}Use external FreePBX${NC}"
-                echo "     Connect to an existing FreePBX server via AMI."
-                echo "     Configure in /etc/homenichat/providers.yaml"
-                echo ""
-                echo "  3. ${BOLD}Use Asterisk directly (current setup)${NC}"
-                echo "     Asterisk is installed and running. Configure SIP"
-                echo "     trunks and extensions via /etc/asterisk/ config files."
-                echo ""
-            fi
-        else
-            echo "Options:"
-            echo "  1. Use an external FreePBX server"
-            echo "  2. Install on a Debian 12 AMD64 system"
-            echo ""
-        fi
-
-        info "Skipping FreePBX Sangoma installer (not compatible with this system)"
-
-        # Create example external FreePBX config
-        mkdir -p "$CONFIG_DIR"
-        cat >> "$CONFIG_DIR/providers.yaml" << 'FREEPBX_EXAMPLE'
-
-# External FreePBX connection (uncomment and configure)
-# voip:
-#   - id: freepbx_external
-#     type: freepbx
-#     enabled: false
-#     config:
-#       host: "your-freepbx-host"
-#       ami_port: 5038
-#       ami_user: "homenichat"
-#       ami_secret: "your-ami-secret"
-#       webrtc_ws: "wss://your-domain/ws"
-FREEPBX_EXAMPLE
+    if [[ "$VERSION_CODENAME" != "bookworm" || "$ARCH" != "amd64" ]]; then
+        warning "FreePBX Sangoma installer requires Debian 12 (bookworm) + AMD64"
+        warning "Detected: $PRETTY_NAME ($ARCH)"
+        warning "FreePBX GUI will not be available, but Asterisk is functional"
         return 0
     fi
 
@@ -2324,6 +2296,7 @@ main() {
     install_gammu
     install_upnp
     install_wireguard
+    install_asterisk
     install_freepbx
     install_chan_quectel
     configure_asterisk_audio
