@@ -253,6 +253,10 @@ class WatchdogService extends EventEmitter {
 
   /**
    * Liste les modems depuis Asterisk
+   * Output format of "quectel show devices":
+   *   ID           Group State      RSSI ...
+   *   hni-ec25     0     Free       25   ...
+   * Modem IDs can be any alphanumeric name (hni-ec25, modem-1, quectel-osteo, etc.)
    */
   async listModems() {
     try {
@@ -260,7 +264,10 @@ class WatchdogService extends EventEmitter {
       const modems = [];
 
       for (const line of output.split('\n')) {
-        const match = line.match(/^(quectel-\S+)/);
+        // Skip header line and empty lines
+        if (!line.trim() || line.startsWith('ID ') || line.startsWith('--')) continue;
+        // First word is the modem ID (any name: hni-ec25, modem-1, quectel-X, etc.)
+        const match = line.match(/^\s*([a-zA-Z][a-zA-Z0-9_-]*)\s+/);
         if (match) {
           modems.push(match[1]);
         }
@@ -279,6 +286,7 @@ class WatchdogService extends EventEmitter {
 
   /**
    * Vérifie l'état d'un modem
+   * chan_quectel states: Free, Init, Outgoing, Ring, Dial, IncomingCall, etc.
    */
   async checkModem(modemId) {
     const status = {
@@ -286,6 +294,7 @@ class WatchdogService extends EventEmitter {
       state: 'Unknown',
       registered: false,
       rssi: 0,
+      voice: false,
     };
 
     try {
@@ -295,7 +304,10 @@ class WatchdogService extends EventEmitter {
         const trimmed = line.trim();
         if (!trimmed.includes(':')) continue;
 
-        const [key, value] = trimmed.split(':').map(s => s.trim());
+        // Split on first colon only (values may contain colons e.g. in URIs)
+        const colonIdx = trimmed.indexOf(':');
+        const key = trimmed.substring(0, colonIdx).trim();
+        const value = trimmed.substring(colonIdx + 1).trim();
 
         switch (key) {
           case 'State':
@@ -304,15 +316,22 @@ class WatchdogService extends EventEmitter {
           case 'GSM Registration Status':
             status.registered = value.includes('Registered');
             break;
-          case 'RSSI':
+          case 'RSSI': {
             const match = value.match(/(\d+)/);
             if (match) status.rssi = parseInt(match[1]);
+            break;
+          }
+          case 'Voice':
+            status.voice = value === 'Yes';
             break;
         }
       }
 
-      // Un modem est OK s'il est Free/InUse et enregistré
-      status.ok = (status.state === 'Free' || status.state === 'Ring' || status.state === 'Dialing')
+      // Modem is OK if in an active/usable state, registered, and has signal
+      // Active states: Free (idle), Ring (ringing), Dial (dialing), Outgoing (call in progress),
+      // IncomingCall, Busy - all indicate a functioning modem
+      const activeStates = ['Free', 'Ring', 'Dial', 'Outgoing', 'IncomingCall', 'Busy'];
+      status.ok = activeStates.includes(status.state)
                   && status.registered
                   && status.rssi > 0;
 
@@ -487,7 +506,7 @@ class WatchdogService extends EventEmitter {
       // Verify Voice: Yes (set by pre-Asterisk init)
       try {
         const state = await this.runCmd(`asterisk -rx "quectel show device state ${modemId}" 2>/dev/null`);
-        if (state && state.includes('Voice                   : Yes')) {
+        if (state && /Voice\s*:\s*Yes/i.test(state)) {
           this.log('OK', `EC25 ${modemId}: Voice: Yes (VoLTE UAC active)`);
         } else {
           this.log('WARNING', `EC25 ${modemId}: Voice not enabled - AT+QAUDMOD=3 may not have been applied at boot`);
@@ -535,7 +554,7 @@ class WatchdogService extends EventEmitter {
     } catch {
       // Fallback
     }
-    return 'ec25'; // Default to EC25 (safer - UAC commands are harmless on SIM7600)
+    return 'ec25'; // Default to EC25 (non-disruptive commands just return ERROR on SIM7600)
   }
 
   /**
