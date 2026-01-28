@@ -185,26 +185,23 @@ exten => _1X,1,NoOp(Emergency call to \${EXTEN})
  same => n,Hangup()
 
 [from-gsm]
-; Incoming calls from GSM modem
-exten => s,1,NoOp(Incoming GSM call from \${CALLERID(num)})
- same => n,Set(CALLERID(name)=\${CALLERID(num)})
- ; Notify Homenichat about incoming call
- same => n,AGI(agi://127.0.0.1:4573/incoming_call)
- ; Ring all extensions
- same => n,Dial(PJSIP/2001&PJSIP/2002&PJSIP/2003,30,tT)
- same => n,VoiceMail(100@default,u)
- same => n,Hangup()
-
-exten => _+X.,1,Goto(s,1)
-exten => _X.,1,Goto(s,1)
+; Call and SMS routing is handled by extensions_homenichat.conf
+; SMS handler is added by install.sh when chan_quectel is installed
 
 ; ===== CUSTOM EXTENSIONS =====
-; Additional dialplan rules from Homenichat
 #include extensions_homenichat.conf
 EOF
 
-# Create empty includes file
-touch "$ASTERISK_DIR/extensions_homenichat.conf"
+# Install extensions_homenichat.conf from template
+HOMENICHAT_DIR="${HOMENICHAT_INSTALL_DIR:-/opt/homenichat}"
+if [ -f "$HOMENICHAT_DIR/config/asterisk/extensions_homenichat.conf" ]; then
+    cp "$HOMENICHAT_DIR/config/asterisk/extensions_homenichat.conf" "$ASTERISK_DIR/"
+    chown asterisk:asterisk "$ASTERISK_DIR/extensions_homenichat.conf"
+    log_info "Installed extensions_homenichat.conf from template"
+else
+    touch "$ASTERISK_DIR/extensions_homenichat.conf"
+    log_warn "Template extensions_homenichat.conf not found, created empty file"
+fi
 
 # Create SSL directory and self-signed certificate if not exists
 log_info "Setting up SSL certificates..."
