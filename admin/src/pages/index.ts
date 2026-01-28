@@ -8,3 +8,4 @@ export { default as VoipPage } from './VoipPage';
 export { default as UsersPage } from './UsersPage';
 export { default as SecurityPage } from './SecurityPage';
 export { default as SettingsPage } from './SettingsPage';
+export { default as SetupWizardPage } from './SetupWizardPage';

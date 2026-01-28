@@ -703,4 +703,239 @@ export const homenichatCloudApi = {
   },
 };
 
+// =============================================================================
+// SETUP API - First-run setup wizard
+// =============================================================================
+
+export interface SetupStatus {
+  setupNeeded: boolean;
+  setupComplete: boolean;
+  currentStep: number;
+  adminPasswordChanged: boolean;
+  steps: Array<{
+    id: number;
+    name: string;
+    label: string;
+    required?: boolean;
+    completed: boolean;
+  }>;
+}
+
+export interface SystemSettings {
+  hostname: string;
+  timezone: string;
+  currentTime: string;
+  commonTimezones: string[];
+  groupedTimezones: Record<string, string[]>;
+  isRoot: boolean;
+  hasSystemd: boolean;
+  systemInfo: {
+    platform: string;
+    arch: string;
+    release: string;
+    uptime: number;
+    totalMemory: number;
+    freeMemory: number;
+    cpus: number;
+    nodeVersion: string;
+  };
+}
+
+export interface NetworkConfig {
+  nmcliAvailable: boolean;
+  interfaces: Array<{
+    name: string;
+    type: string;
+    state: string;
+    connection: string | null;
+  }>;
+  primaryConnection: string | null;
+  primaryIp: string | null;
+  currentConfig: {
+    connectionName?: string;
+    method: string;
+    ip?: string;
+    gateway?: string;
+    dns: string[];
+  } | null;
+  connectivity: {
+    success: boolean;
+    latency?: number;
+  };
+}
+
+export interface ModemScanResult {
+  detected: Array<{
+    type: string;
+    vendor: string;
+    ports: {
+      data: string;
+      audio: string;
+    };
+  }>;
+  existing: Record<string, unknown>;
+  hasModems: boolean;
+}
+
+export interface SetupSummary {
+  adminPassword: {
+    configured: boolean;
+    status: string;
+  };
+  system: {
+    configured: boolean;
+    skipped: boolean;
+    hostname: string;
+    timezone: string;
+  };
+  network: {
+    configured: boolean;
+    skipped: boolean;
+    ip: string | null;
+  };
+  modem: {
+    configured: boolean;
+    skipped: boolean;
+    modems?: string[];
+  };
+  cloud: {
+    configured: boolean;
+    skipped: boolean;
+    loggedIn: boolean;
+    email?: string;
+    services?: Record<string, unknown>;
+  };
+}
+
+export const setupApi = {
+  // Status
+  getStatus: async (): Promise<SetupStatus> => {
+    const response = await api.get('/api/setup/status');
+    return response.data;
+  },
+
+  // Step 1: Admin Password
+  setAdminPassword: async (newPassword: string, confirmPassword: string, currentPassword?: string) => {
+    const response = await api.post('/api/setup/admin-password', {
+      currentPassword,
+      newPassword,
+      confirmPassword,
+    });
+    return response.data;
+  },
+
+  // Step 2: System Settings
+  getSystemSettings: async (): Promise<SystemSettings> => {
+    const response = await api.get('/api/setup/system');
+    return response.data;
+  },
+
+  setSystemSettings: async (hostname: string, timezone: string) => {
+    const response = await api.post('/api/setup/system', { hostname, timezone });
+    return response.data;
+  },
+
+  skipSystemSettings: async () => {
+    const response = await api.post('/api/setup/system/skip');
+    return response.data;
+  },
+
+  getTimePreview: async (timezone: string): Promise<{ timezone: string; currentTime: string }> => {
+    const response = await api.get('/api/setup/system/time-preview', { params: { timezone } });
+    return response.data;
+  },
+
+  // Step 3: Network
+  getNetworkConfig: async (): Promise<NetworkConfig> => {
+    const response = await api.get('/api/setup/network');
+    return response.data;
+  },
+
+  setNetworkConfig: async (config: {
+    connectionName: string;
+    method: string;
+    ip?: string;
+    gateway?: string;
+    dns?: string[];
+  }) => {
+    const response = await api.post('/api/setup/network', config);
+    return response.data;
+  },
+
+  skipNetworkConfig: async () => {
+    const response = await api.post('/api/setup/network/skip');
+    return response.data;
+  },
+
+  testNetwork: async (host?: string): Promise<{ success: boolean; latency?: number }> => {
+    const response = await api.post('/api/setup/network/test', { host });
+    return response.data;
+  },
+
+  // Step 4: Modem
+  scanModems: async (): Promise<ModemScanResult> => {
+    const response = await api.get('/api/setup/modem-scan');
+    return response.data;
+  },
+
+  configureModem: async (config: {
+    modemType: string;
+    dataPort: string;
+    audioPort?: string;
+    modemName?: string;
+    phoneNumber?: string;
+  }) => {
+    const response = await api.post('/api/setup/modem-configure', config);
+    return response.data;
+  },
+
+  skipModemConfig: async () => {
+    const response = await api.post('/api/setup/modem/skip');
+    return response.data;
+  },
+
+  testModem: async (modemName: string, phoneNumber: string, message?: string) => {
+    const response = await api.post('/api/setup/modem-test', { modemName, phoneNumber, message });
+    return response.data;
+  },
+
+  // Step 5: Cloud
+  getCloudStatus: async () => {
+    const response = await api.get('/api/setup/cloud/status');
+    return response.data;
+  },
+
+  cloudLogin: async (email: string, password: string) => {
+    const response = await api.post('/api/setup/cloud-login', { email, password });
+    return response.data;
+  },
+
+  cloudRegister: async (email: string, password: string, name?: string) => {
+    const response = await api.post('/api/setup/cloud-register', { email, password, name });
+    return response.data;
+  },
+
+  skipCloudConfig: async () => {
+    const response = await api.post('/api/setup/cloud-skip');
+    return response.data;
+  },
+
+  // Step 6: Summary & Complete
+  getSummary: async (): Promise<SetupSummary> => {
+    const response = await api.get('/api/setup/summary');
+    return response.data;
+  },
+
+  completeSetup: async () => {
+    const response = await api.post('/api/setup/complete');
+    return response.data;
+  },
+
+  // Development: Reset setup
+  resetSetup: async () => {
+    const response = await api.post('/api/setup/reset');
+    return response.data;
+  },
+};
+
 export default api;

@@ -307,6 +307,20 @@ class DatabaseService {
         } catch (err) {
             logger.debug('Migration user_modem_mappings skipped:', err.message);
         }
+
+        // Migration: Add setup_status table for first-run setup wizard
+        try {
+            this.db.exec(`
+                CREATE TABLE IF NOT EXISTS setup_status (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+            logger.info('Migration: setup_status table ready');
+        } catch (err) {
+            logger.debug('Migration setup_status skipped:', err.message);
+        }
     }
 
     // --- Generic Helpers ---
@@ -1208,6 +1222,102 @@ class DatabaseService {
         }
         logger.info(`Auto-mapped ${mapped} users to modem ${modemId}`);
         return mapped;
+    }
+
+    // =====================================================
+    // Setup Status - First-run setup wizard state
+    // =====================================================
+
+    /**
+     * Get a setup status value
+     * @param {string} key - Status key
+     * @returns {string|null} The value or null if not set
+     */
+    getSetupStatus(key) {
+        const row = this.db.prepare('SELECT value FROM setup_status WHERE key = ?').get(key);
+        return row ? row.value : null;
+    }
+
+    /**
+     * Set a setup status value
+     * @param {string} key - Status key
+     * @param {string} value - Status value
+     */
+    setSetupStatus(key, value) {
+        this.db.prepare(`
+            INSERT INTO setup_status (key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+        `).run(key, value);
+    }
+
+    /**
+     * Get all setup status values
+     * @returns {Object} Key-value object of all setup status
+     */
+    getAllSetupStatus() {
+        const rows = this.db.prepare('SELECT key, value FROM setup_status').all();
+        const status = {};
+        for (const row of rows) {
+            status[row.key] = row.value;
+        }
+        return status;
+    }
+
+    /**
+     * Check if initial setup is complete
+     * @returns {boolean}
+     */
+    isSetupComplete() {
+        return this.getSetupStatus('setup_complete') === 'true';
+    }
+
+    /**
+     * Mark setup as complete
+     */
+    markSetupComplete() {
+        this.setSetupStatus('setup_complete', 'true');
+        logger.info('Initial setup marked as complete');
+    }
+
+    /**
+     * Check if admin password has been changed from default
+     * @returns {boolean}
+     */
+    isAdminPasswordChanged() {
+        return this.getSetupStatus('admin_password_changed') === 'true';
+    }
+
+    /**
+     * Mark admin password as changed
+     */
+    markAdminPasswordChanged() {
+        this.setSetupStatus('admin_password_changed', 'true');
+    }
+
+    /**
+     * Get the current setup step (for resume)
+     * @returns {number}
+     */
+    getCurrentSetupStep() {
+        const step = this.getSetupStatus('setup_step');
+        return step ? parseInt(step, 10) : 0;
+    }
+
+    /**
+     * Set the current setup step
+     * @param {number} step - Step number
+     */
+    setCurrentSetupStep(step) {
+        this.setSetupStatus('setup_step', String(step));
+    }
+
+    /**
+     * Reset setup status (for testing or re-running setup)
+     */
+    resetSetupStatus() {
+        this.db.prepare('DELETE FROM setup_status').run();
+        logger.info('Setup status reset');
     }
 }
 

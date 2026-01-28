@@ -26,8 +26,10 @@ const callHistoryRoutes = require('./routes/call-history');
 const cdrRoutes = require('./routes/cdr');
 const configRoutes = require('./routes/config');
 const mobileCompatRoutes = require('./routes/mobile-compat');
+const setupRoutes = require('./routes/setup');
 const { router: adminRouter, initAdminRoutes } = require('./routes/admin');
 const { router: discoveryRouter, initDiscoveryRoutes } = require('./routes/discovery');
+const { setupRequiredMiddleware, getSetupStatusEndpoint } = require('./middleware/setup');
 // const MessagePoller = require('./messagePoller');
 // const { logWebhook } = require('./webhookDebugger');
 const { verifyToken, verifyWebSocketToken, optionalVerifyToken } = require('./middleware/auth');
@@ -158,6 +160,12 @@ app.use((req, res, next) => {
 // Routes publiques (authentification)
 app.use('/api/auth', authRoutes);
 app.use('/api/token', require('./routes/token-status'));
+
+// Setup wizard routes (accessible without auth during first run)
+app.use('/api/setup', setupRoutes);
+
+// Setup status endpoint (used by frontend to check if setup is needed)
+app.get('/api/setup-status', getSetupStatusEndpoint);
 
 // Endpoint de version (public pour le status badge) - Déplacé AVANT l'auth globale
 app.get('/api/version/check', (req, res) => {
@@ -567,6 +575,9 @@ app.get('/webhook/meta', async (req, res) => {
 
 // Servir les fichiers statiques en production
 if (process.env.NODE_ENV === 'production') {
+  // Apply setup middleware for admin routes
+  app.use('/admin', setupRequiredMiddleware());
+
   // Interface Admin Panel (React)
   app.use('/admin', express.static(path.join(__dirname, 'admin/dist')));
   app.get('/admin/*', (req, res) => {

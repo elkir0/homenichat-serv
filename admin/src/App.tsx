@@ -1,6 +1,7 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Layout from './components/Layout';
 import {
@@ -14,7 +15,9 @@ import {
   UsersPage,
   SecurityPage,
   SettingsPage,
+  SetupWizardPage,
 } from './pages';
+import { setupApi } from './services/api';
 
 // Theme sombre moderne
 const darkTheme = createTheme({
@@ -80,6 +83,31 @@ const queryClient = new QueryClient({
   },
 });
 
+// Component to check setup status and redirect if needed
+function SetupCheck({ children }: { children: React.ReactNode }) {
+  const navigate = useNavigate();
+  const [checked, setChecked] = useState(false);
+
+  const { data: setupStatus, isLoading } = useQuery({
+    queryKey: ['setup-check'],
+    queryFn: setupApi.getStatus,
+    retry: 1,
+    staleTime: 60000, // Check every minute
+  });
+
+  useEffect(() => {
+    if (!isLoading && setupStatus) {
+      if (setupStatus.setupNeeded && !window.location.pathname.includes('/setup')) {
+        navigate('/setup');
+      }
+      setChecked(true);
+    }
+  }, [setupStatus, isLoading, navigate]);
+
+  // Don't block rendering while checking - let child handle loading
+  return <>{children}</>;
+}
+
 // Composant de route protégée
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -102,7 +130,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />;
   }
 
-  return <>{children}</>;
+  return (
+    <SetupCheck>
+      {children}
+    </SetupCheck>
+  );
 }
 
 function App() {
@@ -114,6 +146,7 @@ function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/setup" element={<SetupWizardPage />} />
               <Route
                 path="/*"
                 element={
