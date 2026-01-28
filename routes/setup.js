@@ -659,7 +659,7 @@ router.get('/summary', async (req, res) => {
             if (!modemService) {
                 modemService = new ModemService({ modems: {}, logger: console });
             }
-            const modemConfig = modemService.getModemsConfig();
+            const modemConfig = modemService.getAllModemsConfig();
             summary.modem.modems = Object.keys(modemConfig?.modems || {});
         }
 
