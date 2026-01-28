@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -18,6 +18,7 @@ import {
   Lock as LockIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import { setupApi } from '../services/api';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -30,6 +31,25 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [requires2FA, setRequires2FA] = useState(false);
+  const [checkingSetup, setCheckingSetup] = useState(true);
+
+  // Check if setup is needed on mount
+  useEffect(() => {
+    const checkSetup = async () => {
+      try {
+        const status = await setupApi.getStatus();
+        if (status.setupNeeded) {
+          navigate('/setup', { replace: true });
+          return;
+        }
+      } catch (err) {
+        // Setup check failed, continue to login
+        console.log('Setup check failed, showing login');
+      }
+      setCheckingSetup(false);
+    };
+    checkSetup();
+  }, [navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,6 +72,23 @@ export default function LoginPage() {
       setIsLoading(false);
     }
   };
+
+  // Show loading while checking setup status
+  if (checkingSetup) {
+    return (
+      <Box
+        sx={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)',
+        }}
+      >
+        <CircularProgress />
+      </Box>
+    );
+  }
 
   return (
     <Box
