@@ -92,22 +92,29 @@ init_ec25() {
         log "  Attempting recovery via serial port..."
         # Try to fix by sending via serial port directly
         # This is a fallback - the proper way is via homenichat-modem-init service
-        if [ -e /dev/ttyUSB2 ]; then
+        # IMPORTANT: Use -c (char device) not -e (exists) to avoid writing to fake files
+        if [ -c /dev/ttyUSB2 ]; then
             log "  Stopping Asterisk for modem reconfiguration..."
             systemctl stop asterisk 2>/dev/null || true
             sleep 2
             stty -F /dev/ttyUSB2 115200 raw -echo 2>/dev/null || true
             echo -e "AT+QAUDMOD=3\r" > /dev/ttyUSB2 2>/dev/null || true
             sleep 5  # Wait for USB re-enumeration
-            # Wait for ports to come back
+            # Clean up any fake file created if device disappeared during write
+            [ -f /dev/ttyUSB2 ] && rm -f /dev/ttyUSB2
+            # Wait for ports to come back (char device, not just file existence)
             for i in $(seq 1 15); do
-                [ -e /dev/ttyUSB2 ] && break
+                [ -c /dev/ttyUSB2 ] && break
                 sleep 2
             done
-            sleep 1
-            stty -F /dev/ttyUSB2 115200 raw -echo 2>/dev/null || true
-            echo -e "AT+QPCMV=1,2\r" > /dev/ttyUSB2 2>/dev/null || true
-            sleep 2
+            if [ -c /dev/ttyUSB2 ]; then
+                sleep 1
+                stty -F /dev/ttyUSB2 115200 raw -echo 2>/dev/null || true
+                echo -e "AT+QPCMV=1,2\r" > /dev/ttyUSB2 2>/dev/null || true
+                sleep 2
+            else
+                log "  WARNING: /dev/ttyUSB2 not a char device after re-enumeration"
+            fi
             log "  Restarting Asterisk..."
             systemctl start asterisk 2>/dev/null || true
             sleep 8
@@ -115,7 +122,9 @@ init_ec25() {
             wait_for_modem || true
             log "  Recovery attempt completed"
         else
-            log "  ERROR: /dev/ttyUSB2 not found, cannot recover"
+            log "  ERROR: /dev/ttyUSB2 not a char device or not found, cannot recover"
+            # Clean up fake file if it exists
+            [ -f /dev/ttyUSB2 ] && rm -f /dev/ttyUSB2 && log "  Removed fake file at /dev/ttyUSB2"
         fi
     fi
 

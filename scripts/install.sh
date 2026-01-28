@@ -1563,20 +1563,27 @@ while [ ! -e "$DATA_PORT" ] && [ $RETRY -lt $MAX_RETRIES ]; do
     RETRY=$((RETRY + 1))
 done
 
-if [ ! -e "$DATA_PORT" ]; then
-    log "ERROR: Modem port $DATA_PORT not found after $MAX_RETRIES retries"
+if [ ! -c "$DATA_PORT" ]; then
+    log "ERROR: Modem port $DATA_PORT not found (or not a char device) after $MAX_RETRIES retries"
+    # Clean up fake file if shell redirection created one
+    [ -f "$DATA_PORT" ] && rm -f "$DATA_PORT" && log "  Removed fake regular file at $DATA_PORT"
     exit 1
 fi
 
-log "Modem port available"
+log "Modem port available (char device confirmed)"
 
 # Configure serial port
 stty -F "$DATA_PORT" 115200 raw -echo -echoe -echok -echoctl -echoke 2>/dev/null || true
 
 # Function to send AT command and get response (more robust than socat)
+# IMPORTANT: Checks that DATA_PORT is a character device to avoid creating fake files
 send_at() {
     local cmd="$1"
     local wait="${2:-3}"
+    if [ ! -c "$DATA_PORT" ]; then
+        log "WARNING: $DATA_PORT is not a char device, skipping AT command: $cmd"
+        return 1
+    fi
     echo -e "${cmd}\r" > "$DATA_PORT"
     sleep 0.5
     timeout $wait cat "$DATA_PORT" 2>/dev/null | tr -d '\r' | head -10
@@ -1624,14 +1631,16 @@ if [ "$MODEM_TYPE" = "ec25" ]; then
     # Wait for USB re-enumeration (modem resets USB bus)
     log "  Waiting for USB re-enumeration..."
     sleep 5
+    # Clean up any fake file that previous send_at might have left
+    [ -f "$DATA_PORT" ] && rm -f "$DATA_PORT" && log "  Cleaned up stale file at $DATA_PORT"
     RETRY=0
-    while [ ! -e "$DATA_PORT" ] && [ $RETRY -lt 15 ]; do
-        log "  Waiting for $DATA_PORT... ($RETRY/15)"
+    while [ ! -c "$DATA_PORT" ] && [ $RETRY -lt 15 ]; do
+        log "  Waiting for $DATA_PORT (char device)... ($RETRY/15)"
         sleep 2
         RETRY=$((RETRY + 1))
     done
 
-    if [ -e "$DATA_PORT" ]; then
+    if [ -c "$DATA_PORT" ]; then
         log "  Modem port back after re-enumeration"
         stty -F "$DATA_PORT" 115200 raw -echo -echoe -echok 2>/dev/null || true
         sleep 1
