@@ -80,7 +80,7 @@ bind=0.0.0.0:8088
 ; Codec priority for GSM modem compatibility:
 ; g722 (16kHz) first - compatible with slin16 modem (AT+CPCMFRM=1)
 ; ulaw/alaw (8kHz) fallback
-; opus (48kHz) last - causes bridge incompatibility with modems
+; NOTE: opus excluded - requires codec_opus.so (not in standard Asterisk builds)
 [webrtc-endpoint](!)
 type=endpoint
 context=from-internal
@@ -88,7 +88,6 @@ disallow=all
 allow=g722
 allow=ulaw
 allow=alaw
-allow=opus
 transport=transport-ws
 webrtc=yes
 dtls_auto_generate_cert=yes

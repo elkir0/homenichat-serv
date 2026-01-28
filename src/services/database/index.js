@@ -187,7 +187,7 @@ function initSchema() {
             display_name TEXT,
             context TEXT DEFAULT 'from-internal',
             transport TEXT DEFAULT 'wss',
-            codecs TEXT DEFAULT 'g722,ulaw,alaw,opus',
+            codecs TEXT DEFAULT 'g722,ulaw,alaw',
             enabled BOOLEAN DEFAULT 1,
             webrtc_enabled BOOLEAN DEFAULT 1,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

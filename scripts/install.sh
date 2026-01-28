@@ -1740,7 +1740,7 @@ configure_asterisk_audio() {
 
     if [ -f "$INSTALL_DIR/config/asterisk/pjsip_homenichat.conf" ]; then
         cp "$INSTALL_DIR/config/asterisk/pjsip_homenichat.conf" /etc/asterisk/
-        info "Installed pjsip_homenichat.conf (g722,ulaw,alaw,opus codecs)"
+        info "Installed pjsip_homenichat.conf (g722,ulaw,alaw codecs)"
     fi
 
     # NOTE: quectel.conf is auto-generated in install_chan_quectel() with modem detection

@@ -18,7 +18,7 @@ const ExtensionRepository = {
             displayName,
             context = 'from-internal',
             transport = 'wss',
-            codecs = 'g722,ulaw,alaw,opus',
+            codecs = 'g722,ulaw,alaw',
             enabled = true,
             webrtcEnabled = true,
         } = data;

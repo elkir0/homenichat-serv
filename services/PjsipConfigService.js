@@ -173,7 +173,7 @@ class PjsipConfigService {
       password,
       displayName,
       context = 'from-internal',
-      codecs = ['g722', 'ulaw', 'alaw', 'opus'],
+      codecs = ['g722', 'ulaw', 'alaw'],
     } = config;
 
     if (!extension || !password) {
@@ -269,7 +269,7 @@ class PjsipConfigService {
     ];
 
     for (const [ext, config] of this.extensions) {
-      const codecsStr = config.codecs ? config.codecs.join(',') : 'g722,ulaw,alaw,opus';
+      const codecsStr = config.codecs ? config.codecs.join(',') : 'g722,ulaw,alaw';
       const callerid = config.displayName
         ? `"${config.displayName}" <${ext}>`
         : ext;

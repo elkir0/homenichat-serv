@@ -29,7 +29,7 @@ const CONTEXT_OUTBOUND_GSM = 'outbound-gsm';
 
 // WebRTC transport settings
 const WEBRTC_TRANSPORT_NAME = 'transport-wss';
-const WEBRTC_DEFAULT_CODECS = ['opus', 'g722', 'ulaw', 'alaw'];
+const WEBRTC_DEFAULT_CODECS = ['g722', 'ulaw', 'alaw'];
 
 // Extension number range
 const EXTENSION_MIN = 2000;

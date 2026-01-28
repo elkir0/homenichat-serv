@@ -1105,7 +1105,7 @@ class FreePBXAmiService extends EventEmitter {
       displayName,
       context = 'from-internal',
       transport = 'transport-wss',
-      codecs = 'g722,ulaw,alaw,opus',
+      codecs = 'g722,ulaw,alaw',
       useApiOnly = false  // Force API-only (no config file fallback)
     } = extensionData;
 
@@ -1166,7 +1166,7 @@ class FreePBXAmiService extends EventEmitter {
       displayName,
       context = 'from-internal',
       transport = 'transport-wss',
-      codecs = 'g722,ulaw,alaw,opus'
+      codecs = 'g722,ulaw,alaw'
     } = extensionData;
 
     try {
@@ -1664,7 +1664,7 @@ qualify_frequency=30
             displayName: `WebRTC ${modemName || modemId}`,
             context: 'from-internal',
             transport: 'transport-wss',
-            codecs: 'g722,ulaw,alaw,opus'
+            codecs: 'g722,ulaw,alaw'
           });
 
           if (extResult.success) {

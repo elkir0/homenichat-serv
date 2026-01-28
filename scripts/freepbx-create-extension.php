@@ -85,7 +85,7 @@ try {
                 $device['media_use_received_transport'] = 'yes';
                 $device['rtcp_mux'] = 'yes';
                 $device['transport'] = 'transport-wss,transport-ws,transport-udp';
-                $device['allow'] = 'g722,ulaw,alaw,opus';
+                $device['allow'] = 'g722,ulaw,alaw';
                 $device['disallow'] = 'all';
 
                 $freepbx->Core->editDevice($extension, $device);

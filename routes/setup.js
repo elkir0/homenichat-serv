@@ -712,7 +712,7 @@ router.post('/complete', async (req, res) => {
                         displayName: 'Admin',
                         context: 'from-internal',
                         transport: 'wss',
-                        codecs: 'g722,ulaw,alaw,opus',
+                        codecs: 'g722,ulaw,alaw',
                         enabled: true,
                         webrtcEnabled: true
                     });
@@ -737,7 +737,7 @@ router.post('/complete', async (req, res) => {
                                 displayName: voipExtension.displayName || 'Admin',
                                 context: 'from-internal',
                                 transport: 'transport-ws',
-                                codecs: 'g722,ulaw,alaw,opus'
+                                codecs: 'g722,ulaw,alaw'
                             });
                             if (result.success) {
                                 synced = true;
@@ -760,7 +760,7 @@ router.post('/complete', async (req, res) => {
                                     password: voipExtension.secret,
                                     displayName: voipExtension.displayName || 'Admin',
                                     context: 'from-internal',
-                                    codecs: ['g722', 'ulaw', 'alaw', 'opus'],
+                                    codecs: ['g722', 'ulaw', 'alaw'],
                                 });
                                 if (result.success) {
                                     synced = true;
