@@ -1469,14 +1469,10 @@ exten => process,1,NoOp(=== SMS ENTRANT HOMENICHAT ===)
  same => n(empty),Hangup()
 
 ; ============================================
-; HOMENICHAT - GSM Context
+; HOMENICHAT - GSM Context (SMS routing only)
+; Call routing is handled by extensions_homenichat.conf
 ; ============================================
 [from-gsm]
-exten => _+X.,1,NoOp(=== APPEL ENTRANT GSM ===)
- same => n,Hangup()
-exten => _X.,1,NoOp(=== APPEL ENTRANT GSM ===)
- same => n,Hangup()
-exten => s,1,Hangup()
 exten => sms,1,Goto(sms-handler,process,1)
 exten => report,1,NoOp(=== SMS REPORT ===)
  same => n,Hangup()
