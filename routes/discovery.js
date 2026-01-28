@@ -231,23 +231,26 @@ router.get('/', async (req, res) => {
         password: process.env.VOIP_PASSWORD || '',
       };
 
+      // Check if user has VoIP extension in database (highest priority after explicit env config)
+      const hasUserVoipExt = userVoipExt && userVoipExt.enabled && userVoipExt.extension && userVoipExt.secret;
+
       // Auto-detect WebRTC mode:
       // - If VOIP_WEBRTC_ENABLED=false is set → disabled
-      // - If no explicit VOIP config AND GSM modems are available → GSM-only mode (skip WebRTC)
+      // - If user has extension in user_voip_extensions → enabled (user was configured via wizard/admin)
+      // - If no explicit VOIP config AND GSM modems are available AND no user extension → GSM-only mode
       // - Otherwise → try to configure WebRTC
       const hasExplicitVoipConfig = globalConfig.extension && globalConfig.password;
       const hasGsmModems = result.modems && result.modems.length > 0;
       const webrtcExplicitlyDisabled = process.env.VOIP_WEBRTC_ENABLED === 'false';
 
-      // GSM-only auto-detection: if we have modems but no explicit WebRTC config, skip WebRTC
-      const isGsmOnlyMode = !hasExplicitVoipConfig && hasGsmModems && !process.env.VOIP_WSS_URL;
+      // GSM-only auto-detection: only if no user extension AND no explicit config AND modems available
+      const isGsmOnlyMode = !hasExplicitVoipConfig && !hasUserVoipExt && hasGsmModems && !process.env.VOIP_WSS_URL;
 
-      if (webrtcExplicitlyDisabled || isGsmOnlyMode) {
-        if (isGsmOnlyMode) {
-          console.log(`[Discovery] GSM-only mode detected (modems: ${result.modems.length}, no explicit WebRTC config) for user ${req.user.id}`);
-        } else {
-          console.log(`[Discovery] WebRTC disabled via VOIP_WEBRTC_ENABLED=false for user ${req.user.id}`);
-        }
+      if (webrtcExplicitlyDisabled) {
+        console.log(`[Discovery] WebRTC disabled via VOIP_WEBRTC_ENABLED=false for user ${req.user.id}`);
+        // Don't set voipCredentials - GSM calls via API instead
+      } else if (isGsmOnlyMode) {
+        console.log(`[Discovery] GSM-only mode detected (modems: ${result.modems.length}, no WebRTC config, no user extension) for user ${req.user.id}`);
         // Don't set voipCredentials - GSM calls via API instead
       }
       // PRIORITY 0: Explicit env config (VOIP_EXTENSION + VOIP_PASSWORD both set)
@@ -272,7 +275,7 @@ router.get('/', async (req, res) => {
         console.log(`[Discovery] Using env config for user ${req.user.id}: ext ${globalConfig.extension} @ ${globalConfig.domain}`);
       }
       // PRIORITY 1: Use user_voip_extensions table (correct credentials matching local Asterisk)
-      else if (userVoipExt && userVoipExt.enabled && userVoipExt.webrtcEnabled && userVoipExt.extension && userVoipExt.secret) {
+      else if (hasUserVoipExt && userVoipExt.webrtcEnabled) {
         result.voipCredentials = {
           server: globalConfig.server,
           domain: globalConfig.domain,
