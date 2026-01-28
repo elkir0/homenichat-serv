@@ -487,7 +487,7 @@ function NetworkStep({ onNext, onSkip, setError }: StepProps) {
             label={networkData?.connectivity?.success ? 'Connecte' : 'Hors ligne'}
             color={networkData?.connectivity?.success ? 'success' : 'error'}
           />
-          <Button size="small" onClick={() => testMutation.mutate()} disabled={testMutation.isPending}>
+          <Button size="small" onClick={() => testMutation.mutate(undefined)} disabled={testMutation.isPending}>
             Tester
           </Button>
         </Box>
