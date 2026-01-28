@@ -16,11 +16,11 @@ const logger = require('winston');
 const db = require('../services/DatabaseService');
 const systemService = require('../services/SystemService');
 const networkService = require('../services/NetworkService');
-const ModemService = require('../services/ModemService');
+const InstallerService = require('../services/InstallerService');
 const homenichatCloudService = require('../services/HomenichatCloudService');
 
-// Modem service instance
-let modemService = null;
+// Installer service instance for modem detection
+let installerService = null;
 
 /**
  * Middleware: Block access if setup is already complete
@@ -370,15 +370,17 @@ router.post('/network/test', async (req, res) => {
  */
 router.get('/modem-scan', async (req, res) => {
     try {
-        // Initialize modem service if needed
-        if (!modemService) {
-            modemService = new ModemService({ modems: {}, logger: console });
+        // Initialize installer service if needed
+        if (!installerService) {
+            installerService = new InstallerService({ logger: console });
         }
 
-        // Detect USB modems
-        const detected = modemService.detectUsbModems();
+        // Detect USB modems using InstallerService
+        const detected = installerService.detectUsbModems();
 
-        // Get any existing config
+        // Check for existing modem configuration
+        const ModemService = require('../services/ModemService');
+        const modemService = new ModemService({ modems: {}, logger: console });
         const existingConfig = modemService.getModemsConfig();
 
         res.json({
@@ -388,7 +390,7 @@ router.get('/modem-scan', async (req, res) => {
         });
     } catch (error) {
         logger.error('Modem scan error:', error);
-        res.status(500).json({ error: 'Failed to scan for modems' });
+        res.status(500).json({ error: 'Failed to scan for modems', details: error.message });
     }
 });
 
