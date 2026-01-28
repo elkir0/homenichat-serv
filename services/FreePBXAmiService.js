@@ -630,12 +630,24 @@ class FreePBXAmiService extends EventEmitter {
       return { success: false, message: 'Appel non trouvé ou déjà terminé' };
     }
 
+    // In standalone mode (direct Asterisk without FreePBX), incoming GSM calls
+    // are routed by the from-gsm dialplan which already calls Dial(PJSIP/ext).
+    // The SIP INVITE acceptance from the WebRTC client handles the answer.
+    // Sending an AMI Redirect would DESTROY the bridge that Dial() is setting up.
+    //
+    // earlyPush=true means this call was detected by our Quectel/from-gsm handler,
+    // indicating the dialplan is already handling call routing to the extension.
+    if (ringingCall.earlyPush) {
+      logger.info(`[AMI] answerCall: Call ${callId} routed by from-gsm dialplan, SIP handles answer (no AMI Redirect needed)`);
+      return { success: true, message: 'Appel en cours de réponse via SIP' };
+    }
+
     if (!this.connected || !this.authenticated) {
       logger.error('[AMI] answerCall: Not connected to AMI');
       return { success: false, message: 'Non connecté au PBX' };
     }
 
-    // Find the channel to redirect
+    // Find the channel to redirect (only for FreePBX/queue/park scenarios)
     // We need to find the trunk/incoming channel, not the extension channel
     let channelToRedirect = null;
 

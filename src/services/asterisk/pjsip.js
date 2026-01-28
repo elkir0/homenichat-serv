@@ -101,6 +101,7 @@ disallow=all
 allow=${codecString}
 transport=${transport}
 webrtc=yes
+direct_media=no
 aors=${extension}
 auth=${extension}
 callerid="${displayName || extension}" <${extension}>
