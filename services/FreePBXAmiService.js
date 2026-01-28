@@ -339,12 +339,23 @@ class FreePBXAmiService extends EventEmitter {
       // This ensures the caller number is displayed instead of the trunk name
       const filteredCallerName = this.isTrunkName(callerIdName) ? null : callerIdName;
 
+      // Get configured extensions from database (dynamic, not hardcoded)
+      let targetExtensions = ['1000']; // Default for fresh OTB install
+      try {
+        const allExts = db.getAllVoIPExtensions();
+        if (allExts && allExts.length > 0) {
+          targetExtensions = allExts.map(e => e.extension);
+        }
+      } catch (err) {
+        logger.warn(`[AMI] Could not fetch extensions from DB: ${err.message}, using default 1000`);
+      }
+
       const earlyCallData = {
         callId: uniqueId,
         callerNumber: formattedNumber || 'Inconnu',
         callerName: filteredCallerName,
         lineName: this.extractLineName(trunkName) || this.extractLineName(channel),
-        extension: '1001', // Default extension for incoming calls
+        extension: targetExtensions[0], // Primary extension for incoming calls
         channel: channel,
         startTime: Date.now(),
         direction: 'incoming',
@@ -357,7 +368,7 @@ class FreePBXAmiService extends EventEmitter {
         callData: earlyCallData,
         channel: channel,
         notifiedAt: Date.now(),
-        extensionsRinging: new Set(['1001']),
+        extensionsRinging: new Set(targetExtensions),
         earlyPush: true
       });
       logger.info(`[AMI] 📝 Registered early push call in ringingCalls: ${uniqueId}`);
