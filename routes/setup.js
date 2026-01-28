@@ -692,48 +692,95 @@ router.post('/complete', async (req, res) => {
             });
         }
 
-        // Auto-create VoIP extension for admin user ONLY if Asterisk is installed
-        // Without Asterisk, there's no SIP server to register extensions with
+        // Auto-create VoIP extension for admin user + sync to Asterisk PJSIP
         let voipExtension = null;
         try {
-            const { execSync } = require('child_process');
-            let asteriskInstalled = false;
-            try {
-                execSync('which asterisk', { stdio: 'pipe' });
-                asteriskInstalled = true;
-            } catch {
-                asteriskInstalled = false;
-            }
+            const admin = db.getUserByUsername('admin');
+            if (admin) {
+                // Check if admin already has a VoIP extension
+                const existingExt = db.getVoIPExtensionByUserId(admin.id);
+                if (!existingExt) {
+                    // Generate extension number and secret
+                    const crypto = require('crypto');
+                    const extension = db.getNextAvailableExtension(1000);
+                    const secret = crypto.randomBytes(16).toString('hex');
 
-            if (!asteriskInstalled) {
-                logger.info('Asterisk not installed - skipping VoIP extension auto-creation (GSM-only mode)');
-            } else {
-                const admin = db.getUserByUsername('admin');
-                if (admin) {
-                    // Check if admin already has a VoIP extension
-                    const existingExt = db.getVoIPExtensionByUserId(admin.id);
-                    if (!existingExt) {
-                        // Generate extension number and secret
-                        const crypto = require('crypto');
-                        const extension = db.getNextAvailableExtension(1000);
-                        const secret = crypto.randomBytes(16).toString('hex');
+                    // Create VoIP extension for admin
+                    voipExtension = db.createVoIPExtension(admin.id, {
+                        extension,
+                        secret,
+                        displayName: 'Admin',
+                        context: 'from-internal',
+                        transport: 'wss',
+                        codecs: 'g722,ulaw,alaw,opus',
+                        enabled: true,
+                        webrtcEnabled: true
+                    });
 
-                        // Create VoIP extension for admin
-                        voipExtension = db.createVoIPExtension(admin.id, {
-                            extension,
-                            secret,
-                            displayName: 'Admin',
-                            context: 'from-internal',
-                            transport: 'wss',
-                            codecs: 'g722,ulaw,alaw,opus',
-                            enabled: true,
-                            webrtcEnabled: true
-                        });
+                    logger.info(`Auto-created VoIP extension ${extension} for admin user during setup`);
+                } else {
+                    voipExtension = existingExt;
+                    logger.info(`Admin user already has VoIP extension ${existingExt.extension}`);
+                }
 
-                        logger.info(`Auto-created VoIP extension ${extension} for admin user during setup`);
-                    } else {
-                        voipExtension = existingExt;
-                        logger.info(`Admin user already has VoIP extension ${existingExt.extension}`);
+                // Sync VoIP extension to Asterisk PJSIP config (so SIP registration works)
+                if (voipExtension) {
+                    let synced = false;
+
+                    // Try FreePBXAmiService first (FreePBX installations)
+                    try {
+                        const freepbxAmi = require('../services/FreePBXAmiService');
+                        if (freepbxAmi.connected && freepbxAmi.authenticated) {
+                            const result = await freepbxAmi.createPjsipExtension({
+                                extension: voipExtension.extension,
+                                secret: voipExtension.secret,
+                                displayName: voipExtension.displayName || 'Admin',
+                                context: 'from-internal',
+                                transport: 'transport-ws',
+                                codecs: 'g722,ulaw,alaw,opus'
+                            });
+                            if (result.success) {
+                                synced = true;
+                                logger.info(`Synced VoIP extension ${voipExtension.extension} to Asterisk via AMI`);
+                            }
+                        }
+                    } catch (e) {
+                        logger.debug('FreePBXAmiService not available for sync:', e.message);
+                    }
+
+                    // Fallback: PjsipConfigService (standalone Asterisk)
+                    if (!synced) {
+                        try {
+                            const pjsipConfig = require('../services/PjsipConfigService');
+                            if (!pjsipConfig.loaded) await pjsipConfig.load();
+                            const check = await pjsipConfig.checkAsterisk();
+                            if (check.available) {
+                                const result = await pjsipConfig.getOrCreateExtension({
+                                    extension: voipExtension.extension,
+                                    password: voipExtension.secret,
+                                    displayName: voipExtension.displayName || 'Admin',
+                                    context: 'from-internal',
+                                    codecs: ['g722', 'ulaw', 'alaw', 'opus'],
+                                });
+                                if (result.success) {
+                                    synced = true;
+                                    logger.info(`Synced VoIP extension ${voipExtension.extension} to Asterisk via PjsipConfig`);
+                                }
+                            }
+                        } catch (e) {
+                            logger.debug('PjsipConfigService not available for sync:', e.message);
+                        }
+                    }
+
+                    // Update DB sync status
+                    if (synced && admin) {
+                        try {
+                            db.updateVoIPExtension(admin.id, { syncedToPbx: true });
+                        } catch (e) { /* ignore */ }
+                    }
+
+                    if (!synced) {
+                        logger.warn('VoIP extension created in DB but could not sync to Asterisk (Asterisk may not be running)');
                     }
                 }
             }
