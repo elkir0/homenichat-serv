@@ -680,8 +680,9 @@ router.get('/summary', async (req, res) => {
 /**
  * POST /api/setup/complete
  * Mark setup as complete
+ * Also auto-creates VoIP extension for admin user for "out of the box" experience
  */
-router.post('/complete', (req, res) => {
+router.post('/complete', async (req, res) => {
     try {
         // Check that admin password was changed (required)
         if (!db.isAdminPasswordChanged()) {
@@ -691,6 +692,42 @@ router.post('/complete', (req, res) => {
             });
         }
 
+        // Auto-create VoIP extension for admin user
+        let voipExtension = null;
+        try {
+            const admin = db.getUserByUsername('admin');
+            if (admin) {
+                // Check if admin already has a VoIP extension
+                const existingExt = db.getVoIPExtensionByUserId(admin.id);
+                if (!existingExt) {
+                    // Generate extension number and secret
+                    const crypto = require('crypto');
+                    const extension = db.getNextAvailableExtension(1000);
+                    const secret = crypto.randomBytes(16).toString('hex');
+
+                    // Create VoIP extension for admin
+                    voipExtension = db.createVoIPExtension(admin.id, {
+                        extension,
+                        secret,
+                        displayName: 'Admin',
+                        context: 'from-internal',
+                        transport: 'wss',
+                        codecs: 'g722,ulaw,alaw,opus',
+                        enabled: true,
+                        webrtcEnabled: true
+                    });
+
+                    logger.info(`Auto-created VoIP extension ${extension} for admin user during setup`);
+                } else {
+                    voipExtension = existingExt;
+                    logger.info(`Admin user already has VoIP extension ${existingExt.extension}`);
+                }
+            }
+        } catch (voipError) {
+            // Log but don't fail setup if VoIP extension creation fails
+            logger.warn('Failed to auto-create VoIP extension for admin:', voipError.message);
+        }
+
         db.markSetupComplete();
 
         logger.info('Initial setup completed successfully');
@@ -698,7 +735,11 @@ router.post('/complete', (req, res) => {
         res.json({
             success: true,
             message: 'Setup completed successfully! Redirecting to dashboard...',
-            redirectTo: '/admin'
+            redirectTo: '/admin',
+            voipExtension: voipExtension ? {
+                extension: voipExtension.extension,
+                created: true
+            } : null
         });
     } catch (error) {
         logger.error('Setup completion error:', error);
