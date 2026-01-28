@@ -21,9 +21,6 @@ import {
   Divider,
   Chip,
   Grid,
-  Select,
-  MenuItem,
-  InputLabel,
   alpha,
   useTheme,
   Autocomplete,
@@ -35,7 +32,6 @@ import {
   CheckCircle as CheckCircleIcon,
   Warning as WarningIcon,
   Cloud as CloudIcon,
-  Router as RouterIcon,
   Settings as SettingsIcon,
   Lock as LockIcon,
   NetworkCheck as NetworkIcon,
@@ -96,7 +92,7 @@ function WelcomeStep({ onNext }: StepProps) {
 }
 
 // Step 1: Admin Password
-function AdminPasswordStep({ onNext, setError }: StepProps) {
+function AdminPasswordStep({ onNext }: StepProps) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -380,7 +376,7 @@ function NetworkStep({ onNext, onSkip, setError }: StepProps) {
   const [gateway, setGateway] = useState('');
   const [dns, setDns] = useState('');
 
-  const { data: networkData, isLoading, refetch } = useQuery<NetworkConfig>({
+  const { data: networkData, isLoading } = useQuery<NetworkConfig>({
     queryKey: ['setup-network'],
     queryFn: setupApi.getNetworkConfig,
   });
@@ -413,7 +409,7 @@ function NetworkStep({ onNext, onSkip, setError }: StepProps) {
   });
 
   const testMutation = useMutation({
-    mutationFn: setupApi.testNetwork,
+    mutationFn: (host?: string) => setupApi.testNetwork(host),
     onSuccess: (data) => {
       if (data.success) {
         alert(`Connectivite OK! Latence: ${data.latency}ms`);
@@ -715,7 +711,7 @@ function ModemStep({ onNext, onSkip, setError }: StepProps) {
 }
 
 // Step 5: Homenichat Cloud
-function CloudStep({ onNext, onSkip, setError }: StepProps) {
+function CloudStep({ onNext, onSkip }: StepProps) {
   const theme = useTheme();
   const [isRegistering, setIsRegistering] = useState(false);
   const [email, setEmail] = useState('');
@@ -917,7 +913,7 @@ function CloudStep({ onNext, onSkip, setError }: StepProps) {
 }
 
 // Step 6: Summary
-function SummaryStep({ onNext }: StepProps) {
+function SummaryStep(_props: StepProps) {
   const theme = useTheme();
   const navigate = useNavigate();
 

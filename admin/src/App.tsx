@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
@@ -86,7 +86,6 @@ const queryClient = new QueryClient({
 // Component to check setup status and redirect if needed
 function SetupCheck({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
-  const [checked, setChecked] = useState(false);
 
   const { data: setupStatus, isLoading } = useQuery({
     queryKey: ['setup-check'],
@@ -100,7 +99,6 @@ function SetupCheck({ children }: { children: React.ReactNode }) {
       if (setupStatus.setupNeeded && !window.location.pathname.includes('/setup')) {
         navigate('/setup');
       }
-      setChecked(true);
     }
   }, [setupStatus, isLoading, navigate]);
 
