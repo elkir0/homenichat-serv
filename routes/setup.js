@@ -17,10 +17,12 @@ const db = require('../services/DatabaseService');
 const systemService = require('../services/SystemService');
 const networkService = require('../services/NetworkService');
 const InstallerService = require('../services/InstallerService');
+const ModemService = require('../services/ModemService');
 const homenichatCloudService = require('../services/HomenichatCloudService');
 
-// Installer service instance for modem detection
+// Service instances
 let installerService = null;
+let modemService = null;
 
 /**
  * Middleware: Block access if setup is already complete
@@ -400,7 +402,7 @@ router.get('/modem-scan', async (req, res) => {
  */
 router.post('/modem-configure', async (req, res) => {
     try {
-        const { modemType, dataPort, audioPort, modemName, phoneNumber } = req.body;
+        const { modemType, dataPort, audioPort, modemName, phoneNumber, pinCode, networkMode } = req.body;
 
         if (!modemType || !dataPort) {
             return res.status(400).json({ error: 'Modem type and data port are required' });
@@ -413,6 +415,7 @@ router.post('/modem-configure', async (req, res) => {
 
         // Generate modem name if not provided
         const name = modemName || `hni-${modemType}`;
+        const modemId = 'modem-1';
 
         // Determine audio port based on modem type if not provided
         let audio = audioPort;
@@ -426,21 +429,32 @@ router.post('/modem-configure', async (req, res) => {
             }
         }
 
-        // Add modem to quectel.conf
-        const result = await modemService.addModemToQuectelConf({
+        // Save modem config
+        modemService.saveModemConfig(modemId, {
             modemType,
+            modemName: name,
             dataPort,
             audioPort: audio,
-            modemName: name,
-            phoneNumber
+            phoneNumber: phoneNumber || '',
+            pinCode: pinCode || '',
+            networkMode: networkMode || 'lte',
+            autoDetect: false,
         });
 
-        if (!result.success) {
-            return res.status(400).json({
-                error: 'Failed to configure modem',
-                details: result.error
-            });
-        }
+        // Create modem config for applyQuectelConf
+        const modemConfig = {
+            id: modemId,
+            type: modemType.toUpperCase(),
+            name,
+            dataPort,
+            audioPort: audio,
+            phoneNumber: phoneNumber || '',
+        };
+
+        // Generate and apply quectel.conf
+        const result = await modemService.applyQuectelConf({
+            modems: [modemConfig],
+        });
 
         db.setSetupStatus('modem_configured', 'true');
         db.setCurrentSetupStep(5);
@@ -448,12 +462,13 @@ router.post('/modem-configure', async (req, res) => {
         res.json({
             success: true,
             message: 'Modem configured successfully',
-            modem: { name, dataPort, audioPort: audio, modemType, phoneNumber },
-            nextStep: 5
+            modem: { name, dataPort, audioPort: audio, modemType, phoneNumber, networkMode },
+            nextStep: 5,
+            ...result
         });
     } catch (error) {
         logger.error('Modem configuration error:', error);
-        res.status(500).json({ error: 'Failed to configure modem' });
+        res.status(500).json({ error: 'Failed to configure modem', details: error.message });
     }
 });
 

@@ -562,9 +562,8 @@ function NetworkStep({ onNext, onSkip, setError }: StepProps) {
 
 // Step 4: Modem Configuration
 function ModemStep({ onNext, onSkip, setError }: StepProps) {
-  const theme = useTheme();
-  const [selectedModem, setSelectedModem] = useState<ModemScanResult['detected'][0] | null>(null);
-  const [phoneNumber, setPhoneNumber] = useState('');
+  const [pinCode, setPinCode] = useState('');
+  const [networkMode, setNetworkMode] = useState<'auto' | 'lte' | '3g'>('lte');
 
   const { data: modemData, isLoading, refetch } = useQuery<ModemScanResult>({
     queryKey: ['setup-modem'],
@@ -572,7 +571,7 @@ function ModemStep({ onNext, onSkip, setError }: StepProps) {
   });
 
   const configureMutation = useMutation({
-    mutationFn: (data: { modemType: string; dataPort: string; audioPort?: string; phoneNumber?: string }) =>
+    mutationFn: (data: { modemType: string; dataPort: string; audioPort?: string; pinCode?: string; networkMode?: 'auto' | 'lte' | '3g' }) =>
       setupApi.configureModem(data),
     onSuccess: () => {
       onNext();
@@ -589,14 +588,18 @@ function ModemStep({ onNext, onSkip, setError }: StepProps) {
     },
   });
 
+  // Auto-select first detected modem
+  const detectedModem = modemData?.detected?.[0] || null;
+
   const handleConfigure = () => {
-    if (!selectedModem) return;
+    if (!detectedModem) return;
 
     configureMutation.mutate({
-      modemType: selectedModem.type,
-      dataPort: selectedModem.ports.data,
-      audioPort: selectedModem.ports.audio,
-      phoneNumber: phoneNumber || undefined,
+      modemType: detectedModem.type.toLowerCase(),
+      dataPort: detectedModem.dataPort,
+      audioPort: detectedModem.audioPort,
+      pinCode: pinCode || undefined,
+      networkMode,
     });
   };
 
@@ -604,7 +607,8 @@ function ModemStep({ onNext, onSkip, setError }: StepProps) {
     return <LinearProgress />;
   }
 
-  const hasModems = (modemData?.detected?.length || 0) > 0 || Object.keys(modemData?.existing || {}).length > 0;
+  const hasModems = (modemData?.detected?.length || 0) > 0;
+  const hasExisting = Object.keys(modemData?.existing || {}).length > 0;
 
   return (
     <Box sx={{ maxWidth: 600, mx: 'auto' }}>
@@ -614,79 +618,63 @@ function ModemStep({ onNext, onSkip, setError }: StepProps) {
           Configuration Modem GSM
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          Configurez vos modems GSM pour envoyer et recevoir des SMS et appels.
+          Configurez votre modem GSM pour les SMS et appels.
         </Typography>
       </Box>
 
-      {!hasModems && (
+      {!hasModems && !hasExisting && (
         <Alert severity="info" sx={{ mb: 3 }}>
-          Aucun modem GSM detecte. Vous pouvez passer cette etape si vous n'utilisez pas de modem.
+          Aucun modem GSM detecte. Verifiez que le modem est bien branche en USB.
+          <Button size="small" onClick={() => refetch()} sx={{ ml: 2 }}>
+            Rescanner
+          </Button>
         </Alert>
       )}
 
-      {modemData?.detected?.map((modem, index) => (
-        <Box
-          key={index}
-          sx={{
-            p: 2,
-            borderRadius: 1,
-            border: '2px solid',
-            borderColor: selectedModem === modem ? 'primary.main' : alpha(theme.palette.divider, 0.5),
-            backgroundColor: selectedModem === modem ? alpha(theme.palette.primary.main, 0.05) : undefined,
-            cursor: 'pointer',
-            mb: 2,
-            transition: 'all 0.2s',
-            '&:hover': {
-              borderColor: 'primary.main',
-            },
-          }}
-          onClick={() => setSelectedModem(modem)}
-        >
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Box>
-              <Typography variant="subtitle1" fontWeight={600}>
-                {modem.type.toUpperCase()} - {modem.vendor}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Data: {modem.ports.data} | Audio: {modem.ports.audio}
-              </Typography>
-            </Box>
-            <Chip
-              label={modem.type === 'ec25' ? 'EC25' : 'SIM7600'}
-              color={modem.type === 'ec25' ? 'primary' : 'secondary'}
-              size="small"
-            />
-          </Box>
-        </Box>
-      ))}
+      {detectedModem && (
+        <Box sx={{ mb: 3 }}>
+          <Alert severity="success" sx={{ mb: 3 }}>
+            <Typography variant="subtitle2" fontWeight={600}>
+              Modem detecte: {detectedModem.type.toUpperCase()}
+            </Typography>
+            <Typography variant="body2">
+              Ports: {detectedModem.dataPort} (data), {detectedModem.audioPort} (audio)
+            </Typography>
+          </Alert>
 
-      {selectedModem && (
-        <Box sx={{ mt: 3 }}>
           <TextField
             fullWidth
-            label="Numero de telephone (optionnel)"
-            value={phoneNumber}
-            onChange={(e) => setPhoneNumber(e.target.value)}
-            placeholder="+33612345678"
-            helperText="Le numero de la carte SIM inseree dans ce modem"
+            label="Code PIN (si carte SIM protegee)"
+            value={pinCode}
+            onChange={(e) => setPinCode(e.target.value)}
+            placeholder="1234"
+            type="password"
+            helperText="Laissez vide si la carte SIM n'a pas de code PIN"
+            sx={{ mb: 3 }}
           />
+
+          <FormControl component="fieldset">
+            <Typography variant="subtitle2" gutterBottom>
+              Mode reseau
+            </Typography>
+            <RadioGroup
+              row
+              value={networkMode}
+              onChange={(e) => setNetworkMode(e.target.value as 'auto' | 'lte' | '3g')}
+            >
+              <FormControlLabel value="lte" control={<Radio />} label="LTE/4G (recommande)" />
+              <FormControlLabel value="3g" control={<Radio />} label="3G uniquement" />
+              <FormControlLabel value="auto" control={<Radio />} label="Automatique" />
+            </RadioGroup>
+          </FormControl>
         </Box>
       )}
 
-      {Object.keys(modemData?.existing || {}).length > 0 && (
+      {hasExisting && !hasModems && (
         <Alert severity="success" sx={{ mt: 3 }}>
-          {Object.keys(modemData?.existing || {}).length} modem(s) deja configure(s)
+          Modem deja configure. Vous pouvez continuer.
         </Alert>
       )}
-
-      <Button
-        variant="outlined"
-        onClick={() => refetch()}
-        sx={{ mt: 2 }}
-        disabled={isLoading}
-      >
-        Rescanner les modems
-      </Button>
 
       <Box sx={{ display: 'flex', gap: 2, mt: 4, justifyContent: 'flex-end' }}>
         <Button
@@ -694,15 +682,15 @@ function ModemStep({ onNext, onSkip, setError }: StepProps) {
           onClick={() => skipMutation.mutate()}
           disabled={configureMutation.isPending || skipMutation.isPending}
         >
-          {hasModems ? 'Passer cette etape' : 'Continuer sans modem'}
+          {hasModems || hasExisting ? 'Passer' : 'Continuer sans modem'}
         </Button>
-        {selectedModem && (
+        {(detectedModem || hasExisting) && (
           <Button
             variant="contained"
-            onClick={handleConfigure}
+            onClick={hasExisting && !detectedModem ? onNext : handleConfigure}
             disabled={configureMutation.isPending}
           >
-            {configureMutation.isPending ? <CircularProgress size={24} color="inherit" /> : 'Configurer et continuer'}
+            {configureMutation.isPending ? <CircularProgress size={24} color="inherit" /> : 'Continuer'}
           </Button>
         )}
       </Box>

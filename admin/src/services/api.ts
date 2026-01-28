@@ -766,12 +766,13 @@ export interface NetworkConfig {
 
 export interface ModemScanResult {
   detected: Array<{
+    id: string;
     type: string;
     vendor: string;
-    ports: {
-      data: string;
-      audio: string;
-    };
+    product?: string;
+    ports: string[];
+    dataPort: string;
+    audioPort: string;
   }>;
   existing: Record<string, unknown>;
   hasModems: boolean;
@@ -884,6 +885,8 @@ export const setupApi = {
     audioPort?: string;
     modemName?: string;
     phoneNumber?: string;
+    pinCode?: string;
+    networkMode?: 'auto' | 'lte' | '3g';
   }) => {
     const response = await api.post('/api/setup/modem-configure', config);
     return response.data;
