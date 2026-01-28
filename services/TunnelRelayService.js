@@ -292,8 +292,23 @@ class TunnelRelayService extends EventEmitter {
 
     console.log('[TunnelRelayService] Registering with relay...');
 
+    // Check if HomenichatCloudService is logged in - use its API token for consistent client lookup
+    let licenseKey = this.config.activationKey || this.config.clientId;
+    try {
+      const homenichatCloudService = require('./HomenichatCloudService');
+      if (homenichatCloudService && homenichatCloudService.isLoggedIn && homenichatCloudService.isLoggedIn()) {
+        const cloudApiToken = homenichatCloudService.getApiToken && homenichatCloudService.getApiToken();
+        if (cloudApiToken) {
+          console.log('[TunnelRelayService] Using HomenichatCloud API token for registration');
+          licenseKey = cloudApiToken;
+        }
+      }
+    } catch (e) {
+      // HomenichatCloudService not available, use default
+    }
+
     const response = await this.apiRequest('POST', '/api/register', {
-      licenseKey: this.config.activationKey || this.config.clientId, // Use activationKey or clientId as fallback
+      licenseKey: licenseKey,
       clientId: this.config.clientId,
       publicKey: this.state.publicKey,
       hostname: this.config.hostname

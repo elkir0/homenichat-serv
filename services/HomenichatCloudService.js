@@ -344,6 +344,13 @@ class HomenichatCloudService extends EventEmitter {
     return this.auth.loggedIn && !!this.auth.apiToken;
   }
 
+  /**
+   * Get the cloud API token (for use by TunnelRelayService)
+   */
+  getApiToken() {
+    return this.auth.apiToken;
+  }
+
   // ==========================================
   // TUNNEL RELAY (WireGuard + TURN)
   // ==========================================
