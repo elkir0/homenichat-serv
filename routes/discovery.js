@@ -223,7 +223,7 @@ router.get('/', async (req, res) => {
       // and the cloud userId matches the server's configured cloud account
       let effectiveUserId = req.user.id;
       if (req.user.isCloudUser && req.user.cloudUserId && homenichatCloudService) {
-        const cloudStatus = homenichatCloudService.getStatus();
+        const cloudStatus = await homenichatCloudService.getStatus();
         // If the cloud user's ID matches the server's logged-in cloud account,
         // use the local admin user (id=1) for VoIP extension lookup
         if (cloudStatus.userId === req.user.cloudUserId) {
@@ -242,7 +242,7 @@ router.get('/', async (req, res) => {
       let cloudPublicUrl = null;
       let cloudDomain = null;
       if (homenichatCloudService) {
-        const cloudStatus = homenichatCloudService.getStatus();
+        const cloudStatus = await homenichatCloudService.getStatus();
         if (cloudStatus.tunnel?.registration?.publicUrl) {
           cloudPublicUrl = cloudStatus.tunnel.registration.publicUrl.replace('https://', 'wss://') + '/wss';
           cloudDomain = new URL(cloudStatus.tunnel.registration.publicUrl).hostname;
@@ -310,7 +310,7 @@ router.get('/', async (req, res) => {
 
         // Add TURN servers from cloud if available
         if (homenichatCloudService) {
-          const cloudStatus = homenichatCloudService.getStatus();
+          const cloudStatus = await homenichatCloudService.getStatus();
           const turnCreds = cloudStatus.tunnel?.turnCredentials || cloudStatus.tunnel?.registration?.turn;
           if (turnCreds && turnCreds.urls) {
             iceServers.push({
@@ -628,7 +628,7 @@ async function getDiscoveryData(req) {
     // Map cloud user to local user if applicable
     let effectiveUserId = req.user.id;
     if (req.user.isCloudUser && req.user.cloudUserId && homenichatCloudService) {
-      const cloudStatus = homenichatCloudService.getStatus();
+      const cloudStatus = await homenichatCloudService.getStatus();
       if (cloudStatus.userId === req.user.cloudUserId) {
         effectiveUserId = 1; // Local admin user
       }
